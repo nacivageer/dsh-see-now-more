@@ -2,8 +2,8 @@
 
 ## 状态
 
-- **2026-11-10 清单待执行。** 目标仓 `see-now-more`，基线 `a92809f`（main 头，领先 tag
-  `v0.2.0-more.1`（`b96fed4`）两条文档提交）。
+- **2026-11-10 执行中：A 完成并验证，B 待新会话。** 目标仓 `see-now-more`，基线 `a92809f`
+  （main 头，领先 tag `v0.2.0-more.1`（`b96fed4`）两条文档提交）。
 - 来源：上游 `SAOS-3624/dsh-see-now` 的 `d2835d1`（listen 按进程树结束 + `listen.pid`）与
   `a0ff4d5`（亮度归一 + 黑边补偿）。
 - 本机缓存了完整 diff：`see-now/_scratch/port-diffs/d2835d1.diff`、`a0ff4d5.diff`；
@@ -21,6 +21,19 @@
   `watch(mode:"both")` → `listen.pid` 落盘且 pid 与进程一致；`stop` → 采集进程消失、pid 文件被删；
   再 `watch` → 新 pid、单实例；`taskkill /F` 制造孤儿 → 下次 `watch` 把陈旧 pid 文件换成新的、
   仍单实例。**用户点窗口关闭**那条路走的是同一个 `listener.stop()`，未单独压测。
+
+## 交接（给做 B 的新会话）
+
+- **起点**：分支 `port/upstream-listen-kill`（`origin` 上已有；3 个 commit：补丁 A + 两份验证记录）。
+  从它派生新分支，**不要从 `main`** —— `main` 还没有 A 的 `listen.js` 改动。
+- **版本**：`0.1.1-more.3`。`package.json` + `dsh.plugin.json` + CHANGELOG 新段三处同改
+  （`test/version.test.mjs` 会拦漏改）；CHANGELOG 新段放在 `## [0.1.1-more.2]` 上面。
+- **范围**：只按「补丁 B」段改 `cuts.js` / `pipeline.js` / `runner.js` / `index.js` / `tuning.js` /
+  `scripts/sim.mjs`，测试搬 `test/score-normalize.test.mjs`。**别碰 `window.py` / `py/listen.py`。**
+- **完成后**：`node --test`（当前 34 条 + 新增 12 条）；更新本文件状态块；回报 commit。
+- **不要发 tag、不要合 `main`**：等 B 完成一起发（A+B 共用一个 release，见下）。
+- 发布计划（B 完成后由用户拍板）：`main` 合入 A+B → annotated tag `v0.1.1-more.3` → Release 标
+  prerelease，正文合并 0.1.1-more.2 与 0.1.1-more.3 两段。**A 的 `0.1.1-more.2` 不单独发 tag。**
 
 ## 为什么不是 cherry-pick
 
@@ -456,7 +469,8 @@ A/B 两边一模一样 —— 标定等于没做。
 
 `test/version.test.mjs` 要求 CHANGELOG 里有 `## [<package.version>]`。所以 bump 三处：
 `package.json` 的 `version`、`dsh.plugin.json` 的 `version`、CHANGELOG 新段。
-A 已用 `0.1.1-more.2`；**B 用 `0.1.1-more.3`**（三处同改，CHANGELOG 新段写 B 的改动）。
+A 已用 `0.1.1-more.2`；**B 从 `port/upstream-listen-kill` 派生，用 `0.1.1-more.3`**
+（三处同改，CHANGELOG 新段写 B 的改动，放在 `0.1.1-more.2` 段上面）。
 
 ---
 
