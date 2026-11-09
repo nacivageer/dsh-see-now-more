@@ -17,6 +17,10 @@
   stop → 按树杀 + 删 pid 文件、先留孤儿再 start → 孤儿被清且 pid 换成新的、收工无残留，12 项全过。
   **DSH 进程内那条路要重启 Desktop 后才用新代码**：当前进程里仍是旧 `listen.js`，这期间开/关
   采集可能留下孤儿与 pid 文件，重启后第一次 `start()` 会自动清掉。
+- **2026-11-10 01:40 DSH 内验证通过**（重启 Desktop 后，装机副本 `0.1.1-more.2`）：
+  `watch(mode:"both")` → `listen.pid` 落盘且 pid 与进程一致；`stop` → 采集进程消失、pid 文件被删；
+  再 `watch` → 新 pid、单实例；`taskkill /F` 制造孤儿 → 下次 `watch` 把陈旧 pid 文件换成新的、
+  仍单实例。**用户点窗口关闭**那条路走的是同一个 `listener.stop()`，未单独压测。
 
 ## 为什么不是 cherry-pick
 
