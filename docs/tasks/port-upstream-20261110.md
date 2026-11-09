@@ -38,6 +38,11 @@
 - **2026-11-10 02:02 已装机**：`install-dev` 装到 desktop profile，副本版本 `0.1.1-more.3` ✓ 与源码一致，
   `src/cuts.js` 里确认 `REF_V = 96`。`~/.dsh/see-now.json` 没写 `scoreNormalize`（走默认开）。
   **要重启 Desktop 才生效**（插件树在进程启动时组合）；重启后待验证状态行出现「亮度归一开」。
+- **2026-11-10 02:0x 重启后验证通过**（新进程跑装机副本 `0.1.1-more.3`）：
+  `see_now({action:"status"})` 状态行出现「· 亮度归一开（暗场/黑边已补偿）」；
+  `start` 真采集 17 秒 194 帧、留帧 1、无 `push` 错误（静止屏幕没冒出假切点），`stop` 收工干净。
+  顺带复核 A：`listen.pid` 落盘（`{"pid":4168,"script":"listen.py",…}`），`stop` 后文件被删、进程
+  4168 结束、无 `listen.py` 孤儿（残留的两个 python 是 `H:\asr-local` 的转写服务，与本插件无关）。
 
 ## 交接（给做 B 的新会话）
 
