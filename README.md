@@ -41,6 +41,24 @@
 
 ---
 
+## 它读哪些本地文件
+
+屏幕和声音只在本地处理。下面这些是它会读/写的路径，列出来方便你核对：
+
+| 路径 | 用途 | 读写 |
+|---|---|---|
+| `~/.dsh/see-now.json` | 节奏、模式、绑定会话等偏好 | 读 + 写（切模式/改绑定时） |
+| `~/.dsh/see-now/` | 运行数据：`chat.jsonl`（窗里对话）、`delivered.jsonl` / `relay-delivered.json`（投递回执与去重）、`missed.jsonl`、`focus.json`、`turn-state.json`、`region.json`、`images/`（粘贴的图）、`audio/`（听声音的分句 wav）、`relay.log`、`plugin-error.log` | 读写 |
+| `~/.dsh/sessions/` | 悬浮窗显示会话标题与历史列表 | 只读 |
+| `~/.dsh/asr.json` / `voice.json` / `tts.json` | 转写、TTS 适配器配置（里面可能有你自己的 key） | 只读 |
+| `%APPDATA%\@deepseek-ai\dsh-desktop\Network\Cookies`（Windows） | 只查 `dsh-auth-*` cookie 的**条数**，用于提醒 cookie 过多会让 DSH 启动失败；**不读 cookie 值、不导出** | 只读 |
+
+- **不上传。** 没有遥测、没有分析服务；帧在本地采集、打分、拼图，只有你主动调 `watch` / `scene` 时，拼好的图才作为附件交给宿主模型。
+- **屏幕与系统声音**：抓的是当前屏幕和系统输出，可能包含任何正在显示/播放的内容；权限和边界由你和操作系统决定。
+- **麦克风**（未验证）：如果启用 `mic.py`，它会录麦克风并做本地转写；这条路径没有测过。
+
+---
+
 ## 授权说明 / License
 
 **Apache License 2.0** —— 随便用。个人、公司内部、闭源产品、SaaS、二次分发都可以，
@@ -561,6 +579,8 @@ test/                     24 条测试
   没给的时候不会报错，只会全黑 —— 插件会提示，但权限本身只能你去点。
 - **麦克风输入没有验证过**：`examples/floating-chat/mic.py` 和窗里的「麦」按钮来自上游，
   开发期没有麦克风环境，**不知道是否可用**；它和「听声音」（系统回环）是两条独立的路。
+  它的默认模型目录是开发机的 `D:/asr-local/models-sherpa`，换机器要传 `--models-dir`
+  （或改 `~/.dsh/asr.json` 的 `manage.start`）。
 - **听声音（台词）只有 Windows**：靠 WASAPI 回环，mac 上要装 BlackHole 之类的虚拟声卡
   再配多输出设备，这一版没做。mac 上「听声音」会直接报抓不到回环，画面功能照常。
 - **区域模式只能看到前台像素**：没有 OBS 之类的采集源，被遮挡 / 最小化的窗口抓不到。

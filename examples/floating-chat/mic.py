@@ -233,7 +233,7 @@ class Ring:
 
 
 def run(args):
-    models_dir = args.models_dir or os.path.join("D:/asr-local", "models-sherpa")
+    models_dir = args.models_dir or os.path.join("D:/asr-local", "models-sherpa")  # TODO 开发机路径；换机器用 --models-dir
     engine = LocalEngine(models_dir, punct=not args.no_punct) if args.engine == "local" \
         else HttpEngine(args.url)
     vad = make_vad(models_dir)
@@ -376,7 +376,7 @@ def main():
     ap.add_argument("--engine", choices=["local", "http"], default="local",
                     help="local=自带模型（默认，和视频那条路互不干扰）；http=共用 8000 服务")
     ap.add_argument("--url", default="http://127.0.0.1:8000", help="http 模式的服务地址")
-    ap.add_argument("--models-dir", default=None, help="模型目录（默认 D:/asr-local/models-sherpa）")
+    ap.add_argument("--models-dir", default=None, help="模型目录（默认是开发机的 D:/asr-local/models-sherpa，换机器请传这个参数）")
     ap.add_argument("--device", type=int, default=None, help="麦克风设备号")
     ap.add_argument("--list-devices", action="store_true", help="列出输入设备后退出")
     ap.add_argument("--from-file", default=None, help="用 wav 文件代替麦克风（测试）")
