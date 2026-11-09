@@ -557,7 +557,7 @@ src/
   index.js      工具注册与路由
 py/listen.py   抓系统回环 → 16k 单声道 → 按静音断句（听声音的 Python 侧，listen.js 起它）
 examples/floating-chat/   悬浮窗（Tk）+ mic.py（麦克风）
-test/                     24 条测试
+test/                     当前 27 条测试（node --test；含版本号/插件名/CHANGELOG 一致性守卫）
 ```
 
 ---
