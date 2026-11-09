@@ -98,7 +98,8 @@ node bin/see-window.mjs
 
 1. 打开悬浮窗，点输入栏左边的「麦」图标。
 2. 说一句话，看输入框里有没有出字。
-3. 没出字：看 `~/.dsh/see-now/mic.log`，把最后 30 行连同这些信息贴到 issue：
+3. 没出字：看 `~/.dsh/see-now/mic.log`，把最后 30 行连同这些信息贴到 issue
+   （仓库里有「麦克风测试反馈」模板）：
    - Windows 版本、`where python`、麦克风设备名；
    - `see_now({action:"status"})` 的「听声音」行。
 4. 出了字：也请说一声——这会是它第一次被验证。
