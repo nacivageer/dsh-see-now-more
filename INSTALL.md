@@ -13,7 +13,7 @@
 ## 1. 前置检查
 
 ```bash
-git clone https://github.com/NeoNetherSun/dsh-see-now-more.git
+git clone https://github.com/nacivageer/dsh-see-now-more.git
 cd dsh-see-now-more
 node scripts/install-dev.mjs --check
 ```

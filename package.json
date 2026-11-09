@@ -75,11 +75,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NeoNetherSun/dsh-see-now-more.git"
+    "url": "git+https://github.com/nacivageer/dsh-see-now-more.git"
   },
-  "homepage": "https://github.com/NeoNetherSun/dsh-see-now-more#readme",
+  "homepage": "https://github.com/nacivageer/dsh-see-now-more#readme",
   "bugs": {
-    "url": "https://github.com/NeoNetherSun/dsh-see-now-more/issues"
+    "url": "https://github.com/nacivageer/dsh-see-now-more/issues"
   },
   "bin": {
     "dsh-see-window": "bin/see-window.mjs"

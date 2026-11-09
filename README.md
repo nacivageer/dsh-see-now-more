@@ -3,7 +3,7 @@
 > 像在 QQ 里点了视频通话：那一路画面是你的屏幕，那一路声音是你的音箱；
 > 消息发出去就插队 —— 它还在思考，下一步也会接住你这句话。
 
-> **包名 `dsh-see-now-more`，仓库 [NeoNetherSun/dsh-see-now-more](https://github.com/NeoNetherSun/dsh-see-now-more)。**
+> **包名 `dsh-see-now-more`，仓库 [nacivageer/dsh-see-now-more](https://github.com/nacivageer/dsh-see-now-more)。**
 > 它是 `dsh-see-now` 的本地增强分支：在上游采样内核上补了聊天窗、插队、历史和收藏。
 > **不是一键安装**——没有发布到 npm，只能从源码装，面向 DSH 桌面版用户和愿意读代码的人。
 
@@ -18,7 +18,7 @@
 ## 维护状态与上游关系
 
 - **自用为主**：从上游安装产物拷出来的本地增强分支，按自己的习惯改；改动记录见 [CHANGELOG.md](./CHANGELOG.md)（开发期逐条记录不公开）。
-- **本仓**：[NeoNetherSun/dsh-see-now-more](https://github.com/NeoNetherSun/dsh-see-now-more)。包名 `dsh-see-now-more` 是为了不和 npm 上的上游撞车。
+- **本仓**：[nacivageer/dsh-see-now-more](https://github.com/nacivageer/dsh-see-now-more)。包名 `dsh-see-now-more` 是为了不和 npm 上的上游撞车。
 - **上游两个**：采样内核 [dsh-see-now](https://github.com/SAOS-3624/dsh-see-now)，悬浮窗 `dsh-watch-together`（`examples/floating-chat/` 由 `scripts/sync-window.mjs` 生成），同样 Apache-2.0。
 - **不承诺长期维护**：够用即停更；上游不自动跟进，本地改动也不保证能合回去。
 - **别跑生成链**：`npm run sync:window` 会用上游覆盖 `window.py`，而这里对它改动很大。
@@ -147,7 +147,7 @@ See Now 换了个思路：**先判断这一帧值不值得看，再决定传不�
 npm 上那个 `dsh-see-now` 是**上游**，`dsh plugin add dsh-see-now` 装的也是上游，不含这里的聊天窗、插队、历史和收藏。本包 `dsh-see-now-more` 没发 npm，只能用源码安装：
 
 ```bash
-git clone https://github.com/NeoNetherSun/dsh-see-now-more.git
+git clone https://github.com/nacivageer/dsh-see-now-more.git
 cd dsh-see-now-more
 node scripts/install-dev.mjs      # 复制进本机 DSH 的 desktop profile
 ```
