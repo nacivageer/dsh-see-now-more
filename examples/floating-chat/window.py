@@ -3645,7 +3645,7 @@ class LiveGlass:
         view_bottom = base[MESSAGE_SLOTS - 1][3]
         self._view = (view_top, view_bottom)
         t_m0 = time.perf_counter()
-        entries, total_h = self._feed_measure(shown, view_top, view_bottom)
+        entries, total_h = self._measure_feed(shown, view_top, view_bottom)
         t_m1 = time.perf_counter()
         self._feed_entries = entries
         self._feed_total = total_h
@@ -3680,8 +3680,12 @@ class LiveGlass:
     IMG_MD = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
     # 行内代码区间：里面的 `![...](...)` 是示例文字，不参与图片识别（2026-11-06）
     CODE_SPAN = re.compile(r'`[^`\n]+`')
+    # 裸地址只认**带图片扩展名**的：以前任何 URL 都当图，回复里贴个
+    # `https://github.com/new` 就会去下 HTML、PIL 打不开、缓存成失败，
+    # 下一次重排把主窗画成空白（2026-11-09 实报）。普通链接留在正文里当文字。
     IMG_RAW = re.compile(
-        r'(?<![\w(])((?:https?://[^\s<>"\u3000）)]+)'
+        r'(?<![\w(])((?:https?://[^\s<>"\u3000）)]+?'
+        r'\.(?:png|jpe?g|gif|webp|bmp)(?:\?[^\s<>"\u3000）)]*)?)'
         r'|[A-Za-z]:\\[^\s<>"\u3000）)]+\.(?:png|jpe?g|gif|webp|bmp))', re.I)
 
     def _parse_blocks(self, text):
@@ -4019,8 +4023,11 @@ class LiveGlass:
                 img = img.resize((max(1, int(img.width * scale)),
                                   max(1, int(img.height * scale))),
                                  Image.Resampling.LANCZOS)
-        except Exception:
+        except Exception as exc:
             img = None
+            # 下不下来就说一声：以前只把 `(None, None)` 塞进缓存，日志里一个字都没有，
+            # 排查时只能靠主窗空白反推（2026-11-09 实报那次就是这样）。
+            print(f"[img] 下载失败 {url}: {exc!r}", flush=True)
         pending = getattr(self, "_img_pending", None)
         if pending is None:
             pending = self._img_pending = {}
@@ -4188,11 +4195,13 @@ class LiveGlass:
                     _t0 = time.perf_counter()
                     url = str(payload).startswith(("http://", "https://"))
                     if url:
+                        # 下载失败时缓存里是 `(None, None)`：`got is not None` 只说明
+                        # "有过结论"，不代表 photo 能用。以前这里直接 `photo.width()`，
+                        # 只要有一条消息里的图下不下来，主窗就整片空白（2026-11-09 实报）。
                         got = self._img_state(payload, content_max, max_img_h)
                         size = None
-                        if got is not None:
-                            pil, photo = got
-                            size = (photo.width(), photo.height())
+                        if got is not None and got[1] is not None:
+                            size = (got[1].width(), got[1].height())
                     else:
                         got = None
                         size = self._img_probe(payload, content_max, max_img_h)
@@ -4249,6 +4258,21 @@ class LiveGlass:
                 entries.append({"kind": "status", "text": status, "list_y": y, "h": 28})
                 y += 28
         return entries, y
+
+    def _measure_feed(self, shown, view_top, view_bottom):
+        """量排版；量不出来就沿用上一版排版。
+
+        空白的主窗对用户来说等于"必须重启"（2026-11-09 实报）：`_layout` 先把
+        canvas 清空、再画消息，这里一抛就只剩标题栏。宁可留着上一帧（旧排版能看），
+        也不能整片黑 —— 异常照旧写进日志。
+        """
+        try:
+            return self._feed_measure(shown, view_top, view_bottom)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return (list(getattr(self, "_feed_entries", []) or []),
+                    float(getattr(self, "_feed_total", 0) or 0))
 
     def _paint_bubbles(self, w) -> None:
         """只画与视口相交的部分；滚动时先 delete("bubbles") 再调它。"""
@@ -4512,7 +4536,7 @@ class LiveGlass:
         if not self.FEED_LIST or not hasattr(self, "canvas"):
             return
         view_top, view_bottom = self._view
-        entries, total_h = self._feed_measure(list(self.feed.messages),
+        entries, total_h = self._measure_feed(list(self.feed.messages),
                                               view_top, view_bottom)
         self._feed_entries = entries
         self._feed_total = total_h
