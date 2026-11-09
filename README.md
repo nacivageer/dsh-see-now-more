@@ -139,6 +139,8 @@ See Now 换了个思路：**先判断这一帧值不值得看，再决定传不�
 ## 快速开始
 
 > **不是一键安装，也不是全平台承诺。** 本包没有发布到 npm，只提供源码安装；**只保证 Windows 10 + DSH `0.2.2-rc.1`**（见上面「适用范围与验证状态」）。
+>
+> 让 AI 照着装：把 [INSTALL.md](./INSTALL.md) 指给它——那份是给机器读的安装单，含前置检查、期望输出和失败分支。
 
 ### 在 DSH 里用
 
@@ -410,7 +412,8 @@ see_now({ scene: true, say: "好，接下来每换一个画面我就说一句" }
   "maxAutonomousWakes": 24,
   "idleStopMin": 10,
   "defaultPace": "calm",
-  "speechPacing": true
+  "speechPacing": true,
+  "showPriceChip": true
 }
 ```
 
@@ -420,6 +423,7 @@ see_now({ scene: true, say: "好，接下来每换一个画面我就说一句" }
 | `idleStopMin` | 3 | 没开悬浮窗时，用户这么久没说话 → 收工。`0` = 关掉这条 |
 | `defaultPace` | `normal` | 新会话/重开采集时的默认节奏：`calm` / `normal` / `dense` / `game-economic`。调用里显式传 `pace` 仍然优先 |
 | `speechPacing` | `true` | 按上一句的估计时长排下一轮（中文约 5 字/秒）。`"guard"` = 只在长句时推迟、不比旧节奏密；`false` = 退回固定间隔 |
+| `showPriceChip` | `true` | 悬浮窗底栏的「高峰期 / 半价期」标签；`false` 关掉。它由 `window.py` 自己算，**不依赖 `dsh-price-period`**（那个是 DSH 标题栏的独立插件） |
 
 **为什么要 `speechPacing`**：固定间隔是从"叫醒那一刻"起算的（calm 30s / normal 15s / dense 8s / 逐场景 4s），
 跟上一句说了多久没关系。现在默认改成**跟随上一句**：上一句 3 秒，下一轮最早 3.8 秒后（有 3 秒地板，防连珠炮）；
@@ -578,7 +582,9 @@ test/                     24 条测试
 - **macOS 要多给一次权限**（未验证）：系统设置 → 隐私与安全性 → **屏幕录制**，勾上跑 DSH 的那个 App。
   没给的时候不会报错，只会全黑 —— 插件会提示，但权限本身只能你去点。
 - **麦克风输入没有验证过**：`examples/floating-chat/mic.py` 和窗里的「麦」按钮来自上游，
-  开发期没有麦克风环境，**不知道是否可用**；它和「听声音」（系统回环）是两条独立的路。
+  开发期没有麦克风环境，**不知道是否可用**。公开的目的之一就是找有麦克风的人帮忙测——
+  具体步骤和要贴的日志见 [INSTALL.md](./INSTALL.md)；
+  它和「听声音」（系统回环）是两条独立的路。
   它的默认模型目录是开发机的 `D:/asr-local/models-sherpa`，换机器要传 `--models-dir`
   （或改 `~/.dsh/asr.json` 的 `manage.start`）。
 - **听声音（台词）只有 Windows**：靠 WASAPI 回环，mac 上要装 BlackHole 之类的虚拟声卡

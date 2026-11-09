@@ -222,6 +222,23 @@ def price_period(now=None):
     return peak, remain, next_peak, holiday
 
 
+def price_chip_enabled() -> bool:
+    """底栏价格标签是否显示。
+
+    默认显示；`~/.dsh/see-now.json` 写 `"showPriceChip": false` 可关，
+    环境变量 `DSH_SEE_PRICE_CHIP=0` 只对这一次启动有效。
+    这段价格逻辑是本文件自带的，不依赖 `dsh-price-period`（那个是 DSH 标题栏的可选插件）。
+    """
+    if os.environ.get("DSH_SEE_PRICE_CHIP") == "0":
+        return False
+    try:
+        p = Path(os.environ.get("DSH_HOME") or os.path.expanduser("~/.dsh")) / "see-now.json"
+        cfg = json.loads(p.read_text(encoding="utf-8-sig"))
+        return cfg.get("showPriceChip") is not False
+    except Exception:
+        return True
+
+
 def _set_clipboard_image(img) -> bool:
     """把 PIL 图放进 Windows 剪贴板（CF_DIB）。返回是否成功。
 
@@ -4798,6 +4815,8 @@ class LiveGlass:
 
     def _price_chip_text(self):
         """(文字, 是否高峰)；离切换不到 30 分钟时附倒计时，口径同 dsh-price-period。"""
+        if not price_chip_enabled():
+            return None
         try:
             peak, remain, next_peak, _holiday = price_period()
         except Exception:

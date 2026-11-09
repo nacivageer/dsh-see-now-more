@@ -15,7 +15,8 @@
  */
 
 import { cp, readFile, writeFile, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -42,6 +43,79 @@ if (!existsSync(PROFILE_DIR)) {
 }
 const pkgPath = join(PROFILE_DIR, 'package.json');
 const readJson = async (p) => JSON.parse(await readFile(p, 'utf8'));
+
+/**
+ * 悬浮窗要的解释器：tkinter + Pillow + mss + numpy。
+ * 顺序和 `src/window.js` 的 pythonCandidates 一致（环境变量 → see-window.json →
+ * DSH 自带 runtime → PATH → 商店版），这样 `--check` 报的就是插件真正会用的那个。
+ */
+function configuredPython() {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh');
+  try {
+    return JSON.parse(readFileSync(join(home, 'see-window.json'), 'utf8'))?.python || null;
+  } catch {
+    return null;
+  }
+}
+
+function runtimePythons() {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh');
+  const base = join(home, 'dsh-runtimes');
+  const out = [];
+  try {
+    for (const name of readdirSync(base)) {
+      for (const exe of ['pythonw.exe', 'python.exe']) {
+        const p = join(base, name, 'dependencies', 'python', exe);
+        if (existsSync(p)) out.push(p);
+      }
+    }
+  } catch { /* 没有 dsh-runtimes */ }
+  return out;
+}
+
+function checkPython() {
+  const probe = 'import tkinter, PIL, mss, numpy';
+  const candidates = [];
+  for (const c of [process.env.DSH_SEE_PYTHON, process.env.DSH_FLOAT_PYTHON, configuredPython()]) {
+    if (c) candidates.push(c);
+  }
+  candidates.push(...runtimePythons());
+  if (process.platform === 'win32') candidates.push('pythonw.exe', 'python.exe');
+  else candidates.push('python3', 'python');
+  try {
+    const dir = join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'WindowsApps');
+    for (const name of readdirSync(dir)) {
+      if (!/^PythonSoftwareFoundation\.Python\.\d/.test(name)) continue;
+      for (const exe of ['pythonw.exe', 'python.exe']) candidates.push(join(dir, name, exe));
+    }
+  } catch { /* 没有商店版 */ }
+
+  const seen = new Set();
+  for (const py of candidates.filter(Boolean)) {
+    if (seen.has(py)) continue;
+    seen.add(py);
+    const r = spawnSync(py, ['-c', probe], { timeout: 8000, windowsHide: true, stdio: 'ignore' });
+    if (r?.status === 0) return { ok: true, python: py };
+  }
+  return { ok: false, python: null };
+}
+
+/** ffmpeg：和 `src/binaries.js` 同一套顺序，最后才回落到 PATH。 */
+function checkFfmpeg() {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh');
+  const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  const candidates = [];
+  for (const c of [process.env.DSH_FFMPEG_PATH, process.env.FFMPEG_PATH]) if (c) candidates.push(c);
+  if (process.env.DSH_FFMPEG_DIR) candidates.push(join(process.env.DSH_FFMPEG_DIR, exe));
+  candidates.push(join(home, 'tools', 'ffmpeg', 'bin', exe), 'ffmpeg');
+
+  for (const f of candidates) {
+    if ((f.includes('/') || f.includes('\\')) && !existsSync(f)) continue;
+    const r = spawnSync(f, ['-version'], { timeout: 8000, windowsHide: true, stdio: 'ignore' });
+    if (r?.status === 0) return { ok: true, ffmpeg: f };
+  }
+  return { ok: false, ffmpeg: null };
+}
 
 async function editProfile({ add, name = PKG_NAME }) {
   const pkg = await readJson(pkgPath);
@@ -85,6 +159,14 @@ async function report() {
     console.log(`\n⚠ 检测到旧包 ${LEGACY_NAME}（目录${legacyInstalled ? '在' : '不在'}、bundles ${legacyRegistered ? '已注册' : '未注册'}）：`
       + '它和本包提供同一个 see_now 工具。先跑 `node scripts/install-dev.mjs --remove-legacy`，再重启 DSH。');
   }
+
+  // 悬浮窗 / 采集的运行时依赖。缺了不影响安装，但窗起不来、采不了图。
+  const py = checkPython();
+  const ff = checkFfmpeg();
+  console.log('依赖');
+  console.log(`  python  : ${py.ok ? `${py.python}  ✓ tkinter/Pillow/mss/numpy` : '✗ 没找到能 import tkinter/Pillow/mss/numpy 的解释器'}`);
+  if (!py.ok) console.log('            → pip install Pillow mss numpy（装进 DSH 用来跑悬浮窗的那个 Python）');
+  console.log(`  ffmpeg  : ${ff.ok ? `${ff.ffmpeg}  ✓` : '✗ 没找到（DSH 桌面版自带，检查 DSH_HOME/tools/ffmpeg/bin）'}`);
 
   /**
    * **版本对账。**
