@@ -1,0 +1,33 @@
+# ---- 依赖 / 构建产物 ----
+node_modules/
+
+# ---- Python 缓存 ----
+__pycache__/
+*.py[cod]
+
+# ---- 本地备份、临时目录、调试产物（体积大或可重建） ----
+.backup/
+.tmp/
+.tmp2/
+_scratch/
+debug/
+*.damaged-*
+*.bak
+
+# ---- 本地验证素材：截图 / 音频 / 视频 ----
+_*.png
+_*.wav
+*.mp4
+*.m4a
+*.flac
+docs/verify-*.png
+
+# ---- 日志与本地配置 ----
+*.log
+.env
+.env.*
+
+# ---- 系统垃圾 ----
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,87 @@
+{
+  "name": "dsh-see-now-more",
+  "version": "0.2.0-more.1",
+  "description": "Chat with DSH like an IM, with a live call on the side: shared screen and system audio, messages that cut in mid-turn, and a window that stays. Sampling core based on dsh-see-now. · 像 QQ 一样跟 DSH 聊天，同时开着一路共享屏幕与声音（采样内核来自上游 dsh-see-now）。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek",
+    "screen-capture",
+    "vision",
+    "llm",
+    "ffmpeg",
+    "realtime",
+    "token-efficient",
+    "multimodal"
+  ],
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./pack": "./src/pack.js",
+    "./png": "./src/png.js",
+    "./pipeline": "./src/pipeline.js",
+    "./tokens": "./src/tokens.js",
+    "./capture": "./src/capture.js",
+    "./chat": "./src/chat.js",
+    "./speech": "./src/speech.js",
+    "./voice": "./src/voice.js",
+    "./interject": "./src/interject.js",
+    "./window": "./src/window.js",
+    "./runner": "./src/runner.js",
+    "./loop": "./src/loop.js",
+    "./timer": "./src/timer.js",
+    "./tool-spec": "./src/tool-spec.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "py",
+    "examples/floating-chat/*.py",
+    "examples/floating-chat/*.png",
+    "examples/voice-say-mac.mjs",
+    "scripts",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE",
+    "docs/images"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "install-dev": "node scripts/install-dev.mjs",
+    "check": "node scripts/install-dev.mjs --check",
+    "sync:window": "node scripts/sync-window.mjs",
+    "check:window": "node scripts/sync-window.mjs --check"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.7"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SAOS-3624/dsh-see-now-more.git"
+  },
+  "homepage": "https://github.com/SAOS-3624/dsh-see-now-more#readme",
+  "bugs": {
+    "url": "https://github.com/SAOS-3624/dsh-see-now-more/issues"
+  },
+  "bin": {
+    "dsh-see-window": "bin/see-window.mjs"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "dsh-see-now-more",
+  "description": "Chat with DSH like an IM while a live call runs alongside: shared screen and system audio, messages that cut in mid-turn, a window that stays. Sampling core built on dsh-see-now.",
+  "version": "0.2.0-more.1",
+  "entry": {
+    "name": "dsh-see-now-more",
+    "inject": [
+      "sessionController",
+      "tools",
+      "attachments"
+    ]
+  }
+}
