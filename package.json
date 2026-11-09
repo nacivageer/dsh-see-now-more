@@ -1,6 +1,6 @@
 {
   "name": "dsh-see-now-more",
-  "version": "0.1.1-more.4",
+  "version": "0.1.1-more.5",
   "description": "Chat with DSH like an IM while it watches your screen: token-efficient screen sampling, a floating chat window, barge-in messages.",
   "keywords": [
     "dsh",
@@ -31,12 +31,16 @@
     "./runner": "./src/runner.js",
     "./loop": "./src/loop.js",
     "./timer": "./src/timer.js",
-    "./tool-spec": "./src/tool-spec.js"
+    "./tool-spec": "./src/tool-spec.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg"
   },
   "files": [
     "bin",
     "src",
     "py",
+    "client.js",
+    "icon.svg",
     "examples/floating-chat/*.py",
     "examples/floating-chat/*.png",
     "examples/voice-say-mac.mjs",
@@ -70,6 +74,10 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
     }
   },
   "license": "Apache-2.0",

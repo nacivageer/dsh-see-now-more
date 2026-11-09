@@ -2,6 +2,29 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.5] - 2026-11-10
+
+### Added — 标题栏左上角内置悬浮窗入口（原 `dsh-see-now-launcher` 合并进来）
+
+以前「打开悬浮窗」只有一条路：让模型先调一次 `see_now`。窗关了、进程没了、或者被藏起来了，
+用户自己想再看到它没有任何入口 —— 那个入口此前是一个**独立的私有包** `dsh-see-now-launcher`，
+既没进发布仓，`private: true`，意味着别人装 `dsh-see-now-more` 永远拿不到按钮。
+
+现在入口在本包里，装完就有：
+
+- **Client 半侧** `client.js`：占 `conversation.header.leading`（标题栏最左、标题之前那一格），
+  一个 window 图标 + `see-now` 文字，状态文字走 `--dsw-alias-*` token，不 import 任何 Harness
+  Client 包。`package.json` 声明 `dsh.client.platform: "web"`。
+- **Host 半侧** `src/open-window.js`：注册 `POST /dsh-see-now-window/open`，点一下覆盖三种状态 ——
+  没起就拉起、被藏了就取消隐藏、心跳过期（进程卡死）就换一个。顺序**先取消隐藏再开窗**：
+  窗口启动时读 `hidden` 标志，带着旧值起来就是「开了但看不见」。
+- **Web 载体是可选的**：走 `ctx.inject(['webServer'], …)` 而不是模块级 `inject` —— 没有 Web
+  载体的宿主里入口静默跳过，采集、听声音、`see_now` 工具照常，不会因为少一个服务整插件不启动。
+- 路由挂在**工具注册成功之后**：装了重复副本时那一份会提前退出，不会再抢同一条路径。
+
+不再需要 `dsh-see-now-launcher`。装了它的 profile 把它从 bundles 与依赖里去掉即可（两个入口
+同时存在会并排画两个按钮）。老包里的 client 半侧按自己的包名注册，不会和本包冲突。
+
 ## [0.1.1-more.4] - 2026-11-10
 
 ### Added — 悬浮窗气泡文字可拖选 + 复制

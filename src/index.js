@@ -22,6 +22,7 @@ import { wakeWithRetry, deliveryMode } from './timer.js';
 import { readTuning, tuningPath } from './tuning.js';
 import { shouldIdleStop } from './idle.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } from './window.js';
+import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -1619,6 +1620,14 @@ async function registerAll(ctx) {
     for (const d of disposers.reverse()) { try { d?.(); } catch { /* 收不干净也不能再炸 */ } }
     return () => {};
   }
+
+  /**
+   * 左上角入口的 Host 半侧（`POST /dsh-see-now-window/open`）。
+   *
+   * **放在工具注册成功之后**：装了两份时上面会提前 return，这一份就不会再挂一条
+   * 同路径路由。没有 Web 载体时 `registerOpenWindowRoute` 自己静默跳过。
+   */
+  registerOpenWindowRoute(ctx, { log });
 
   return () => { for (const d of disposers.reverse()) d?.(); };
 }
