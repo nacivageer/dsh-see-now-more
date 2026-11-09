@@ -64,12 +64,6 @@
 **Apache License 2.0** —— 随便用。个人、公司内部、闭源产品、SaaS、二次分发都可以，
 **不需要问我要授权，也不收费**。只要保留 [LICENSE](./LICENSE) 和 [NOTICE](./NOTICE) 这两份文件。
 
-如果你觉得它替你省了时间，欢迎扫码打赏 —— 纯自愿，**不影响上面任何一个字**：
-
-<p align="center">
-  <img src="./docs/images/reward-qr.png" alt="赞赏码（微信 / 支付宝）" width="240">
-</p>
-
 提交 PR 前读一下 [CONTRIBUTING.md](./CONTRIBUTING.md) —— 现在**不需要签 CLA** 了，
 按 Apache-2.0 的规矩来就行。
 
@@ -600,9 +594,8 @@ test/                     24 条测试
 **Apache License 2.0** —— 商用、闭源、再分发、改完再卖都可以，保留 [LICENSE](./LICENSE) 与
 [NOTICE](./NOTICE) 即可。
 
-`examples/floating-chat/` 来自同作者的另一个项目 `dsh-watch-together`，两边现在是**同一个协议**，
+`examples/floating-chat/` 来自上游作者的另一个项目 `dsh-watch-together`，两边现在是**同一个协议**，
 不再有"这个目录 Apache、其余非商业"的分裂。
 
-愿意打赏就扫上面那个码 —— 不打赏一样能用全部功能，**没有任何东西锁在付费后面**。
-
-Copyright © 2026 SAOS-3624
+Copyright © 2026 SAOS-3624（上游 `dsh-see-now` / `dsh-watch-together`）
+本仓的修改与新增 © 2026 nacivageer
