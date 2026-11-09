@@ -1,7 +1,7 @@
 {
   "name": "dsh-see-now-more",
   "description": "Chat with DSH like an IM while it watches your screen: token-efficient screen sampling, a floating chat window, barge-in messages.",
-  "version": "0.2.0-more.1",
+  "version": "0.1.1-more.2",
   "entry": {
     "name": "dsh-see-now-more",
     "inject": [

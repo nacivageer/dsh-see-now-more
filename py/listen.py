@@ -74,6 +74,32 @@ except ImportError:
 # 目标格式。16k 单声道是 ASR（paraformer / SenseVoice）的标准输入。
 SR = 16000
 
+# pid 文件（放在 --out 目录里）。上层（src/listen.js）杀进程靠它兜底：
+# Windows 上 node 拿到的 pid 是 venv launcher，关窗那条路上引用还可能丢 ——
+# 让录音进程自己把"我是谁"写下来，比让 Node 记着更可靠。
+PID_FILE = "listen.pid"
+
+
+def write_pid_file(out_dir):
+    try:
+        path = os.path.join(out_dir, PID_FILE)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"pid": os.getpid(),
+                       "script": os.path.basename(__file__),
+                       "at": int(time.time() * 1000)}, f)
+        return path
+    except OSError:
+        return None
+
+
+def remove_pid_file(path):
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
 
 def log(msg):
     print(msg, file=sys.stderr, flush=True)
@@ -644,6 +670,7 @@ def main():
     if not args.out:
         raise SystemExit("要 --out DIR（或者 --list-devices）")
     os.makedirs(args.out, exist_ok=True)
+    pid_path = write_pid_file(args.out)
 
     # 上层是 SIGTERM 收工的：不接这个信号的话 finally 不会跑，正在说的那半句就丢了
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -778,7 +805,12 @@ def main():
             stream.stop_stream(); stream.close()
         except Exception:
             pass
-        p.terminate()
+        try:
+            p.terminate()
+        finally:
+            # 退出就把自己的 pid 文件收掉：留在盘上只会让下一次 stop() 去杀一个
+            # 已经不存在（或者被系统复用）的 pid
+            remove_pid_file(pid_path)
 
 
 if __name__ == "__main__":

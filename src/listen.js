@@ -354,6 +354,65 @@ export function canListen(python) {
 }
 
 /**
+ * Python 自己写的 pid 文件（放在音频目录里）。
+ *
+ * **为什么需要它**：Windows 上 `spawn(python, …)` 拿到的 pid 是 venv 的 launcher，
+ * 真正在录音的是它拉起来的基座解释器 —— `child.kill()` 只杀 launcher，子进程活着。
+ * 而关窗走 `hangUp()` 时 `child` 引用可能已丢，连 pid 都拿不到。
+ * 所以让 Python 把"我是谁"落盘，Node 侧只认这个文件。
+ */
+export const PID_FILE = 'listen.pid';
+
+/** 读 pid 文件；内容不合法就返回 null（不抛）。 */
+export function readListenPid(path) {
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    const pid = Number(raw?.pid);
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    // 只认自己写的：脚本名对不上、或者记录老得离谱，都当成脏文件
+    if (String(raw?.script ?? '') !== 'listen.py') return null;
+    const at = Number(raw?.at);
+    if (Number.isFinite(at) && at > 0 && Date.now() - at > 6 * 3600 * 1000) return null;
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+const defaultRun = (cmd, args) => {
+  try {
+    return spawnSync(cmd, args, { windowsHide: true, encoding: 'utf8', timeout: 8000 });
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * 结束一根采集进程（**按进程树**，Windows 上必须）。
+ *
+ * 两条保护，都是"别误杀别人"：
+ *   1. 先 `tasklist` 确认这个 pid 的映像名是 python —— pid 会被系统复用；
+ *   2. 映像名不对就什么都不做（返回 'skipped'）。
+ *
+ * @returns {'killed'|'skipped'|'gone'}
+ */
+export function killListenTree(pid, {
+  platform = process.platform, run = defaultRun, kill = process.kill,
+} = {}) {
+  const id = Number(pid);
+  if (!Number.isInteger(id) || id <= 0) return 'gone';
+  if (platform !== 'win32') {
+    // POSIX：listen.py 是直接子进程，SIGTERM 就够（它自己接了这个信号收尾）
+    try { kill(id, 'SIGTERM'); return 'killed'; } catch { return 'gone'; }
+  }
+  const list = run('tasklist', ['/FI', `PID eq ${id}`, '/FO', 'CSV', '/NH']);
+  const image = String(list?.stdout ?? '').toLowerCase();
+  if (!image.includes('python')) return 'skipped';
+  const out = run('taskkill', ['/PID', String(id), '/T', '/F']);
+  return out?.status === 0 ? 'killed' : 'skipped';
+}
+
+/**
  * 找解释器。顺序：
  *   1. `DSH_SEE_PYTHON`（调试/临时）
  *   2. `~/.dsh/see-window.json` 的 `listenPython` / `python`
@@ -1217,6 +1276,17 @@ export function createListener({
    */
   async function start() {
     if (child) return { ok: true, reason: 'already' };
+    /**
+     * 开工前先扫一遍**上一轮留下的孤儿**：pid 文件还在 = 上一轮没杀干净。
+     * 不清掉就会同时有两根管道在录音，同一句话被转两遍。杀不掉也继续 ——
+     * 多一层字幕总比没有强。
+     */
+    const stale = readListenPid(join(audioDir, PID_FILE));
+    if (stale) {
+      const how = killListenTree(stale);
+      log(`[listen] 清掉上一次留下的采集进程 ${stale}（${how}）`);
+      try { unlinkSync(join(audioDir, PID_FILE)); } catch { /* 本来就没有 */ }
+    }
     if (env.DSH_SEE_AUDIO === '0') {
       reason = '被 DSH_SEE_AUDIO=0 关掉了';
       enabled = false;
@@ -1325,10 +1395,25 @@ export function createListener({
 
   function stop(why = null) {
     if (timer) { clearInterval(timer); timer = null; }
-    if (child) {
-      try { child.kill(); } catch { /* 已经没了 */ }
-      child = null;
+    /**
+     * 两条都杀：**内存里的 pid** 和 **磁盘上的 pid 文件**。
+     *
+     * 关窗走 `hangUp()` 时 `child` 可能在 teardown 之前就被置空，
+     * 只剩 pid 文件还记着真正在录音的那个 python；反过来 pid 文件写失败时
+     * `child.pid` 还在。所以两边并起来，各杀一次（同一个 pid 只杀一次）。
+     */
+    const pidPath = join(audioDir, PID_FILE);
+    const pids = new Set();
+    if (child?.pid) pids.add(Number(child.pid));
+    const fromFile = readListenPid(pidPath);
+    if (fromFile) pids.add(fromFile);
+    for (const pid of pids) {
+      const how = killListenTree(pid);
+      if (how === 'killed') log(`[listen] 已结束采集进程 ${pid}`);
+      else if (how === 'skipped') log(`[listen] pid ${pid} 看着不是 python，没杀（可能已被复用）`);
     }
+    child = null;
+    try { unlinkSync(pidPath); } catch { /* 本来就没有 */ }
     enabled = false;
     reason = why || '停了';
   }
