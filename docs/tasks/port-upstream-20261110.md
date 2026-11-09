@@ -12,6 +12,11 @@
 - **2026-11-10 补丁 A 已落地**（分支 `port/upstream-listen-kill`，见该分支首个 commit）：
   `src/listen.js` / `py/listen.py` / `test/listen-kill.test.mjs`，`node --test` 34 条通过；
   版本改为 `0.1.1-more.2`。**补丁 B 交新会话做**（下面的 B 段就是交接内容）。
+- **2026-11-10 01:35 已装进 desktop profile**（`install-dev`，副本 `0.1.1-more.2` ✓ 与源码一致）。
+  模块级运行时验证直接对着**装机副本**跑（真 python + 真回环设备）：start → `listen.pid` 落盘、
+  stop → 按树杀 + 删 pid 文件、先留孤儿再 start → 孤儿被清且 pid 换成新的、收工无残留，12 项全过。
+  **DSH 进程内那条路要重启 Desktop 后才用新代码**：当前进程里仍是旧 `listen.js`，这期间开/关
+  采集可能留下孤儿与 pid 文件，重启后第一次 `start()` 会自动清掉。
 
 ## 为什么不是 cherry-pick
 
