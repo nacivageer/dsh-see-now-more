@@ -35,6 +35,9 @@
   Release 标 prerelease → https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.3
   ，正文合并 `0.1.1-more.2` 与 `0.1.1-more.3` 两段；`0.1.1-more.2` 未单独发 tag。
   装机副本仍是 `0.1.1-more.2`，要 `install-dev` + 重启 Desktop 才用上新代码。
+- **2026-11-10 02:02 已装机**：`install-dev` 装到 desktop profile，副本版本 `0.1.1-more.3` ✓ 与源码一致，
+  `src/cuts.js` 里确认 `REF_V = 96`。`~/.dsh/see-now.json` 没写 `scoreNormalize`（走默认开）。
+  **要重启 Desktop 才生效**（插件树在进程启动时组合）；重启后待验证状态行出现「亮度归一开」。
 
 ## 交接（给做 B 的新会话）
 
