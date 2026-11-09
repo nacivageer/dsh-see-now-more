@@ -161,6 +161,9 @@ COLL_PAD = 160                  # 抓背景时四周多抓一圈：拖动时从�
 # 展开或高亮态（关联变更栏打开、回顾窗开着、悬停）仍用白边，保住"当前可点/正在用"的醒目度。
 BTN_EDGE = "#8a8a8a"
 BTN_EDGE_ON = "#ffffff"
+# 主窗文字选区（2026-11-10 用户要求「鼠标拖选 + Ctrl+C」）：气泡底板是深蓝/深棕，
+# 选一块亮一点的蓝，白字压在上面仍然清楚。
+SEL_FILL = "#2f5f9e"
 
 # 调试开关（2026-11-06 用户要求）：`DSH_SEE_WDA=0` 时收起态**不常开** WDA 排除自己 ——
 # 条就能被截图/录屏拍到。代价是抓垫图退回 mss（dxcam 的常驻帧会带自己，出现"叠加"），
@@ -220,23 +223,6 @@ def price_period(now=None):
     nxt, next_peak = _price_next_switch(now)
     remain = (nxt - now).total_seconds() if nxt else None
     return peak, remain, next_peak, holiday
-
-
-def price_chip_enabled() -> bool:
-    """底栏价格标签是否显示。
-
-    默认显示；`~/.dsh/see-now.json` 写 `"showPriceChip": false` 可关，
-    环境变量 `DSH_SEE_PRICE_CHIP=0` 只对这一次启动有效。
-    这段价格逻辑是本文件自带的，不依赖 `dsh-price-period`（那个是 DSH 标题栏的可选插件）。
-    """
-    if os.environ.get("DSH_SEE_PRICE_CHIP") == "0":
-        return False
-    try:
-        p = Path(os.environ.get("DSH_HOME") or os.path.expanduser("~/.dsh")) / "see-now.json"
-        cfg = json.loads(p.read_text(encoding="utf-8-sig"))
-        return cfg.get("showPriceChip") is not False
-    except Exception:
-        return True
 
 
 def _set_clipboard_image(img) -> bool:
@@ -320,11 +306,14 @@ def _clip_put(fmt: int, data: bytes) -> bool:
     return bool(u.SetClipboardData(fmt, ctypes.c_void_p(handle)))
 
 
-def _set_clipboard_rich(text: str, html: str) -> bool:
+def _set_clipboard_rich(text: str, html: str, trail: bool = True) -> bool:
     """剪贴板双写：CF_UNICODETEXT + "HTML Format"（图以 file:// 内嵌）。
 
     粘进 Word / 微信时带图；粘进记事本退回纯文本。任一格式失败不算失败 ——
     只要纯文本进去了就算成功。
+
+    `trail`：纯文本末尾补不补 CRLF。老的「复制内容」一直补（沿用），气泡选区
+    复制传 False —— 多出来的换行粘进输入栏就是一次多余的回车。
     """
     u = ctypes.windll.user32
     try:
@@ -336,7 +325,7 @@ def _set_clipboard_rich(text: str, html: str) -> bool:
         return False
     try:
         u.EmptyClipboard()
-        payload = (text + "\r\n").encode("utf-16-le") + b"\x00\x00"
+        payload = (text + ("\r\n" if trail else "")).encode("utf-16-le") + b"\x00\x00"
         ok_text = _clip_put(13, payload)                 # CF_UNICODETEXT
         if html_fmt:
             _clip_put(html_fmt, _cfhtml(html))           # "HTML Format"
@@ -384,6 +373,25 @@ try:
     ROOT = HERE.parents[3]
 except IndexError:
     ROOT = HERE
+
+
+
+def price_chip_enabled() -> bool:
+    """底栏价格标签是否显示。
+
+    默认显示；`~/.dsh/see-now.json` 写 `"showPriceChip": false` 可关，
+    环境变量 `DSH_SEE_PRICE_CHIP=0` 只对这一次启动有效。
+    这段价格逻辑是本文件自带的，不依赖 `dsh-price-period`（那个是 DSH 标题栏的可选插件）。
+    """
+    if os.environ.get("DSH_SEE_PRICE_CHIP") == "0":
+        return False
+    try:
+        p = Path(os.environ.get("DSH_HOME") or os.path.expanduser("~/.dsh")) / "see-now.json"
+        cfg = json.loads(p.read_text(encoding="utf-8-sig"))
+        return cfg.get("showPriceChip") is not False
+    except Exception:
+        return True
+
 
 
 class _RECT(ctypes.Structure):
@@ -909,7 +917,7 @@ class LiveGlass:
         self._frame_done = None
         # 展开中的气泡（消息的 at 时间戳）；None = 全是两行摘要
         self._expanded = None
-        # 调试入口：启动时直接展开指定消息（自动化点击在透明窗口上不可靠）
+        # 调试入口：启动时直接展开指定消息（自动化点击在透明窗口上不可靠，见 LOCAL-CHANGES）
         if os.environ.get("DSH_SEE_EXPAND_AT"):
             self._expanded = os.environ["DSH_SEE_EXPAND_AT"]
         self._btn_hits = []
@@ -2103,6 +2111,8 @@ class LiveGlass:
     # ---- 折叠 ----
 
     def toggle_collapse(self, _event=None):
+        # 收起/展开会换一整套画布，气泡选区不再对应任何字：先清掉（2026-11-10）
+        self._clear_sel()
         # 折叠时没有"标题栏上方"这一说，先把输入行收掉，否则高度和 pad 对不上。
         # **不在这里记账**（save=False）：收输入行时窗高是中间值（展开高/`_base_h`），
         # 而 `_collapsed` 这时还是 False，`_save_geometry` 会按「展开态」去读窗高。
@@ -3781,12 +3791,24 @@ class LiveGlass:
         粗体比常规字宽，所以**不能**先按常规字宽折行再换成粗体画（会溢出气泡）；
         折行和绘制都走同一套 run，宽度才一致。
         """
+        return self._wrap_runs_meta(text, content_max, keep_blank)[0]
+
+    def _wrap_runs_meta(self, text, content_max, keep_blank=False):
+        """同上，但把「每个输出行属于哪一段」也带出来（`paras`，与行一一对应）。
+
+        复制选中文字时要用它区分**硬换行**（段落之间）和**软折行**（同一段被
+        气泡宽度折断）：同一 `para` 的相邻行拼起来不加换行，跨段才加 "\\n"。
+        空行（展开态 `keep_blank`）也算独立一段，拼回去正好是 "\\n\\n"。
+        """
         no_start = "，。、；：！？）》」』…,.;:!?)]}"
-        out = []
+        out, paras = [], []
+        pid = 0
         for para in str(text).splitlines():
             if not para.strip():
                 if keep_blank and out:
                     out.append([])          # 段落空行：只在展开态保留
+                    paras.append(pid)
+                    pid += 1
                 continue
             para = re.sub(r"^\s{0,3}#{1,6}\s+", "", para)     # "## 小标题" 去掉 #
             cur, cur_w = [], 0.0
@@ -3796,6 +3818,7 @@ class LiveGlass:
                     w = self._char_w(font, ch)
                     if cur and cur_w + w > content_max and ch not in no_start:
                         out.append(cur)
+                        paras.append(pid)
                         cur, cur_w = [], 0.0
                     if cur and cur[-1][1] == style:
                         cur[-1] = (cur[-1][0] + ch, style)
@@ -3803,7 +3826,11 @@ class LiveGlass:
                         cur.append((ch, style))
                     cur_w += w
             out.append(cur)
-        return out or [[]]
+            paras.append(pid)
+            pid += 1
+        if not out:
+            return [[]], [0]
+        return out, paras
 
     def _draw_runs(self, x, y, line):
         """按 run 画一行：粗体加粗、行内代码换淡蓝。宽度与折行用同一套 measure。"""
@@ -3819,17 +3846,65 @@ class LiveGlass:
 
     def _seg_lines(self, text, content_max, keep_blank=False):
         """按段折行并缓存（展开翻页不重折行）；结果是 [[(文本, 样式), …], …]。"""
+        return self._seg_lines_meta(text, content_max, keep_blank)[0]
+
+    def _seg_lines_meta(self, text, content_max, keep_blank=False):
+        """`_seg_lines` + 每行的段落号（见 `_wrap_runs_meta`），共用同一份缓存。"""
         key = (text, content_max, keep_blank)
         cache = getattr(self, "_seg_cache", None)
         if cache is None:
             cache = self._seg_cache = {}
         hit = cache.get(key)
         if hit is None:
-            hit = self._wrap_runs(text, content_max, keep_blank)
+            hit = self._wrap_runs_meta(text, content_max, keep_blank)
             if len(cache) > 600:
                 cache.clear()
             cache[key] = hit
         return hit
+
+    def _line_text_index(self, lines, paras):
+        """一段折行后的行 → (拼接文本, 每行在该文本里的起始偏移)。
+
+        同一段（`para` 相同）的相邻行是**软折行**，拼回去不加换行；跨段才加 "\\n"。
+        空行也会切一次段落，所以 "a\\n\\nb" 能原样拼回来（见 `_wrap_runs_meta`）。
+        """
+        parts, offs = [], []
+        off = 0
+        prev = None
+        for i, line in enumerate(lines):
+            para = paras[i] if i < len(paras) else i
+            if prev is not None and para != prev:
+                parts.append("\n")
+                off += 1
+            offs.append(off)
+            t = "".join(txt for txt, _style in line)
+            parts.append(t)
+            off += len(t)
+            prev = para
+        return "".join(parts), offs
+
+    def _segs_text_index(self, segs):
+        """把一条消息的所有文字段拼成一份「展示文本」，并给每段/每行记偏移。
+
+        复制选中时按字符偏移切；滚动、缩放、来新消息都不会改这份文本，
+        所以选区只存 (消息 key, 偏移)，重排后不漂。
+        """
+        parts = []
+        off = 0
+        first = True
+        for seg in segs:
+            if seg.get("kind") != "text":
+                continue
+            if not first:
+                parts.append("\n")
+                off += 1
+            first = False
+            t, offs = self._line_text_index(seg["lines"], seg.get("paras") or [])
+            seg["base"] = off
+            seg["offs"] = offs
+            parts.append(t)
+            off += len(t)
+        return "".join(parts)
 
     def _resolve_path(self, src):
         """把消息里的本地图片地址解析成真实路径。
@@ -4111,11 +4186,13 @@ class LiveGlass:
             # 单独一条窄行，宽度随文字走、位置固定在窗口中线。
             if str(msg.get("role") or "") == "notice":
                 nw = min(int((right - left) * 0.78), max(120, right - left - 24))
-                nlines = self._seg_lines(str(msg.get("text") or ""), nw)
+                nlines, nparas = self._seg_lines_meta(str(msg.get("text") or ""), nw)
                 nh = len(nlines) * ls + 22
                 ntext_w = max([0.0] + [self._runs_width(ln) for ln in nlines])
+                ntext, noffs = self._line_text_index(nlines, nparas)
                 entries.append({
-                    "kind": "notice", "key": key, "lines": nlines, "ls": ls,
+                    "kind": "notice", "key": key, "lines": nlines,
+                    "paras": nparas, "offset": noffs, "text": ntext, "ls": ls,
                     "bw": max(120.0, min(float(nw + 28), ntext_w + 28)),
                     "list_y": y, "h": nh + 8,
                 })
@@ -4136,34 +4213,37 @@ class LiveGlass:
                     if not seg.strip():
                         continue
                     _t0 = time.perf_counter()
-                    raw.append(("text", self._seg_lines(seg, content_max,
-                                                        keep_blank=is_open)))
+                    lines, paras = self._seg_lines_meta(seg, content_max,
+                                                        keep_blank=is_open)
+                    raw.append(("text", lines, paras))
                     t_txt += time.perf_counter() - _t0
                     n_txt += len(seg)
                 else:
-                    raw.append(("img", payload))
+                    raw.append(("img", payload, None))
 
-            total_lines = sum(len(p) for k, p in raw if k == "text")
-            total_imgs = sum(1 for k, p in raw if k == "img")
+            total_lines = sum(len(pl) for k, pl, _pa in raw if k == "text")
+            total_imgs = sum(1 for k, _pl, _pa in raw if k == "img")
 
             # 2) 摘要态：文本共 2 行 + 第一张图；展开态全给（超出靠像素滚动）
             if not is_open:
                 cut = []
                 text_left, img_left = 2, 1
-                for kind, payload in raw:
+                for kind, payload, paras in raw:
                     if kind == "text" and text_left > 0:
                         # 空行不占那两行的名额（原来段落之间的空行会把第二行吃掉，
                         # 屏幕上看就是"气泡里一行字 + 一大片空白"）
-                        part = [ln for ln in payload if ln][:text_left]
-                        if part:
-                            cut.append(("text", part))
-                            text_left -= len(part)
+                        picked = [(ln, paras[i] if i < len(paras) else i)
+                                  for i, ln in enumerate(payload) if ln][:text_left]
+                        if picked:
+                            cut.append(("text", [ln for ln, _p in picked],
+                                        [p for _ln, p in picked]))
+                            text_left -= len(picked)
                     elif kind == "img" and img_left > 0:
-                        cut.append(("img", payload))
+                        cut.append(("img", payload, None))
                         img_left -= 1
                 raw = cut
-            kept_lines = sum(len(p) for k, p in raw if k == "text")
-            kept_imgs = sum(1 for k, p in raw if k == "img")
+            kept_lines = sum(len(pl) for k, pl, _pa in raw if k == "text")
+            kept_imgs = sum(1 for k, _pl, _pa in raw if k == "img")
             more = (not is_open) and (kept_lines < total_lines or kept_imgs < total_imgs)
             if more:
                 # 截断了就要说一句：以前直接把尾巴砍掉，正文停在半句上（实报"话没说完"）
@@ -4180,16 +4260,17 @@ class LiveGlass:
                         else:
                             del last_cut[-2]
                     lines_cut[-1] = last_cut
-                    raw[i] = ("text", lines_cut)
+                    raw[i] = ("text", lines_cut, raw[i][2])
                     break
 
             # 3) 图片：**只量尺寸、不加载像素**。108 条消息里 27 张图，松手重排时
             #    全量解码+缩放要 300ms+，而其中大部分根本不在视口里 —— 像素留到
             #    `_paint_bubbles` 只为真正要画的那几张加载（2026-11-06 实测）。
             segs = []
-            for kind, payload in raw:
+            for kind, payload, paras in raw:
                 if kind == "text":
                     segs.append({"kind": "text", "lines": payload,
+                                 "paras": paras or [],
                                  "h": len(payload) * ls})
                 else:
                     _t0 = time.perf_counter()
@@ -4216,6 +4297,8 @@ class LiveGlass:
                     else:
                         segs.append({"kind": "img", "src": payload, "photo": None,
                                      "w": 0, "h": ls + 6})
+            # 展示文本：复制选中按它切；`segs` 里同时记好每行的起始偏移（见 `_segs_text_index`）
+            etext = self._segs_text_index(segs)
             body = max(ls + 16, sum(s["h"] for s in segs) + 16)
             if more:
                 body += 32          # 给右下角「展开」按钮留高度
@@ -4237,7 +4320,7 @@ class LiveGlass:
             by0 = y + stamp_h
             entries.append({
                 "msg": msg, "key": key, "is_user": is_user, "stamp": stamp,
-                "stamp_h": stamp_h, "segs": segs, "more": more,
+                "stamp_h": stamp_h, "segs": segs, "more": more, "text": etext,
                 "is_open": is_open, "ls": ls, "body": body,
                 "bx0": bx0, "bx1": bx1, "tx": tx, "ta": ta, "text_off": 8,
                 "stamp_tx": stamp_tx, "stamp_ta": stamp_ta,
@@ -4284,6 +4367,10 @@ class LiveGlass:
         self._img_hits = []
         self._bubble_hits = []          # 气泡整块 → entry（右键菜单命中用，2026-11-06）
         self._collapse_rect = None
+        # 文字选择的几何：这次真的画出来的行 + 每行在消息展示文本里的偏移。
+        # 只收画出来的行，命中判定才不会选到视口外、看不见的字。
+        self._sel_lines = []
+        selmap = self._selection_ranges()
         for e in getattr(self, "_feed_entries", []):
             if e.get("kind") == "status":
                 # ① 居中一行灰字：整行落在视口里才画（半行字比没有更难看）
@@ -4306,10 +4393,10 @@ class LiveGlass:
                 cx = w / 2.0
                 ly = ny + 11
                 rows = []
-                for line in e["lines"]:
+                for li, line in enumerate(e["lines"]):
                     # 整行落在可见区才画（和普通气泡同一条判据）
                     if ly >= view_top and ly + e["ls"] <= view_bottom:
-                        rows.append((ly, line))
+                        rows.append((ly, line, li))
                     ly += e["ls"]
                 # 顶上被切掉、正文一行也露不出来时**整块不画**：只剩一条底板残条，
                 # 看着就是"凭空多出来一条横线"，正压在状态行下面（普通气泡的
@@ -4329,9 +4416,17 @@ class LiveGlass:
                             smooth=r > 0, tags=("bubbles",))
                     except Exception:
                         pass
-                for ly, line in rows:
+                for ly, line, li in rows:
                     lw = self._runs_width(line)
-                    self._draw_runs(cx - lw / 2, ly, line)
+                    x = cx - lw / 2
+                    off = e["offset"][li] if li < len(e["offset"]) else 0
+                    self._paint_sel_line(x, ly, e["ls"], line, off,
+                                         selmap.get(e["key"]))
+                    self._draw_runs(x, ly, line)
+                    self._sel_lines.append({
+                        "key": e["key"], "off": off,
+                        "text": "".join(t for t, _s in line),
+                        "runs": line, "x": x, "top": ly, "h": e["ls"], "w": lw})
                 continue
             is_open = bool(e.get("is_open"))
             top = view_top + e["list_y"] - scroll
@@ -4408,13 +4503,23 @@ class LiveGlass:
             sy = by0 + e["text_off"]
             for seg in e["segs"]:
                 if seg["kind"] == "text":
-                    for line in seg["lines"]:
+                    base = seg.get("base", 0)
+                    offs = seg.get("offs") or []
+                    for li, line in enumerate(seg["lines"]):
                         ly = sy
                         sy += e["ls"]
                         # 整行落在可见区才画：展开态的上界是钉住的时间戳行（clip_top）
                         if ly < clip_top or ly + e["ls"] > view_bottom:
                             continue
+                        off = base + (offs[li] if li < len(offs) else 0)
+                        lw = self._runs_width(line)
+                        self._paint_sel_line(e["tx"], ly, e["ls"], line, off,
+                                             selmap.get(e["key"]))
                         self._draw_runs(e["tx"], ly, line)
+                        self._sel_lines.append({
+                            "key": e["key"], "off": off,
+                            "text": "".join(t for t, _s in line),
+                            "runs": line, "x": e["tx"], "top": ly, "h": e["ls"], "w": lw})
                 elif seg["kind"] == "img":
                     iy = sy
                     sy += seg["h"]
@@ -4493,6 +4598,372 @@ class LiveGlass:
         # 不调 text.refresh()：气泡文字 adapt=False、不进翻色名单，
         # find_all 全画布扫一遍在这里纯属浪费（滚轮每格都要付一次）。
         self._draw_scrollbar()
+
+    # ---- 气泡文字选择（2026-11-10：主窗里鼠标拖选一段字 + Ctrl+C） ----
+    #
+    # 气泡文字是 Canvas 自绘的（`TextLayer`），没有原生选区，所以自己记几何：
+    # `_paint_bubbles` 每帧把**画出来的行**记进 `_sel_lines`（x / top / 高 / 行文本 /
+    # 行首在「消息展示文本」里的偏移）。按下命中行 → 拖动按文档顺序取字符区间 →
+    # 在气泡底板之上、文字之下画矩形。
+    #
+    # 选区只存 `(消息 key, 展示文本偏移)`，不存行号：滚动、缩放、来新消息重排之后
+    # 偏移不变，高亮跟着字走。软折行和硬换行靠 `_wrap_runs_meta` 的段落号区分，
+    # 复制出来不会在每个折行处多一个换行。
+
+    def _paint_sel_line(self, x, y, h, line, line_off, span,
+                        canvas=None, tag="bubbles") -> None:
+        """把这一行与选区的交集画成矩形（在文字之前画，字压在上面）。
+
+        `span` 是 (起, 止)，坐标是整条消息展示文本里的字符偏移；`line_off`
+        是这一行第一个字在该文本里的偏移。`canvas`/`tag` 让回顾窗复用同一套：
+        那边画在 `hbody` 层（重画时跟着一起删），主窗画在 `bubbles` 层。
+        """
+        if not span:
+            return
+        cv = canvas or self.canvas
+        tags = (tag, "sel") if tag else ("sel",)
+        a, b = span
+        n = sum(len(txt) for txt, _style in line)
+        lo, hi = line_off, line_off + n
+        if b <= lo or a >= hi:
+            return
+        ca, cb = max(a, lo) - lo, min(b, hi) - lo
+        if cb <= ca:
+            return
+        cx = x
+        pos = 0
+        for txt, style in line:
+            ln = len(txt)
+            r0, r1 = max(ca, pos), min(cb, pos + ln)
+            if r1 > r0:
+                font = self._run_font(style)
+                pre = wid = 0.0
+                for ch in txt[:r0 - pos]:
+                    pre += self._char_w(font, ch)
+                for ch in txt[r0 - pos:r1 - pos]:
+                    wid += self._char_w(font, ch)
+                try:
+                    cv.create_rectangle(
+                        cx + pre, y + 1, cx + pre + wid, y + h - 1,
+                        fill=SEL_FILL, outline="", tags=tags)
+                except Exception:
+                    pass
+            pos += ln
+            # 和 `_draw_runs` 用同一个推进量，选区边界才和字对得上
+            cx += self._run_font(style).measure(txt)
+
+    @staticmethod
+    def _sel_ranges_for(entries, anchor, focus, text_key="text"):
+        """选区 → {消息 key: (起, 止)}；按 entries 的顺序取闭区间。
+
+        主窗、回顾页、收藏页共用：三处条目结构一样，差别只在展示文本字段名
+        （主窗 `text`；回顾窗 `sel_text`，因为它要保住原始 `text` 给「复制全文」）。
+        """
+        if not anchor or not focus:
+            return {}
+        ents = [e for e in (entries or []) if e.get("kind") != "status"]
+        order = {}
+        for i, e in enumerate(ents):
+            k = e.get("key")
+            if k is not None and k not in order:
+                order[k] = i
+        if anchor[0] not in order or focus[0] not in order:
+            return {}
+        ia, ib = order[anchor[0]], order[focus[0]]
+        if ia > ib or (ia == ib and anchor[1] > focus[1]):
+            anchor, focus, ia, ib = focus, anchor, ib, ia
+        out = {}
+        for i in range(ia, ib + 1):
+            e = ents[i]
+            k = e.get("key")
+            t = e.get(text_key) or ""
+            start = anchor[1] if i == ia else 0
+            end = focus[1] if i == ib else len(t)
+            start = max(0, min(len(t), start))
+            end = max(0, min(len(t), end))
+            if end > start:
+                out[k] = (start, end)
+        return out
+
+    @staticmethod
+    def _sel_text_for(entries, ranges, text_key="text"):
+        """按区间切出纯文本；跨条目用 "\n" 连。"""
+        if not ranges:
+            return ""
+        parts = []
+        for e in entries or []:
+            k = e.get("key")
+            if k in ranges:
+                a, b = ranges[k]
+                parts.append((e.get(text_key) or "")[a:b])
+        return "\n".join(parts)
+
+    def _selection_ranges(self):
+        """主窗当前选区 → {消息 key: (起, 止)}。"""
+        return self._sel_ranges_for(getattr(self, "_feed_entries", None),
+                                    getattr(self, "_sel_anchor", None),
+                                    getattr(self, "_sel_focus", None), "text")
+
+    def _feed_sel_text(self) -> str:
+        """主窗当前选区对应的纯文本；没有选区 / 消息已经不在了 → 空串。"""
+        entries = getattr(self, "_feed_entries", []) or []
+        return self._sel_text_for(entries, self._selection_ranges(), "text")
+
+    @staticmethod
+    def _sel_line_at_in(lines, view, x, y):
+        """(x, y) 落在哪一行文字上：返回行记录，否则 None（主窗/回顾窗共用）。
+
+        只认这一帧画出来的行，且要落在该行文字的横向范围内 —— 气泡边缘、
+        行间空隙、视口外都返回 None，那些地方留给拖窗（用户 2026-11-10 选的 A）。
+        """
+        if not lines:
+            return None
+        vt, vb = view or (0, 0)
+        if y < vt or y >= vb:
+            return None
+        lo, hi = 0, len(lines)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if lines[mid]["top"] <= y:
+                lo = mid + 1
+            else:
+                hi = mid
+        for j in (lo - 1, lo):
+            if 0 <= j < len(lines):
+                r = lines[j]
+                if r["top"] <= y < r["top"] + r["h"]:
+                    if r["x"] - 1 <= x <= r["x"] + max(1.0, r["w"]) + 1:
+                        return r
+        return None
+
+    def _sel_line_at(self, x, y):
+        """主窗：(x, y) 落在哪一行文字上。"""
+        if getattr(self, "_collapsed", False):
+            return None
+        return self._sel_line_at_in(getattr(self, "_sel_lines", None),
+                                    getattr(self, "_view", (0, 0)), x, y)
+
+    def _sel_pos_at(self, lines, view, x, y):
+        """(x, y) → (行记录, 行内字下标)；行外但人还在视口里就夹到最近一行。
+
+        拖选时用：行间空隙、气泡下方留白、最后一行底下都要能继续扩选，
+        否则往下拖永远停在最后一个字。
+        """
+        rec = self._sel_line_at_in(lines, view, x, y)
+        if rec is not None:
+            return rec, self._sel_char_at(rec, x)
+        vt, vb = view or (0, 0)
+        if not lines or y < vt or y > vb:
+            return None
+        rec = lines[0]
+        for r in lines:
+            if r["top"] <= y:
+                rec = r
+            else:
+                break
+        return rec, self._sel_char_at(rec, x)
+
+    def _sel_char_at(self, rec, x) -> int:
+        """行内 x → 字符下标（按每个字宽的一半取最近边界）。"""
+        pos = 0
+        cx = rec["x"]
+        for txt, style in rec["runs"]:
+            font = self._run_font(style)
+            for ch in txt:
+                w = self._char_w(font, ch)
+                if x < cx + w / 2:
+                    return pos
+                cx += w
+                pos += 1
+        return pos
+
+    def _sel_line_hit(self, x, y):
+        rec = self._sel_line_at(x, y)
+        if rec is None:
+            return None
+        return rec, self._sel_char_at(rec, x)
+
+    def _sel_begin(self, x, y, extend=False) -> bool:
+        """在文字上按下：开始新选区（Shift+点=扩选）；返回是否命中文字。"""
+        hit = self._sel_line_hit(x, y)
+        if hit is None:
+            return False
+        # 无边框窗点画布不会自动拿焦点；不抢的话用户拖完按 Ctrl+C，
+        # 按键还落在别的窗口上（真窗实测的坑）。点文字 = 把焦点要过来。
+        try:
+            self.root.focus_force()
+        except Exception:
+            pass
+        rec, ch = hit
+        pos = (rec["key"], rec["off"] + ch)
+        self._feed_sel_drag = True
+        self._last_sel_xy = (x, y)
+        now = time.time()
+        last = getattr(self, "_last_sel_click", None)
+        if (last and now - last[0] < 0.45
+                and abs(x - last[1]) <= 4 and abs(y - last[2]) <= 4):
+            self._sel_click_count = min(3, getattr(self, "_sel_click_count", 1) + 1)
+        else:
+            self._sel_click_count = 1
+        self._last_sel_click = (now, x, y)
+        if extend and getattr(self, "_sel_anchor", None):
+            self._sel_focus = pos
+        elif self._sel_click_count == 2:
+            self._sel_word(rec, ch)
+        elif self._sel_click_count >= 3:
+            self._sel_entry(rec["key"])
+        else:
+            self._sel_anchor = pos
+            self._sel_focus = pos
+        self._redraw_bubbles()
+        return True
+
+    def _sel_word(self, rec, ch) -> None:
+        """双击选词：连续的字母/数字/汉字算一个词。"""
+        text = rec.get("text") or ""
+        if not text:
+            return
+        is_word = lambda c: c.isalnum() or c == "_"
+        i = min(max(ch, 0), len(text) - 1)
+        if not is_word(text[i]):
+            self._sel_anchor = (rec["key"], rec["off"] + i)
+            self._sel_focus = (rec["key"], rec["off"] + i + 1)
+            return
+        a = i
+        while a > 0 and is_word(text[a - 1]):
+            a -= 1
+        b = i + 1
+        while b < len(text) and is_word(text[b]):
+            b += 1
+        self._sel_anchor = (rec["key"], rec["off"] + a)
+        self._sel_focus = (rec["key"], rec["off"] + b)
+
+    def _sel_entry(self, key) -> None:
+        """三击选整条消息。"""
+        for e in getattr(self, "_feed_entries", []) or []:
+            if e.get("key") == key:
+                t = e.get("text") or ""
+                self._sel_anchor = (key, 0)
+                self._sel_focus = (key, len(t))
+                return
+
+    def _sel_extend(self, x, y) -> None:
+        if not getattr(self, "_feed_sel_drag", False):
+            return
+        self._last_sel_xy = (x, y)
+        got = self._sel_pos_at(getattr(self, "_sel_lines", None) or [],
+                               getattr(self, "_view", (0, 0)), x, y)
+        if got is None:
+            return
+        rec, ch = got
+        self._sel_focus = (rec["key"], rec["off"] + ch)
+        self._queue_sel_redraw()
+
+    def _queue_sel_redraw(self) -> None:
+        """把拖选的重画合并到 ~20ms 一次。
+
+        鼠标事件可以到 100+Hz，而重画一帧气泡要十几毫秒；每帧都画会让事件
+        排队、拖起来像粘住。这里只记最新状态，定时器到点画最后一帧。
+        """
+        if getattr(self, "_sel_redraw_after", None):
+            return
+        try:
+            self._sel_redraw_after = self.root.after(20, self._flush_sel_redraw)
+        except Exception:
+            self._sel_redraw_after = None
+            self._redraw_bubbles()
+
+    def _flush_sel_redraw(self) -> None:
+        self._sel_redraw_after = None
+        if (getattr(self, "_feed_sel_drag", False)
+                or getattr(self, "_sel_anchor", None) is not None):
+            try:
+                self._redraw_bubbles()
+            except Exception as exc:
+                print("sel redraw failed:", repr(exc), flush=True)
+
+    def _sel_autoscroll(self, y) -> bool:
+        """拖选到视口上下边缘时自己滚一小步（展开后的长消息也能一直选下去）。"""
+        vt, vb = self._view
+        if y < vt + 14:
+            step = -18
+        elif y > vb - 14:
+            step = 18
+        else:
+            return False
+        want = max(0, min(getattr(self, "_scroll_max", 0), self._scroll_px + step))
+        if want == self._scroll_px:
+            return False
+        self._scroll_px = want
+        self._scroll_target = want
+        self._follow_bottom = False
+        self._queue_sel_redraw()
+        return True
+
+    def _sel_edge_tick(self) -> None:
+        """按住不动、鼠标停在视口边缘时，让自动滚动继续走。"""
+        if not getattr(self, "_feed_sel_drag", False):
+            return
+        xy = getattr(self, "_last_sel_xy", None)
+        if not xy:
+            return
+        if self._sel_autoscroll(xy[1]):
+            vt, vb = self._view
+            self._sel_extend(xy[0], max(vt, min(vb - 1, xy[1])))
+            try:
+                self.root.after(45, self._sel_edge_tick)
+            except Exception:
+                pass
+
+    def _sel_finish(self) -> None:
+        if not getattr(self, "_feed_sel_drag", False):
+            return
+        self._feed_sel_drag = False
+        self._last_sel_xy = None
+        a = getattr(self, "_sel_anchor", None)
+        b = getattr(self, "_sel_focus", None)
+        # 只是点了一下（没拖出范围）：和普通编辑器一致，清掉旧选区
+        if a and b and a == b:
+            self._clear_sel()
+
+    def _clear_sel(self) -> bool:
+        if (getattr(self, "_sel_anchor", None) is None
+                and getattr(self, "_sel_focus", None) is None):
+            return False
+        self._sel_anchor = None
+        self._sel_focus = None
+        self._feed_sel_drag = False
+        self._last_sel_xy = None
+        try:
+            self.canvas.delete("sel")
+        except Exception:
+            pass
+        return True
+
+    def _copy_selection(self, _e=None):
+        """Ctrl+C / Ctrl+Insert：复制主窗里选中的文字。
+
+        焦点在输入栏 / 改名框时**不接管**：Ctrl+C 该由 Entry 复制它自己的选区。
+        """
+        try:
+            focus = self.root.focus_get()
+        except Exception:
+            focus = None
+        if isinstance(focus, (tk.Entry, tk.Text)):
+            return None
+        text = self._feed_sel_text()
+        if not text:
+            return None
+        import html as _h
+        html = "".join("<div>" + (_h.escape(s) if s else "<br>") + "</div>"
+                       for s in text.split("\n"))
+        try:
+            ok = _set_clipboard_rich(text, html, trail=False)
+        except Exception as exc:
+            print("copy selection failed:", repr(exc), flush=True)
+            ok = False
+        self._flash_status("已复制选中文字" if ok else "复制失败")
+        return "break"
 
     def _scroll_by(self, delta: int) -> None:
         if self._scroll_max <= 0:
@@ -4839,6 +5310,7 @@ class LiveGlass:
 
     def _price_chip_text(self):
         """(文字, 是否高峰)；离切换不到 30 分钟时附倒计时，口径同 dsh-price-period。"""
+
         if not price_chip_enabled():
             return None
         try:
@@ -4962,6 +5434,10 @@ class LiveGlass:
             "h_head": ("", ""),
             # 2026-11-06：正文里的「展开某条」状态（按 at 认），展开后标题栏出【收回】
             "expanded": None, "chip": None, "expand_hits": [],
+            # 气泡文字选择（2026-11-10，主窗同款）：状态都挂在这个 dict 上，关窗即丢
+            "sel_lines": [], "sel_anchor": None, "sel_focus": None,
+            "sel_drag": False, "sel_last_xy": None, "sel_after": None,
+            "sel_click": None, "sel_count": 0,
         }
         canvas.bind("<MouseWheel>", self._hist_wheel)
         canvas.bind("<ButtonPress-1>", self._hist_press)
@@ -4969,6 +5445,11 @@ class LiveGlass:
         canvas.bind("<B1-Motion>", self._hist_motion)
         canvas.bind("<ButtonRelease-1>", self._hist_release)
         canvas.bind("<Motion>", self._hist_hover)
+        # 复制选区 / 清选区：绑在 Toplevel 上（canvas 的 bindtags 里含 toplevel，
+        # 焦点在窗或画布上都能收到）
+        for seq in ("<Control-c>", "<Control-C>", "<Control-Insert>"):
+            win.bind(seq, self._hist_copy_selection)
+        win.bind("<Escape>", self._hist_escape)
         win.protocol("WM_DELETE_WINDOW", self._close_history)
         return win
 
@@ -5129,6 +5610,15 @@ class LiveGlass:
         st["cleanup_rect"] = None
         st["expand_hits"] = []
         st["chip"] = None
+        # 清页/换页：文字选区一起清（旧偏移不属于新一页的展示文本）
+        st["sel_lines"] = []
+        st["sel_anchor"] = None
+        st["sel_focus"] = None
+        st["sel_drag"] = False
+        st["sel_last_xy"] = None
+        st["sel_after"] = None
+        st["sel_click"] = None
+        st["sel_count"] = 0
         if "expanded" not in st:
             st["expanded"] = None
 
@@ -5187,6 +5677,7 @@ class LiveGlass:
             return False
         self._bound_full = sid
         self._bound_sid = self._read_bound_session()
+        self._clear_sel()          # 换会话 = 整条消息流都换了，旧选区没有意义
         self._touch_group(sid)
         self.feed.set_sid(sid)
         self._follow_bottom = True
@@ -5895,28 +6386,31 @@ class LiveGlass:
                     seg = payload.strip("\n")
                     if not seg.strip():
                         continue
-                    raw.append(("text", self._seg_lines(seg, content_max)))
+                    lines, paras = self._seg_lines_meta(seg, content_max)
+                    raw.append(("text", lines, paras))
                 else:
-                    raw.append(("img", payload))
+                    raw.append(("img", payload, None))
 
-            total_lines = sum(len(p) for k, p in raw if k == "text")
-            total_imgs = sum(1 for k, p in raw if k == "img")
+            total_lines = sum(len(pl) for k, pl, _pa in raw if k == "text")
+            total_imgs = sum(1 for k, _pl, _pa in raw if k == "img")
             more = False
             if not is_open:
                 cut = []
                 text_left, img_left = 2, 1
-                for kind, payload in raw:
+                for kind, payload, paras in raw:
                     if kind == "text" and text_left > 0:
                         # 空行不占那两行的名额（主窗同款：不然摘要只剩一行字）
-                        part = [ln for ln in payload if ln][:text_left]
-                        if part:
-                            cut.append(("text", part))
-                            text_left -= len(part)
+                        picked = [(ln, paras[i] if i < len(paras) else i)
+                                  for i, ln in enumerate(payload) if ln][:text_left]
+                        if picked:
+                            cut.append(("text", [ln for ln, _p in picked],
+                                        [p for _ln, p in picked]))
+                            text_left -= len(picked)
                     elif kind == "img" and img_left > 0:
-                        cut.append(("img", payload))
+                        cut.append(("img", payload, None))
                         img_left -= 1
-                kept_lines = sum(len(p) for k, p in cut if k == "text")
-                kept_imgs = sum(1 for k, p in cut if k == "img")
+                kept_lines = sum(len(pl) for k, pl, _pa in cut if k == "text")
+                kept_imgs = sum(1 for k, _pl, _pa in cut if k == "img")
                 more = kept_lines < total_lines or kept_imgs < total_imgs
                 if more:
                     # 截断了就补省略号：以前直接砍断，正文停在半句上
@@ -5932,14 +6426,15 @@ class LiveGlass:
                             else:
                                 del last_cut[-2]
                         lines_cut[-1] = last_cut
-                        cut[i] = ("text", lines_cut)
+                        cut[i] = ("text", lines_cut, cut[i][2])
                         break
                 raw = cut
 
             segs = []
-            for kind, payload in raw:
+            for kind, payload, paras in raw:
                 if kind == "text":
                     segs.append({"kind": "text", "lines": payload,
+                                 "paras": paras or [],
                                  "h": len(payload) * ls})
                 else:
                     src = str(payload)
@@ -5960,6 +6455,8 @@ class LiveGlass:
                     else:
                         segs.append({"kind": "img", "src": payload, "w": 0,
                                      "h": ls + 6, "max_w": content_max, "max_h": 210})
+            # 展示文本（文字选择/复制用）；`text` 仍保留原始消息给「复制全文」
+            sel_text = self._segs_text_index(segs)
             body = max(ls + 16, sum(s["h"] for s in segs) + 16)
             if more:
                 body += 26          # 给右下角展开三角留高度
@@ -5988,7 +6485,8 @@ class LiveGlass:
                         "segs": segs, "body": body, "bx0": bx0, "bx1": bx1,
                         "pad": pad, "r": min(18, max(12, body // 3)),
                         "key": key, "more": more, "is_open": is_open,
-                        "text": str(e.get("text") or ""), "sid": str(e.get("sid") or ""),
+                        "text": str(e.get("text") or ""), "sel_text": sel_text,
+                        "sid": str(e.get("sid") or ""),
                         "at": e.get("at"), "src": src_short,
                         "list_y": y, "h": stamp_h + body + (30 if source else 10)})
             y += stamp_h + body + (30 if source else 10)
@@ -6008,6 +6506,11 @@ class LiveGlass:
         scroll = st["scroll"]
         c.delete("hbody")
         st["text"].reset()
+        # 文字选择的几何：这一帧画出来的行（主窗同款，2026-11-10 按用户要求铺到回顾/收藏）
+        st["sel_lines"] = []
+        selmap = self._sel_ranges_for(layout, st.get("sel_anchor"), st.get("sel_focus"),
+                                      "sel_text")
+        ls = self.fonts.get(11).metrics("linespace")
         st["img_hits"] = []
         st["bubble_hits"] = []
         st["del_hits"] = []
@@ -6073,12 +6576,24 @@ class LiveGlass:
             sy = by0 + 8
             for seg in e["segs"]:
                 if seg["kind"] == "text":
-                    for line in seg["lines"]:
+                    base = seg.get("base", 0)
+                    offs = seg.get("offs") or []
+                    for li, line in enumerate(seg["lines"]):
                         ly = sy
-                        sy += self.fonts.get(11).metrics("linespace")
+                        sy += ls
                         if ly < clip_top or ly + 20 > bottom:
                             continue
-                        self._hist_draw_runs(e["bx0"] + e["pad"], ly, line)
+                        off = base + (offs[li] if li < len(offs) else 0)
+                        x = e["bx0"] + e["pad"]
+                        self._paint_sel_line(x, ly, ls, line, off,
+                                             selmap.get(e["key"]),
+                                             canvas=c, tag="hbody")
+                        self._hist_draw_runs(x, ly, line)
+                        st["sel_lines"].append({
+                            "key": e["key"], "off": off,
+                            "text": "".join(t for t, _s in line),
+                            "runs": line, "x": x, "top": ly, "h": ls,
+                            "w": self._runs_width(line)})
                 else:
                     iy = sy
                     sy += seg["h"]
@@ -6167,6 +6682,12 @@ class LiveGlass:
     def _history_show_session(self, sid: str) -> None:
         self._history_window()
         prev = (self._hist or {}).get("sid")
+        # 同一页重新排（图片下载完 / 拖边松手）时把选区带过去：偏移是按文本算的，
+        # 重排不改变它。换会话才丢。
+        keep_sel = None
+        if prev == sid and sid:
+            st0 = self._hist
+            keep_sel = (st0.get("sel_anchor"), st0.get("sel_focus"))
         self._hist_clear()
         st = self._hist
         if prev != sid:
@@ -6195,6 +6716,8 @@ class LiveGlass:
         st["total"] = total
         st["max"] = max(0, total - (bottom - top))
         st["scroll"] = st["max"]          # 打开就停在最新一条
+        if keep_sel and keep_sel[0] and keep_sel[1]:
+            st["sel_anchor"], st["sel_focus"] = keep_sel
         self._hist_paint(layout)
         st["win"].deiconify()
         st["win"].lift()
@@ -6220,6 +6743,10 @@ class LiveGlass:
         """收藏页：跨会话、按收藏时间排，每条气泡下面带来源短 id（2026-11-06 用户要求）。"""
         self._history_window()
         prev = (self._hist or {}).get("page")
+        keep_sel = None
+        if prev == "fav":
+            st0 = self._hist
+            keep_sel = (st0.get("sel_anchor"), st0.get("sel_focus"))
         self._hist_clear()
         st = self._hist
         if prev != "fav":
@@ -6258,6 +6785,8 @@ class LiveGlass:
         if not entries:
             c.create_text(w // 2, (top + bottom) // 2, text="还没有收藏",
                           fill=self.H_MUTED, font=self.fonts.spec(10))
+        if keep_sel and keep_sel[0] and keep_sel[1]:
+            st["sel_anchor"], st["sel_focus"] = keep_sel
         self._hist_paint(layout)
         st["win"].deiconify()
         st["win"].lift()
@@ -6285,7 +6814,13 @@ class LiveGlass:
         # 所以 `_hist_press` 里也会设一次 —— 这里成了就是免费的预览。
         if not st.get("resize"):
             try:
-                st["canvas"].config(cursor=self._cursor_for(self._hist_edge_at(e.x, e.y)))
+                mode = self._hist_edge_at(e.x, e.y)
+                # 悬停在画得出的文字行上换 I 型光标（2026-11-10，主窗同款）
+                if (not mode and st.get("page") in ("viewer", "fav")
+                        and self._hist_sel_line_at(e.x, e.y) is not None):
+                    st["canvas"].config(cursor="xterm")
+                else:
+                    st["canvas"].config(cursor=self._cursor_for(mode))
             except Exception:
                 pass
         if st["page"] != "list":
@@ -6324,7 +6859,9 @@ class LiveGlass:
         for rect, ent in st.get("bubble_hits") or []:
             if rect[0] <= e.x <= rect[2] and rect[1] <= e.y <= rect[3]:
                 self._bubble_menu(e.x_root, e.y_root, ent,
-                                  in_fav=(st.get("page") == "fav"))
+                                  in_fav=(st.get("page") == "fav"),
+                                  sel_text=self._hist_sel_text(),
+                                  on_copy_sel=self._hist_copy_selection)
                 return
 
     def _show_row_menu(self, x_root, y_root, g) -> None:
@@ -6379,6 +6916,10 @@ class LiveGlass:
                 if src and rect[0] <= e.x <= rect[2] and rect[1] <= e.y <= rect[3]:
                     self._open_image(src)
                     return
+            # 气泡文字：文字行上按下 = 拖选（Shift+点扩选）；按在别处清掉旧选区
+            if self._hist_sel_begin(e.x, e.y, extend=bool(e.state & 0x1)):
+                return
+            self._hist_clear_sel()
         # 滚动条：按在滑块上拖，按在轨道上跳
         tr, th = st.get("track"), st.get("thumb")
         if tr and th and tr[0] - 4 <= e.x <= tr[2] + 4:
@@ -6436,6 +6977,17 @@ class LiveGlass:
         st = self._hist
         if not st:
             return
+        if st.get("sel_drag"):
+            # 回顾/收藏页选字：扩选 + 到视口边缘自己滚（和主窗同一条路）
+            self._hist_sel_extend(e.x, e.y)
+            if self._hist_sel_autoscroll(e.y):
+                vt, vb = st["view"]
+                self._hist_sel_extend(e.x, max(vt, min(vb - 1, e.y)))
+                try:
+                    st["win"].after(45, self._hist_sel_edge_tick)
+                except Exception:
+                    pass
+            return
         if st.get("resize"):
             mode, sx, sy, x0, y0, w0, h0 = st["resize"]
             dx, dy = e.x_root - sx, e.y_root - sy
@@ -6477,6 +7029,9 @@ class LiveGlass:
     def _hist_release(self, _e=None) -> None:
         st = self._hist
         if not st:
+            return
+        if st.get("sel_drag"):
+            self._hist_sel_finish()
             return
         st["drag"] = None
         st["sb_drag"] = None
@@ -6545,6 +7100,8 @@ class LiveGlass:
         st = self._hist
         if not st or st.get("page") not in ("viewer", "fav"):
             return
+        # 展开/收回会换一套展示文本（整条 vs 两行摘要），旧偏移不再对应同一段字
+        self._hist_clear_sel()
         opening = str(st.get("expanded") or "") != str(key)
         if key is None or not opening:
             st["expanded"] = None
@@ -6557,6 +7114,205 @@ class LiveGlass:
             # 展开后从这条的顶部看起（时间戳已钉住，内容从下面滚）
             st["scroll"] = 0
             self._hist_paint(st.get("layout") or [])
+
+    # ---- 回顾/收藏页的文字选择（2026-11-10；主窗同款，按用户要求铺到回顾与收藏） ----
+
+    def _hist_sel_line_at(self, x, y):
+        st = self._hist
+        if not st or st.get("page") not in ("viewer", "fav"):
+            return None
+        return self._sel_line_at_in(st.get("sel_lines") or [],
+                                    st.get("view") or (0, 0), x, y)
+
+    def _hist_sel_begin(self, x, y, extend=False) -> bool:
+        """在回顾/收藏页的文字上按下：开始选区（Shift+点扩选）。"""
+        st = self._hist
+        if not st:
+            return False
+        rec = self._hist_sel_line_at(x, y)
+        if rec is None:
+            return False
+        # 和主窗一样：无边框窗点画布不会自动拿焦点，点字就要过来，否则 Ctrl+C 落在外面
+        try:
+            st["win"].focus_force()
+        except Exception:
+            pass
+        st["sel_drag"] = True
+        st["sel_last_xy"] = (x, y)
+        ch = self._sel_char_at(rec, x)
+        pos = (rec["key"], rec["off"] + ch)
+        now = time.time()
+        last = st.get("sel_click")
+        if (last and now - last[0] < 0.45
+                and abs(x - last[1]) <= 4 and abs(y - last[2]) <= 4):
+            st["sel_count"] = min(3, st.get("sel_count", 1) + 1)
+        else:
+            st["sel_count"] = 1
+        st["sel_click"] = (now, x, y)
+        if extend and st.get("sel_anchor"):
+            st["sel_focus"] = pos
+        elif st["sel_count"] == 2:
+            self._hist_sel_word(st, rec, ch)
+        elif st["sel_count"] >= 3:
+            self._hist_sel_entry(st, rec["key"])
+        else:
+            st["sel_anchor"] = pos
+            st["sel_focus"] = pos
+        self._hist_paint(st.get("layout") or [])
+        return True
+
+    def _hist_sel_word(self, st, rec, ch) -> None:
+        text = rec.get("text") or ""
+        if not text:
+            return
+        is_word = lambda c: c.isalnum() or c == "_"
+        i = min(max(ch, 0), len(text) - 1)
+        if not is_word(text[i]):
+            st["sel_anchor"] = (rec["key"], rec["off"] + i)
+            st["sel_focus"] = (rec["key"], rec["off"] + i + 1)
+            return
+        a = i
+        while a > 0 and is_word(text[a - 1]):
+            a -= 1
+        b = i + 1
+        while b < len(text) and is_word(text[b]):
+            b += 1
+        st["sel_anchor"] = (rec["key"], rec["off"] + a)
+        st["sel_focus"] = (rec["key"], rec["off"] + b)
+
+    def _hist_sel_entry(self, st, key) -> None:
+        for e in st.get("layout") or []:
+            if e.get("key") == key:
+                t = e.get("sel_text") or ""
+                st["sel_anchor"] = (key, 0)
+                st["sel_focus"] = (key, len(t))
+                return
+
+    def _hist_sel_extend(self, x, y) -> None:
+        st = self._hist
+        if not st or not st.get("sel_drag"):
+            return
+        st["sel_last_xy"] = (x, y)
+        got = self._sel_pos_at(st.get("sel_lines") or [],
+                               st.get("view") or (0, 0), x, y)
+        if got is None:
+            return
+        rec, ch = got
+        st["sel_focus"] = (rec["key"], rec["off"] + ch)
+        self._hist_queue_sel_redraw()
+
+    def _hist_queue_sel_redraw(self) -> None:
+        st = self._hist
+        if not st:
+            return
+        if st.get("sel_after"):
+            return
+        try:
+            st["sel_after"] = st["win"].after(20, self._hist_flush_sel_redraw)
+        except Exception:
+            st["sel_after"] = None
+            self._hist_paint(st.get("layout") or [])
+
+    def _hist_flush_sel_redraw(self) -> None:
+        st = self._hist
+        if not st:
+            return
+        st["sel_after"] = None
+        if st.get("sel_drag") or st.get("sel_anchor"):
+            try:
+                self._hist_paint(st.get("layout") or [])
+            except Exception as exc:
+                print("hist sel redraw failed:", repr(exc), flush=True)
+
+    def _hist_sel_autoscroll(self, y) -> bool:
+        st = self._hist
+        if not st:
+            return False
+        vt, vb = st.get("view") or (0, 0)
+        if y < vt + 14:
+            step = -18
+        elif y > vb - 14:
+            step = 18
+        else:
+            return False
+        cur = st.get("scroll", 0)
+        want = max(0, min(st.get("max", 0), cur + step))
+        if want == cur:
+            return False
+        st["scroll"] = want
+        self._hist_queue_sel_redraw()
+        return True
+
+    def _hist_sel_edge_tick(self) -> None:
+        st = self._hist
+        if not st or not st.get("sel_drag"):
+            return
+        xy = st.get("sel_last_xy")
+        if not xy:
+            return
+        if self._hist_sel_autoscroll(xy[1]):
+            vt, vb = st.get("view") or (0, 0)
+            self._hist_sel_extend(xy[0], max(vt, min(vb - 1, xy[1])))
+            try:
+                st["win"].after(45, self._hist_sel_edge_tick)
+            except Exception:
+                pass
+
+    def _hist_sel_finish(self) -> None:
+        st = self._hist
+        if not st:
+            return
+        st["sel_drag"] = False
+        st["sel_last_xy"] = None
+        a, b = st.get("sel_anchor"), st.get("sel_focus")
+        if a and b and a == b:
+            self._hist_clear_sel()
+
+    def _hist_clear_sel(self) -> bool:
+        st = self._hist
+        if not st:
+            return False
+        if st.get("sel_anchor") is None and st.get("sel_focus") is None:
+            return False
+        st["sel_anchor"] = None
+        st["sel_focus"] = None
+        st["sel_drag"] = False
+        st["sel_last_xy"] = None
+        try:
+            st["canvas"].delete("sel")
+        except Exception:
+            pass
+        return True
+
+    def _hist_sel_text(self) -> str:
+        st = self._hist
+        if not st:
+            return ""
+        entries = st.get("layout") or []
+        ranges = self._sel_ranges_for(entries, st.get("sel_anchor"),
+                                      st.get("sel_focus"), "sel_text")
+        return self._sel_text_for(entries, ranges, "sel_text")
+
+    def _hist_copy_selection(self, _e=None):
+        """Ctrl+C / Ctrl+Insert：复制回顾/收藏页里选中的文字。"""
+        text = self._hist_sel_text()
+        if not text:
+            return None
+        import html as _h
+        html = "".join("<div>" + (_h.escape(s) if s else "<br>") + "</div>"
+                       for s in text.split("\n"))
+        try:
+            ok = _set_clipboard_rich(text, html, trail=False)
+        except Exception as exc:
+            print("hist copy selection failed:", repr(exc), flush=True)
+            ok = False
+        self._flash_status("已复制选中文字" if ok else "复制失败")
+        return "break"
+
+    def _hist_escape(self, _e=None):
+        if self._hist_clear_sel():
+            return "break"
+        return None
 
     def _hist_redraw(self) -> None:
         st = self._hist
@@ -7613,7 +8369,7 @@ class LiveGlass:
                 return
 
     def _show_img_menu(self, x_root, y_root, src: str) -> None:
-        items = (("查看", "view"), ("复制", "copy"), ("下载图片", "save"))
+        items = (("查看", "view"), ("复制图片", "copy"), ("下载图片", "save"))
 
         def pick(action):
             if action == "view":
@@ -7908,17 +8664,30 @@ class LiveGlass:
         except Exception as exc:
             print("copy bubble failed:", repr(exc), flush=True)
             ok = False
-        self._flash_status("已复制内容" if ok else "复制失败")
+        self._flash_status("已复制全文" if ok else "复制失败")
 
-    def _bubble_menu(self, x_root, y_root, ent: dict, in_fav: bool = False) -> None:
-        """气泡右键：复制内容 / 隐藏这条（红）/ 收藏（黄）。图片上右键仍走图片菜单。"""
+    def _bubble_menu(self, x_root, y_root, ent: dict, in_fav: bool = False,
+                     sel_text=None, on_copy_sel=None) -> None:
+        """气泡右键：复制选中文字 / 复制全文 / 隐藏这条（红）/ 收藏（黄）。
+
+        图片上右键仍走图片菜单。主窗和回顾窗共用：回顾窗把 `sel_text` /
+        `on_copy_sel` 传进来，否则默认读主窗的选区。
+        """
         src = ent.get("msg") or ent
         sid = str(src.get("sid") or ent.get("sid") or self._bound_full or "")
         at = src.get("at", ent.get("at"))
         key = str(ent.get("_key") or msg_key(sid, at))
         fav = key in self._fav_keys()
-        # 2026-11-06 用户要求：从上到下 = 复制内容（白）/ 隐藏这条（红）/ 收藏（黄）
-        items = [("复制内容", "copy")]
+        if sel_text is None:
+            sel_text = self._feed_sel_text()
+        copy_sel = on_copy_sel or self._copy_selection
+        # 2026-11-06 用户要求：从上到下 = 复制全文（白）/ 隐藏这条（红）/ 收藏（黄）
+        # 2026-11-10：有选区时最上面多一项「复制选中文字」（和 Ctrl+C 同一条路）；
+        # 「复制内容」按用户当天要求改名「复制全文」（有选区时两项并存，语义不撞）。
+        items = []
+        if sel_text:
+            items.append(("复制选中文字", "copysel"))
+        items.append(("复制全文", "copy"))
         if in_fav:
             items.append(("取消收藏", "unfav", "#e8c34a"))
         else:
@@ -7927,7 +8696,9 @@ class LiveGlass:
                           "#e8c34a"))
 
         def pick(action):
-            if action == "copy":
+            if action == "copysel":
+                copy_sel()
+            elif action == "copy":
                 self._copy_bubble(sid, at, str(src.get("text") or ""))
             elif action == "fav":
                 self._fav_add(sid, at, src)
@@ -8852,7 +9623,12 @@ class LiveGlass:
         if self._resize:
             return
         try:
-            self.canvas.config(cursor=self._cursor_for(self._edge_at(e.x, e.y)))
+            mode = self._edge_at(e.x, e.y)
+            # 悬停在气泡文字上换成 I 型光标：提示"这里能拖选"（2026-11-10）
+            if not mode and self._sel_line_at(e.x, e.y) is not None:
+                self.canvas.config(cursor="xterm")
+            else:
+                self.canvas.config(cursor=self._cursor_for(mode))
         except Exception:
             pass
 
@@ -8862,6 +9638,8 @@ class LiveGlass:
 
     def _toggle_expand(self, key) -> None:
         """点气泡右下角的「展开 / 收回」：一次只展开一条，收起后回到两行摘要。"""
+        # 展开/收回会换成"整条 vs 两行摘要"两种展示文本，旧偏移不再对应同一段字
+        self._clear_sel()
         if str(self._expanded) == str(key):
             self._collapse_expanded()        # 收回：回到展开前的位置
             return
@@ -8891,6 +9669,7 @@ class LiveGlass:
         """
         if self._expanded is None:
             return False
+        self._clear_sel()
         self._expanded = None
         self._expand_offset = 0
         self._expand_max = 0
@@ -8990,6 +9769,11 @@ class LiveGlass:
         if x0 <= e.x <= x1 and y0 <= e.y <= y1:
             self._input_press(e)
             return
+        # 气泡文字：按在字上 = 拖选（Shift+点扩选）；按在别处 = 照旧拖窗。
+        # 2026-11-10 用户选的分工 A：只有文字行抢这个手势，气泡边缘/空隙不抢。
+        if self._sel_begin(e.x, e.y, extend=bool(e.state & 0x1)):
+            return
+        self._clear_sel()
         mode = self._edge_at(e.x, e.y)
         if mode:
             self._resize = (mode, e.x_root, e.y_root,
@@ -9012,6 +9796,17 @@ class LiveGlass:
             self._start_drag_grab()
 
     def _motion(self, e):
+        if getattr(self, "_feed_sel_drag", False):
+            # 主窗选字：先按鼠标位置扩选；停在视口上下边缘时自己滚，滚完再补一次
+            self._sel_extend(e.x, e.y)
+            if self._sel_autoscroll(e.y):
+                vt, vb = self._view
+                self._sel_extend(e.x, max(vt, min(vb - 1, e.y)))
+                try:
+                    self.root.after(45, self._sel_edge_tick)
+                except Exception:
+                    pass
+            return
         if getattr(self, "_sel_drag", False):
             self._input_select_to(e.x)
             return
@@ -9075,6 +9870,9 @@ class LiveGlass:
 
     def _release(self, e):
         t0 = time.perf_counter()
+        if getattr(self, "_feed_sel_drag", False):
+            self._sel_finish()
+            return
         if getattr(self, "_sel_drag", False):
             # 鼠标框选结束：把选区推进隐藏 Entry，后续打字才能整段替换
             self._sel_drag = False
@@ -9140,7 +9938,9 @@ class LiveGlass:
             self._refresh_collapsed(force=True)
 
     def _escape(self, _e=None):
-        """Esc：先关图片预览，再按原逻辑（收输入行 / 关窗）。"""
+        """Esc：先清气泡选区，再关图片预览，再按原逻辑（收输入行 / 关窗）。"""
+        if self._clear_sel():
+            return "break"
         if self._viewer_alive():
             self._close_viewer()
             return "break"
@@ -9153,6 +9953,11 @@ class LiveGlass:
         # 焦点不在输入框时也能贴图（root 级兜底；Entry 有焦点时走 Entry 那条）
         self.root.bind("<Control-v>", self._paste_image)
         self.root.bind("<Control-V>", self._paste_image)
+        # 复制气泡选区（2026-11-10）：Ctrl+C 和 Windows 惯例的 Ctrl+Insert 都认；
+        # 输入栏有焦点时 `_copy_selection` 会主动让位给 Entry 自己的复制。
+        self.root.bind("<Control-c>", self._copy_selection)
+        self.root.bind("<Control-C>", self._copy_selection)
+        self.root.bind("<Control-Insert>", self._copy_selection)
         self.root.bind("<Motion>", self._hover, add="+")
         self.root.bind("<Leave>", self._leave, add="+")
         self.root.bind("<ButtonPress-1>", self._press, add="+")
