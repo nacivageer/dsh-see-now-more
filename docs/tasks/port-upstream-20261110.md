@@ -21,6 +21,16 @@
   `watch(mode:"both")` → `listen.pid` 落盘且 pid 与进程一致；`stop` → 采集进程消失、pid 文件被删；
   再 `watch` → 新 pid、单实例；`taskkill /F` 制造孤儿 → 下次 `watch` 把陈旧 pid 文件换成新的、
   仍单实例。**用户点窗口关闭**那条路走的是同一个 `listener.stop()`，未单独压测。
+- **2026-11-10 B 完成**（分支 `port/upstream-score-normalize`，从 `port/upstream-listen-kill` 派生）：
+  `cuts.js` / `pipeline.js` / `runner.js` / `index.js` / `tuning.js` / `scripts/sim.mjs` 按 B 段落地，
+  测试原样搬 `test/score-normalize.test.mjs`（**口径以工作树为准，见下面的修正**），版本
+  `0.1.1-more.3` 三处同改，`node --test` 全绿。运行时验证（`.tmp/b/`，全部 gitignored）：
+  亮场（V 158–233）开关前后出图 PNG **逐字节相同**、`stats` 与 `kept` 完全一致；
+  真实 trailer 前 120 秒 `--scoreNormalize=0/1` → 切点 **43 → 44**、积分 72 → 96、出图同为 14 张，
+  141 帧里 115 帧 gain > 1（最高 1.85）；letterbox（上下各 3/36 行黑）`barFrac = 0.167`、
+  `meanV` 与无黑边版本相同（162 vs 168，差在逐行取整）、`score = raw/(1-0.167)`；
+  静止暗画面（带时域噪声，V≈40）开关开时**0 假切点**。
+  **未发 tag、未合 `main`** —— 按计划 A+B 一起发 `v0.1.1-more.3`。
 
 ## 交接（给做 B 的新会话）
 
@@ -471,6 +481,20 @@ A/B 两边一模一样 —— 标定等于没做。
 `package.json` 的 `version`、`dsh.plugin.json` 的 `version`、CHANGELOG 新段。
 A 已用 `0.1.1-more.2`；**B 从 `port/upstream-listen-kill` 派生，用 `0.1.1-more.3`**
 （三处同改，CHANGELOG 新段写 B 的改动，放在 `0.1.1-more.2` 段上面）。
+
+### B9 落地时的口径修正（2026-11-10 执行中发现）
+
+上面 B1.1 的代码块是**交接时的旧版**；`_scratch/upstream-20261110/` 里的工作树与测试是之后的修订版，
+两者不一致。**以工作树与测试为准**，实际落地的是修订版：
+
+- `REF_V = 96`（不是 160：按 160 算 gain 是 1.67，等于把 `cutAbs: 12` 的标定整体下调 40%）；
+- `GAIN_MAX = 1.85`（不是 3：3 会把暗场顶成 2 倍过冲）；
+- `NOISE_FLOOR = 2`（不是 6：6 会把"暗场真切点约 5 分"永远挡在门外，自相矛盾）；
+- 多一个 `barRows()`：`readBarWindow` 的 `meanV` **只算有效行**。B1.3 那段把黑边像素一起平均进
+  meanV，会既拉低 gain 又被 `/(1-bar)` 除一次 —— 同一件事补两遍（实测 letterbox 素材放大到 2.2 倍）。
+  测试里专门有一条钉它。
+
+`test/score-normalize.test.mjs` 也是修订版（比 B7 描述的长），内容按原样搬进 `test/`。
 
 ---
 

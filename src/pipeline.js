@@ -339,6 +339,18 @@ export const DEFAULTS = Object.freeze({
   scoreMode: 'abs',
   mcTau: 15,
   mcRadius: 2,
+  /**
+   * 亮度归一 + 黑边补偿（`cuts.js` 的 `normalizeScore`）：把绝对分换算到"参考亮度、
+   * 无黑边"的刻度上，让 `cutAbs: 12` 在夜戏和亮画面里指的是同一件事。
+   *
+   * **默认开**，理由有证据：暗场真切点只有约 5 分（门槛 12 永远够不着），2.39:1 的片子
+   * 加黑边后硬切命中数掉两成。亮场（V ≥ REF_V）gain 恒等于 1、无黑边时 barFrac = 0，
+   * **逐位返回原分数** —— 也就是说这个开关对正常素材是 no-op。
+   *
+   * `false` = 完全回到没有它的行为（回滚通道，`~/.dsh/see-now.json` 的
+   * `"scoreNormalize": false`）。只影响 `scoreMode: 'abs'`；`mc` 是另一套刻度，不动。
+   */
+  scoreNormalize: true,
 
   // 档位
   dtFrames: 12,
@@ -434,6 +446,7 @@ export function createPipeline(opts = {}) {
     futureMinScore: o.cutFutureDelay > 0
       ? Math.min(o.cutFutureMinScore, o.cutFutureBuildMinScore)
       : o.cutFutureMinScore,
+    scoreNormalize: o.scoreNormalize,
   });
   const tiers = createTiers({
     fps, dtFrames: o.dtFrames, smoothFrames: o.smoothFrames,
@@ -522,6 +535,13 @@ export function createPipeline(opts = {}) {
     log.push({
       t: +entry.t.toFixed(2), via, level: lv, tier, score: +(entry.score ?? 0).toFixed(1),
       dup: dup === null ? null : +dup.toFixed(1),
+      /**
+       * 补偿的中间量。**标定必须看得见它**：只看到 `score` 就分不清"切点多是因为门槛低"
+       * 还是"因为 gain 把分数顶上去了"，而这两个的修法完全不同。
+       */
+      raw: entry.raw === null || entry.raw === undefined ? null : +entry.raw.toFixed(1),
+      gain: entry.gain === undefined ? null : +entry.gain.toFixed(2),
+      bar: entry.bar === undefined ? null : entry.bar,
     });
     lastBound = entry.t;
     if (via === 'cut') cutTimes.push(+entry.t.toFixed(2));
@@ -1078,7 +1098,7 @@ export function createPipeline(opts = {}) {
       // `wall` 是这一帧被处理时的墙上时间（epoch ms）。台词（ASR）只有时间码没有帧号，
       // 对齐只能靠同一个时钟 —— `t` 是"第几秒"，掉帧就漂，不能拿来对字幕。
       const entry = {
-        t, buf, score: s, mc: r.mcScore, mcBox: r.mcBox, mcFill: r.mcFill, mcSpanY: r.mcSpanY, activeY: r.activeY, guardY: r.guardY, bg: r.bgScore, bgStable: r.bgStable, bgChanged: r.bgChanged, bgModel: r.bgModel, futureModel: r.futureModel, prevHsv: r.prevHsv, prev: lastScore, hsv: Float32Array.from(r.hsv), wall: Date.now(),
+        t, buf, score: s, raw: r.rawScore, gain: r.gain, bar: r.barFrac, mc: r.mcScore, mcBox: r.mcBox, mcFill: r.mcFill, mcSpanY: r.mcSpanY, activeY: r.activeY, guardY: r.guardY, bg: r.bgScore, bgStable: r.bgStable, bgChanged: r.bgChanged, bgModel: r.bgModel, futureModel: r.futureModel, prevHsv: r.prevHsv, prev: lastScore, hsv: Float32Array.from(r.hsv), wall: Date.now(),
       };
       lastSeen = entry;
       lastScore = s;

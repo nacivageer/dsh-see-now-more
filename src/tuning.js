@@ -49,6 +49,14 @@ export const TUNING_DEFAULTS = Object.freeze({
    * DSH 退出 —— 实测一次 2 分钟空转 1600+ 帧。`idleStopMin` 那条线只管常驻循环。
    */
   idleCaptureMin: 5,
+  /**
+   * 亮度归一 + 黑边补偿（见 `cuts.js` 的 `normalizeScore`）。默认开。
+   *
+   * 关掉等于回到绝对分：夜戏/暗调影视剧的真切点只有约 5 分，门槛 12 够不着；
+   * 2.39:1 的片子上下黑边把分数打了 75 折。**亮场（V ≥ REF_V）无黑边时它逐位不变**，
+   * 所以留着不影响日常屏幕，只在暗场/宽银幕上起作用。
+   */
+  scoreNormalize: true,
 });
 
 /**
@@ -247,6 +255,14 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     }
   }
 
+  // 只认真正的布尔：写成 `0` / `"false"` 是最容易踩的坑 —— `"false"` 是真值，
+  // 用户以为关掉了，实际一直开着。所以类型不对就报出来并回默认。
+  let scoreNormalize = TUNING_DEFAULTS.scoreNormalize;
+  if (raw.scoreNormalize !== undefined) {
+    if (typeof raw.scoreNormalize === 'boolean') scoreNormalize = raw.scoreNormalize;
+    else warnings.push('scoreNormalize 只能是 true / false，已用默认 true');
+  }
+
   return {
     maxAutonomousWakes,
     idleStopMin,
@@ -257,6 +273,7 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     session,
     mode,
     idleCaptureMin,
+    scoreNormalize,
     listen: listenCfg.listen,
     path,
     warnings,

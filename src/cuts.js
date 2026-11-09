@@ -79,6 +79,121 @@ export function scorePair(prev, cur) {
   return sum / ((cur.length / 3) * 3);
 }
 
+// ---------------------------------------------------------------- 亮度归一 / 黑边补偿
+
+/**
+ * 参考亮度：**不再用 160**。
+ *
+ * 160 是 storyboard 拿影视素材定的，那边门槛是**分位数**，参考点漂一点无所谓（整体放大不改排序）。
+ * 这边 `cutAbs: 12` 是常数，REF_V 就等于"门槛的零点"—— 定高了，所有普通内容都会被白白放大一档。
+ * 实测（2026-11-06，真 PV 关键帧拼的 12fps 滑块）：这批素材的有效行 V 均值 = **96**，
+ * 而按老口径 160 算出来的 gain 是 1.67 —— 也就是门槛被整体下调了 40%，`cutAbs: 12` 的标定全部作废。
+ * 取 REF_V = 96 = "视频/影视内容的常规亮度"。亮色 UI（V 150–200）仍恒为 1，所以对日常屏幕是 no-op。
+ */
+export const REF_V = 96;
+/**
+ * 放大上限 **1.85**：实测需要的最多就是 1.86 倍，`3` 是把暗场顶成 2 倍过冲的根因。
+ *
+ * 同一批素材逐档压暗，量"需要多少 gain 才能把分数拉回原值"：
+ *
+ * | V(有效行) | 96 | 72.6 | 53.4 | 46.8 | 37.3 | 32 | 24 |
+ * | 需要 gain | 1.00 | 1.34 | 1.66 | 1.79 | 1.86 | 1.86 | 1.80 |
+ *
+ * 曲线是**饱和**的（V 再低也不会更暗），所以 `REF_V/V` 这个形状本身没问题，只是上限要收到 1.85；
+ * 平方根那类更陡的曲线拟合更差（RMS 0.337 vs 0.315）。
+ */
+export const GAIN_MAX = 1.85;
+/** 参考亮度下限：V 均值低于它不再继续放大（1.85 的上限先到，留着是防除零）。 */
+export const V_FLOOR = 40;
+/**
+ * 噪声地板（**本仓独有，storyboard 没有**）。
+ *
+ * 它那边的绝对门槛是**分位数**（按原始刻度算），噪声再放大也只影响排序；
+ * 这边 `cutAbs: 12` 是常数，所以放大前得先把"噪声"和"真变化"分开。
+ *
+ * 取 **2**（原先是 6，自相矛盾：交接文档举的例子就是"暗场真切点约 5 分"，5 < 6 永远救不回来）。
+ * 实测静止暗场的编码噪声 raw 只有 **0.00–0.13**（crf 26/30，12fps），留 15 倍余量；
+ * 而放大链最长 `1.85 × 1.54 = 2.85`，raw 2 顶到 5.7、raw 4 顶到 11.4，都还在 `cutAbs: 12` 以下 ——
+ * 也就是说地板降到 2 不会让噪声变成刀。
+ */
+export const NOISE_FLOOR = 2;
+/** 黑边判定：窗口内每行的 V 均值 < BAR_MEAN，且该行一次都没亮过（< BAR_MAX）。 */
+export const BAR_MEAN = 16;
+export const BAR_MAX = 24;
+/** 黑边占比上限：超过它多半是"整段黑场"，不做补偿。 */
+export const BAR_CAP = 0.35;
+/**
+ * 黑边窗口（帧）。12fps 下 24 帧 = 2 秒。
+ *
+ * **必须累积**：判据是"一直黑"而不是"这一帧黑"。片头/转场黑场每一行都黑，
+ * 但它随后亮了 —— 只看当前帧就会把整幅画面当成黑边，分数除以 0.65 白白放大 1.5 倍。
+ * 窗口也不宜太长：换到夜景后的前 2 秒补偿会消失（偏保守，宁可少放大）。
+ */
+export const BAR_WINDOW = 24;
+
+/** 亮度增益：只在暗场 > 1，亮画面（V ≥ REF_V）恒等于 1 —— 这是"不破坏现有体验"的安全阀。 */
+export function brightnessGain(meanV, { refV = REF_V, gainMax = GAIN_MAX, vFloor = V_FLOOR } = {}) {
+  if (!Number.isFinite(meanV) || meanV <= 0) return 1;
+  return Math.min(gainMax, Math.max(1, refV / Math.max(vFloor, meanV)));
+}
+
+/**
+ * 把绝对分换算到"参考亮度、无黑边"的刻度上。**纯函数**（可单测，无状态）。
+ *
+ * 两条恒等条件必须保持：`meanV ≥ REF_V` 且 `barFrac = 0` 时**原样返回** ——
+ * 亮场逐位不变，是这次改动的回滚线（也是标定的第一条判据）。
+ *
+ * @param {number|null} raw 原始分（0–255）
+ * @param {{meanV?:number, barFrac?:number, noiseFloor?:number}} [opts]
+ *   `meanV` = 当前帧 V 均值；`barFrac` = 累积黑边占比（见 `barFraction`）
+ */
+export function normalizeScore(raw, {
+  meanV = NaN, barFrac = 0, noiseFloor = NOISE_FLOOR, ...gainOpts
+} = {}) {
+  if (!Number.isFinite(raw) || raw <= 0) return raw;
+  // 地板以下不放大：暗场的编码噪声 × 增益会变成假切点
+  if (raw < noiseFloor) return raw;
+  const gain = brightnessGain(meanV, gainOpts);
+  const bf = Number.isFinite(barFrac) && barFrac > 0 ? Math.min(barFrac, BAR_CAP) : 0;
+  if (gain === 1 && bf === 0) return raw;
+  return (raw * gain) / Math.max(0.05, 1 - bf);
+}
+
+/**
+ * 黑边行数：窗口里"一直是黑"的顶部/底部连续行。
+ *
+ * 和 `barFraction` 同源 —— 那个只要占比，这个要**行号**：算"有效行亮度"时得跳过它们。
+ * 拆出来的原因见 `readBarWindow`：全帧 V 均值会把黑边一起算成"变暗"，
+ * 于是增益再放大一次，和 `/(1-bar)` 重复补偿。
+ */
+export function barRows({ rowV, rowVMax, frames } = {}) {
+  if (!rowV || !rowVMax || !(frames > 0)) return { top: 0, bottom: 0 };
+  const h = rowV.length;
+  const dark = (y) => rowV[y] / frames < BAR_MEAN && rowVMax[y] < BAR_MAX;
+  let top = 0;
+  while (top < h && dark(top)) top += 1;
+  let bottom = 0;
+  while (bottom < h - top && dark(h - 1 - bottom)) bottom += 1;
+  return { top, bottom };
+}
+
+/**
+ * 黑边占比：窗口内"一直是黑的"顶部/底部行占多少。
+ *
+ * 与 `contentHeightRatio` 的区别：那个判**这一帧**（给前景守卫用，要求实时），
+ * 这个判**整窗**（给分数补偿用，要求不被片头黑场骗）。
+ *
+ * @param {{rowV:Float32Array|number[], rowVMax:Float32Array|number[], frames:number}} o
+ *   `rowV` 是窗口内逐行 V **累加值**（不是均值），除以 `frames` 才是均值
+ * @returns {number} 0 – BAR_CAP；整段黑场返回 0（没有"补偿"可言）
+ */
+export function barFraction({ rowV, rowVMax, frames, cap = BAR_CAP } = {}) {
+  if (!rowV || !rowVMax || !(frames > 0)) return 0;
+  const { top, bottom } = barRows({ rowV, rowVMax, frames });
+  const frac = (top + bottom) / rowV.length;
+  return frac >= cap || frac >= 0.999 ? 0 : +frac.toFixed(3);
+}
+
 /**
  * 打分器：内部维护上一帧的 HSV。
  * 返回 `{ score, hsv }`，score 为 null 表示这是第一帧（没有前帧可比）。
@@ -335,7 +450,7 @@ export function guardHeightRatio(hsv) {
 export function createScorer({
   width, height, scoreMode = 'abs', mcTau = 15, mcRadius = 2, gateMcRadius = mcRadius,
   bgWindow = 6, bgStableRange = 24, bgTau = 15, bgModel = false,
-  bgRefWindow = 0, futureMinScore = Infinity,
+  bgRefWindow = 0, futureMinScore = Infinity, scoreNormalize = false,
 }) {
   const n = SCAN_W * SCAN_H;
   const rgb = new Float32Array(n * 3);
@@ -344,10 +459,75 @@ export function createScorer({
   let prev = null;
   let cur = new Float32Array(n * 3);
 
+  /**
+   * 亮度归一只对 `abs` 口径有意义：`mc` 的分数是"变了多少格"的占比，阈值
+   * （`cutMcAbs: 60`）是另一套刻度，一起放大等于把两条独立标定混成一条。
+   */
+  const normalize = scoreNormalize && scoreMode !== 'mc';
+  /** 黑边滚动窗：存每帧的逐行 V 累加/峰值，判"一直黑"（见 barFraction）。 */
+  const rowV = Array.from({ length: BAR_WINDOW }, () => new Float32Array(SCAN_H));
+  const rowVMax = Array.from({ length: BAR_WINDOW }, () => new Float32Array(SCAN_H));
+  const barV = new Float32Array(SCAN_H);
+  const barVMax = new Float32Array(SCAN_H);
+  let barSlot = 0;
+  let barFrames = 0;
+
+  /** 把这一帧的逐行 V 记进窗口，返回 `{ meanV, barFrac }`。只在开关打开时调用。 */
+  function readBarWindow(hsv) {
+    const sums = rowV[barSlot];
+    const maxes = rowVMax[barSlot];
+    for (let y = 0; y < SCAN_H; y += 1) {
+      const base = y * SCAN_W * 3;
+      let sum = 0;
+      let mx = 0;
+      for (let x = 0; x < SCAN_W; x += 1) {
+        const v = hsv[base + x * 3 + 2];
+        sum += v;
+        if (v > mx) mx = v;
+      }
+      sums[y] = sum;
+      maxes[y] = mx;
+    }
+    barSlot = (barSlot + 1) % BAR_WINDOW;
+    if (barFrames < BAR_WINDOW) barFrames += 1;
+    // 窗口内逐行求和/取峰值。24 帧 × 36 行 × 2 = 1728 次浮点运算，12fps 下可忽略。
+    for (let y = 0; y < SCAN_H; y += 1) {
+      let sum = 0;
+      let mx = 0;
+      for (let k = 0; k < barFrames; k += 1) {
+        sum += rowV[k][y];
+        if (rowVMax[k][y] > mx) mx = rowVMax[k][y];
+      }
+      barV[y] = sum;
+      barVMax[y] = mx;
+    }
+    const { top, bottom } = barRows({ rowV: barV, rowVMax: barVMax, frames: barFrames });
+    /**
+     * **亮度只算有效行**（跳过上下黑边）。
+     *
+     * 黑边像素的差恒为 0，把它们的 V 一起平均进来，等于把画面判成"更暗" → gain 再放大一次。
+     * 而下面 `barFrac` 还会 `/(1-bar)` 除回来 —— 同一件事补了两遍。
+     * 实测（`base-box.mp4`，`pad` 加 1.25 倍高）：全帧 V=68.9 → gain 2.32，有效行 V=92.7 → gain 1.03，
+     * 差的这 2.2 倍就是"归一后是原片 2.20 倍"的来源。
+     */
+    let vSumActive = 0;
+    for (let y = top; y < SCAN_H - bottom; y += 1) vSumActive += sums[y];
+    const activeRows = Math.max(1, SCAN_H - top - bottom);
+    return {
+      // `sums[y]` 是**行内像素和**（不是行均值），所以还要除一次 SCAN_W
+      meanV: vSumActive / (activeRows * SCAN_W),
+      barFrac: barFraction({ rowV: barV, rowVMax: barVMax, frames: barFrames }),
+    };
+  }
+
   return function score(frame) {
     gridRgb(frame, width, height, rgb);
     rgbToHsv(rgb, cur);
     let s = null;
+    let rawScore = null;
+    let gain = 1;
+    let barFrac = 0;
+    let meanV = null;
     let mcScore = null;
     let mcBox = null;
     let mcFill = null;
@@ -359,6 +539,13 @@ export function createScorer({
     let futureModel = null;
     const activeY = contentHeightRatio(cur);
     const guardY = guardHeightRatio(cur);
+    if (normalize) {
+      // 用**当前帧**的亮度/黑边：分数是"这一帧相对上一帧"的，换算到这一帧的亮度上
+      // （storyboard 那边取 `means[i + 1]`，同一个道理 —— 取错一帧在快剪处能差出一个刀）
+      const st = readBarWindow(cur);
+      meanV = st.meanV;
+      barFrac = st.barFrac;
+    }
     if (bgWindow > 0 && bgHistory.length >= bgWindow) {
       const bg = bgStats(bgHistory, cur, { stableRange: bgStableRange, tau: bgTau, withModel: bgModel });
       bgScore = bg.score;
@@ -377,7 +564,9 @@ export function createScorer({
           ? mcScore
           : mcRatioScore(prev, cur, { tau: mcTau, radius: mcRadius });
       } else {
-        s = scorePair(prev, cur);
+        rawScore = scorePair(prev, cur);
+        s = normalize ? normalizeScore(rawScore, { meanV, barFrac }) : rawScore;
+        gain = normalize ? brightnessGain(meanV) : 1;
       }
     }
     if (bgRefWindow > 0
@@ -404,7 +593,8 @@ export function createScorer({
       if (refHistory.length > bgRefWindow) refHistory.shift();
     }
     return {
-      score: s, mcScore, mcBox, mcFill, mcSpanY, activeY, guardY, bgScore, bgStable, bgChanged,
+      score: s, rawScore, gain, barFrac, meanV,
+      mcScore, mcBox, mcFill, mcSpanY, activeY, guardY, bgScore, bgStable, bgChanged,
       bgModel: bgModelOut, futureModel, prevHsv, hsv: cur,
     };
   };

@@ -194,6 +194,14 @@ export function createRunner({
    * 来自 `~/.dsh/see-now.json` 的 `mode`，所以重开 DSH 后沿用上次的选择 —— 见 `setMode()`。
    */
   mode = 'both',
+  /**
+   * 亮度归一 + 黑边补偿（`~/.dsh/see-now.json` 的 `scoreNormalize`，默认开）。
+   *
+   * **必须进 `createPipeline` 的 opts，不能只在这里拦** —— `scripts/sim.mjs` 走的是
+   * 管线本身，开关停在 runner 层的话离线就没法做 A/B，标定做不了。
+   * 调用方显式传 `opts.scoreNormalize` 时以调用方为准。
+   */
+  scoreNormalize = true,
 } = {}) {
   let pipeline = null;   // 当前（或刚停的）引擎 —— 停采集后仍留着，好把队列里剩的图发完
   let running = false;
@@ -444,6 +452,7 @@ export function createRunner({
       // 音量条：直接问听声音那条链要 —— 那边已经在算 RMS 了（断句要用），
       // 这里只是把它按时间窗取出来画成柱子，**不额外解码一次音频**。
       audio: { levels: (a, b) => listener.levelsBetween(a, b) },
+      scoreNormalize: opts.scoreNormalize ?? scoreNormalize,
     });
     // 记下"这次建管线用的调用方参数"（不含 oneShot）——watch 靠它发现"模式变了"。
     runOpts = { ...opts };

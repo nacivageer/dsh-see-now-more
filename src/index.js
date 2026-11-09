@@ -606,6 +606,8 @@ async function registerAll(ctx) {
     missedGapSec: tuning.missedGapSec,
     // 起手那档感官模式（see-now.json 的 mode）：只看 / 视听都开
     mode: tuning.mode,
+    // 亮度归一 + 黑边补偿（see-now.json 的 scoreNormalize，默认开）
+    scoreNormalize: tuning.scoreNormalize,
   });
   disposers.push(() => runner.stop());
 
@@ -1565,6 +1567,8 @@ async function registerAll(ctx) {
             + ` · 节奏：${sceneMode ? 'dense（跟逐帧走）' : paceMode}`
             + `（切点门槛 ${(sceneMode ? PACES.dense : PACES[paceMode]).cutAbs}，`
             + `最多 ${sceneMode ? 4 : PACES[paceMode].wakeGapSec} 秒叫一次）`
+            // 门槛是常数，归一之后它的含义变了（"参考亮度下"的 12）—— 不写出来会对不上账
+            + (tuning.scoreNormalize ? ' · 亮度归一开（暗场/黑边已补偿）' : ' · 亮度归一关')
             // 收工线：用户改过 see-now.json 时要能看出来，否则"怎么陪我一会儿就停了"查不到
             + `\n收工线：连续 ${tuning.maxAutonomousWakes} 次叫醒没人理`
             + ` · ${tuning.idleStopMin > 0 ? `没开窗时 ${tuning.idleStopMin} 分钟没说话` : '空闲线已关闭'}`

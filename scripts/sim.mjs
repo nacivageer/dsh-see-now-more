@@ -22,7 +22,12 @@ import { createPipeline, DEFAULTS } from '../src/pipeline.js';
 const NUM = new Set(['width', 'height', 'fps', 'cutAbs', 'cutSpike', 'cutMinGap',
   'integralSeconds', 'markMinGap', 'silentFloorSec', 'dtFrames', 'smoothFrames', 'dupMin', 'queueDepth',
   'maxWaitSec', 'flushGain', 'maxFrames', 'binCost', 'maxSec',
-  'markBoost', 'floorBoost']);
+  'markBoost', 'floorBoost',
+  /**
+   * `--scoreNormalize=0` 就是靠这一项变成数字 0 的。
+   * **漏了它拿到的是字符串 "0"（真值）** —— 基线和新版跑出来一模一样，标定等于没做。
+   */
+  'scoreNormalize']);
 
 const args = argv.slice(2);
 const positional = [];
