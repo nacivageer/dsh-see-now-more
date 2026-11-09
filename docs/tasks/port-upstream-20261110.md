@@ -31,6 +31,10 @@
   `meanV` 与无黑边版本相同（162 vs 168，差在逐行取整）、`score = raw/(1-0.167)`；
   静止暗画面（带时域噪声，V≈40）开关开时**0 假切点**。
   **未发 tag、未合 `main`** —— 按计划 A+B 一起发 `v0.1.1-more.3`。
+- **2026-11-10 01:58 已发版**：`main` 快进到 `e137e22`（A+B），annotated tag `v0.1.1-more.3` 已推，
+  Release 标 prerelease → https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.3
+  ，正文合并 `0.1.1-more.2` 与 `0.1.1-more.3` 两段；`0.1.1-more.2` 未单独发 tag。
+  装机副本仍是 `0.1.1-more.2`，要 `install-dev` + 重启 Desktop 才用上新代码。
 
 ## 交接（给做 B 的新会话）
 
@@ -42,7 +46,7 @@
   `scripts/sim.mjs`，测试搬 `test/score-normalize.test.mjs`。**别碰 `window.py` / `py/listen.py`。**
 - **完成后**：`node --test`（当前 34 条 + 新增 12 条）；更新本文件状态块；回报 commit。
 - **不要发 tag、不要合 `main`**：等 B 完成一起发（A+B 共用一个 release，见下）。
-- 发布计划（B 完成后由用户拍板）：`main` 合入 A+B → annotated tag `v0.1.1-more.3` → Release 标
+- 发布计划（2026-11-10 已执行）：`main` 合入 A+B → annotated tag `v0.1.1-more.3` → Release 标
   prerelease，正文合并 0.1.1-more.2 与 0.1.1-more.3 两段。**A 的 `0.1.1-more.2` 不单独发 tag。**
 
 ## 为什么不是 cherry-pick
