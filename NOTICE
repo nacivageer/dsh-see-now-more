@@ -17,8 +17,9 @@ limitations under the License.
 ## This fork
 
 This repository is a modified version of `dsh-see-now` by SAOS-3624
-(https://github.com/SAOS-3624/dsh-see-now), maintained by nacivageer. The
-upstream copyright notice above is retained as required by Apache-2.0 §4.
+(https://github.com/SAOS-3624/dsh-see-now), maintained by 72NG
+(https://github.com/nacivageer). The upstream copyright notice above is retained
+as required by Apache-2.0 §4.
 Changes relative to the upstream release are described in CHANGELOG.md; the
 floating-chat window also derives from `dsh-watch-together` by the same
 upstream author.

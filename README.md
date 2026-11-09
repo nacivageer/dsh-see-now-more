@@ -598,4 +598,4 @@ test/                     24 条测试
 不再有"这个目录 Apache、其余非商业"的分裂。
 
 Copyright © 2026 SAOS-3624（上游 `dsh-see-now` / `dsh-watch-together`）
-本仓的修改与新增 © 2026 nacivageer
+本仓的修改与新增 © 2026 72NG
