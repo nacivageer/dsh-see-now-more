@@ -50,5 +50,6 @@ separate licence carve-out for that directory.
 
 ## Documentation media
 
-Screenshots shipped with the package were taken by the author on his own machine. No third-party
-footage, model weights or binaries are redistributed in this repository.
+Screenshots shipped with the package are the author's own: screen captures from his machine, or
+demo frames generated from synthetic cards. No third-party footage, model weights or binaries are
+redistributed in this repository.
