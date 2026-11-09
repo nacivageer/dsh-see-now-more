@@ -1,7 +1,7 @@
 {
   "name": "dsh-see-now-more",
   "version": "0.2.0-more.1",
-  "description": "Chat with DSH like an IM, with a live call on the side: shared screen and system audio, messages that cut in mid-turn, and a window that stays. Sampling core based on dsh-see-now. · 像 QQ 一样跟 DSH 聊天，同时开着一路共享屏幕与声音（采样内核来自上游 dsh-see-now）。",
+  "description": "Chat with DSH like an IM, with a live call on the side: shared screen and system audio, messages that cut in mid-turn, and a window that stays. Sampling core based on dsh-see-now. · 像 QQ 一样跟 DSH 聊天，同时开着一路共享屏幕与声音（采样内核来自上游 dsh-see-now）。Only validated on Windows 10 + DSH 0.2.2-rc.1; microphone input is untested.",
   "keywords": [
     "dsh",
     "dsh-plugin",

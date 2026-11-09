@@ -1,6 +1,6 @@
 {
   "name": "dsh-see-now-more",
-  "description": "Chat with DSH like an IM while a live call runs alongside: shared screen and system audio, messages that cut in mid-turn, a window that stays. Sampling core built on dsh-see-now.",
+  "description": "Chat with DSH like an IM while a live call runs alongside: shared screen and system audio, messages that cut in mid-turn, a window that stays. Sampling core built on dsh-see-now. Validated on Windows 10 + DSH 0.2.2-rc.1 only; microphone input is untested.",
   "version": "0.2.0-more.1",
   "entry": {
     "name": "dsh-see-now-more",
