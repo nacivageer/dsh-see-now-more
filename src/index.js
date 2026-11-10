@@ -24,12 +24,37 @@ import { shouldIdleStop } from './idle.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
 import { createRequire } from 'node:module';
 
 /** ESM 里拿到同步 require（`node:sqlite` 只有同步 API，动态 import 是异步的）。 */
 const nodeRequire = createRequire(import.meta.url);
+
+/**
+ * `source:"file"` 的 path 会原样交给 `ffmpeg -i`。ffmpeg 把 `http:` / `tcp:` / `concat:`
+ * 这类前缀当协议 —— 不先拦，模型给一个 URL，它就真的去连。工具说明写的是「本地视频的
+ * 绝对路径」，那就只收这个：绝对路径、存在、是普通文件。
+ *
+ * Windows 上 `\\server\share\…` 也算绝对路径，但光是 stat 它就已经在连网络了，所以
+ * 两个分隔符开头的一律不收（`\\?\`、`\\.\` 这类设备路径也在里面），而且要在 stat 之前判。
+ *
+ * @returns {string|null} 错误说明；没问题返回 null
+ */
+function filePathError(path) {
+  if (typeof path !== 'string' || !path) return 'source:"file" 要带 path（本机视频文件的绝对路径）。';
+  const shown = path.slice(0, 200);
+  if (!isAbsolute(path) || (process.platform === 'win32' && /^[\\/]{2}/.test(path))) {
+    return `path 要是本机视频文件的绝对路径，现在是「${shown}」。`;
+  }
+  // stat 失败（不存在 / 没权限 / …）和「存在但不是普通文件」分开说，前者带上错误码
+  let st;
+  try { st = statSync(path); } catch (e) {
+    return `path 不存在或无法访问（${e?.code ?? 'stat 失败'}）：「${shown}」。`;
+  }
+  if (!st.isFile()) return `path 指向的不是普通文件（比如是个目录）：「${shown}」。`;
+  return null;
+}
 
 /**
  * 从工具参数构造 source 描述。`watch` 和 `start` 两个入口共用。
@@ -40,12 +65,17 @@ const nodeRequire = createRequire(import.meta.url);
  *     用户和模型都以为生效了，这是最坏的一种失败）；
  *   - 格式不对时**明确返回错误**，同样不静默退化成全屏。
  *
- * @returns {{src: object|null, error?: string}}
+ * `source:"file"` 的 path 由 `filePathError` 把关，不合格同样明确报错。
+ *
+ * @returns {{src: object|null, error?: string, reason?: string}}
+ *   `reason` 只有 path 不合格时才带（`bad-path`）；region 的错误不带，调用方按 `bad-region` 报。
  */
 function srcOf(args) {
   const kind = args.source ? String(args.source).toLowerCase() : null;
   const src = kind ? { kind } : null;
   if (src && kind === 'file') {
+    const bad = filePathError(args.path);
+    if (bad) return { src: null, error: bad, reason: 'bad-path' };
     src.path = args.path;
     src.realtime = args.realtime === true;
   }
@@ -68,6 +98,12 @@ function srcOf(args) {
   out.engine = 'gdigrab';
   return { src: out };
 }
+
+/**
+ * 测试钩子：只暴露纯函数，不碰宿主状态（和 `client.js` 的 `__test` 一个路数）。
+ * `srcOf` 单独导出：`source:"file"` 的路径校验要能不起插件就单测。
+ */
+export const __test = { srcOf };
 
 export const name = 'dsh-see-now-more';
 
@@ -1210,7 +1246,7 @@ async function registerAll(ctx) {
         const rawRegion = typeof args.region === 'string' ? args.region.trim() : '';
         const regionOff = /^(off|none|clear)$/i.test(rawRegion);
         const built = srcOf(regionOff ? { ...args, region: undefined } : args);
-        if (built.error) return { text: built.error, meta: { ok: false, reason: 'bad-region' } };
+        if (built.error) return { text: built.error, meta: { ok: false, reason: built.reason ?? 'bad-region' } };
         const src = built.src;
         const stickyRegion = regionOff ? null : (rawRegion ? undefined : loadRegion());
         if (regionOff) clearRegion();
@@ -1404,7 +1440,7 @@ async function registerAll(ctx) {
 
       if (action === 'start') {
         const built = srcOf(args);
-        if (built.error) return { text: built.error, meta: { ok: false, reason: 'bad-region' } };
+        if (built.error) return { text: built.error, meta: { ok: false, reason: built.reason ?? 'bad-region' } };
         /**
          * `audio:false` = 单开视觉（2026-11-09 用户要求）：只起眼睛，不拉声学侧车；
          * 已经在听的耳朵会被停掉，状态行那档就变成橙色「仅开启视觉」。

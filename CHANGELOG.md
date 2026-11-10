@@ -2,6 +2,28 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.6] - 2026-11-10
+
+### Fixed — `source:"file"` 的 path 能拼出协议 URL（移植上游 `0.2.2` / PR #66）
+
+`path` 是模型能填的参数，以前原样拼进 `ffmpeg -i`：填 `http://…` / `tcp://…` / `concat:…`
+时 ffmpeg 真的会去连（那是协议前缀）。
+
+- 入口只收**本机文件的绝对路径**：绝对、存在、普通文件，否则报一句能照做的话、不起采集
+  （`meta.reason` 从写死的 `bad-region` 改成 `bad-path`）；
+- Windows 上两个分隔符开头的一律在 `stat` 之前拒（UNC / `\\?\` / `\\.\`）——
+  光 stat 一个 UNC 路径就已经在连网络了；映射成盘符的网络盘不受影响；
+- 文件源的 ffmpeg 参数加 `-protocol_whitelist file` 兜底（直接调 `runner` / `spawnFrames`
+  的调试脚本也走这里）；
+- **兼容变化**：相对路径以前「碰巧能用」（按宿主 cwd 解析，结果不可预期），现在明确被拒；
+- 测试 `test/file-source-path.test.mjs` 按上游搬（7 条）；本仓没有 `test/ffmpeg.mjs` 夹具，
+  ffmpeg 改走 `binaries.js` 的 `resolveFfmpeg` 自己找。
+
+### 没跟的部分
+
+上游 `0.2.2` 另外三项与本仓无关：自动省略的会话归属（本仓没有 image-offload）、
+弹幕推送（本仓窗口没有弹幕）、Linux portal 的 stride 斜切（本仓只有 gdigrab）。
+
 ## [0.1.1-more.5] - 2026-11-10
 
 ### Added — 标题栏左上角内置悬浮窗入口（原 `dsh-see-now-launcher` 合并进来）
