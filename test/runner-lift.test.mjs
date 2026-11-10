@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,10 +33,15 @@ function fakeCapture() {
       done,
       sent: 0,
       stopped: false,
-      push(n = 1) {
+      push(n = 1, fill = null) {
         for (let k = 0; k < n; k += 1) {
           h.sent += 1;
-          opts.onFrame({ i: h.sent - 1, t: (h.sent - 1) / opts.fps, buf: Buffer.alloc(FRAME, h.sent) });
+          opts.onFrame({
+            i: h.sent - 1,
+            t: (h.sent - 1) / opts.fps,
+            // `fill` 给了就用它：`still()` 要「两帧内容一样」，靠自增的序号做不到
+            buf: Buffer.alloc(FRAME, fill ?? h.sent),
+          });
         }
       },
       stop() {
@@ -142,6 +147,50 @@ test('stopVision 只停画面：留底接着跑（进仅监听那条路不许把
   runner.stopVision('模型进仅监听');
   assert.equal(cap.calls[0].stopped, false);
   assert.equal(runner.status().lift.frames, 1);
+
+  runner.stop();
+});
+
+test('framePng：按 t0 取出那一刻的帧并落成 PNG（瞥要用它）', async () => {
+  const cap = fakeCapture();
+  const runner = mk(cap);
+
+  await runner.listenOnly({ audio: false, region: null });
+  cap.calls[0].push(4, 200);            // 4 帧采集 → 留 1 帧
+
+  const t0 = Date.now();
+  const png = runner.framePng(t0);
+  assert.equal(png.ok, true, JSON.stringify(png));
+  assert.match(png.path, /lift[\\/].+\.png$/);
+  assert.ok(existsSync(png.path), `没写出来：${png.path}`);
+  const size = statSync(png.path).size;
+  assert.ok(size > 500, `PNG 太小（${size} 字节），大概是空图`);
+  assert.ok(Math.abs(png.deltaMs) <= 1000);
+
+  runner.stop();
+  // 收工清空后同一时刻就取不到了，且不会凭空造一张
+  assert.equal(runner.framePng(t0).reason, 'empty');
+});
+
+test('still：两帧内容一样是静、不一样是动；帧不够时判不了', async () => {
+  const cap = fakeCapture();
+  const runner = mk(cap);
+
+  await runner.listenOnly({ audio: false, region: null });
+  assert.equal(runner.still().reason, 'too-few-frames');
+
+  cap.calls[0].push(4, 7);              // 第 1 帧（下标 0 被留下）
+  cap.calls[0].push(4, 7);              // 第 2 帧（下标 4 被留下），内容一样
+  const stat = runner.still();
+  assert.equal(stat.ok, true);
+  assert.equal(stat.still, true);
+  assert.equal(stat.changedFrac, 0);
+
+  cap.calls[0].push(4, 200);            // 第 3 帧，内容全变
+  const move = runner.still();
+  assert.equal(move.ok, true);
+  assert.equal(move.still, false);
+  assert.ok(move.changedFrac > 0.9, `变化占比只有 ${move.changedFrac}`);
 
   runner.stop();
 });

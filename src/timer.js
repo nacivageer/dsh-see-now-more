@@ -60,7 +60,7 @@ function followupMessage(text) {
  *
  * @param {{everyMs?:number, tick:()=>(void|Promise<void>), immediate?:boolean}} opts
  */
-export function startTicker({ everyMs = 2000, tick, immediate = true } = {}) {
+export function startTicker({ everyMs = 2000, tick, immediate = true, onError = null } = {}) {
   let disposed = false;
   let running = false;
 
@@ -69,8 +69,13 @@ export function startTicker({ everyMs = 2000, tick, immediate = true } = {}) {
     running = true;
     try {
       await tick();
-    } catch {
-      /* 钟自己出问题不该把宿主带崩 */
+    } catch (e) {
+      /**
+       * 钟自己出问题不该把宿主带崩 —— 但**也不能静默**：打包后的 Desktop 里
+       * `ctx.logger` 看不见，一次每拍都抛的异常（比如某个 await 里的宿主调用炸了）
+       * 表现就是"循环活着但什么都不做"，查起来毫无线索（2026-11-10 踩过）。
+       */
+      try { onError?.(e); } catch { /* 上报失败就算了 */ }
     } finally {
       running = false;
     }

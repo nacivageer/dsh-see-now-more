@@ -24,6 +24,7 @@ import { shouldIdleStop } from './idle.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
+import { todayCounts } from './lift-log.js';
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -373,6 +374,23 @@ function liftLine(l) {
 }
 
 /**
+ * 「档位」一行（P2-B）：当前停在哪个档 + 今日各档计数。
+ *
+ * 用户问「它刚才叫得对不对」时，这行是唯一能对账的地方：档位说明"现在会不会打扰你"，
+ * 计数说明"今天打扰了几次"。数字从 `lift.jsonl` 现算（按天切、重启不丢）。
+ */
+function liftGearLine(lp, l) {
+  const label = { alarm: '警觉', glance: '瞥', look: '看', chase: '追' };
+  const now = lp?.lift?.level;
+  const base = lp?.lift?.base ?? l?.level ?? 'glance';
+  const cur = now === 'look' ? '看（抬头中）' : (label[base] ?? '瞥');
+  const alarms = Number(lp?.lift?.alarms) || 0;
+  const c = todayCounts();
+  return `档位：${cur}（基线 ${label[base] ?? base}）· 5 分钟警觉 ${alarms}`
+    + ` · 今日 警觉 ${c.alarm} · 瞥 ${c.glance} · 看 ${c.look}`;
+}
+
+/**
  * 变化面积 → 人话。分级不是为了好看：<0.1% 的两位小数是噪声，
  * 80% 后面跟两个小数位也没有信息量。上限截到 100% 是因为逐像素阈值统计
  * 在整屏换页时会给出 99.x，写成 100% 更直白。
@@ -476,6 +494,25 @@ async function attachAndReturn(ctx, sheet, extra = {}) {
       bytes: sheet.png.length,
     },
   };
+}
+
+/**
+ * 把**一张现成的 PNG**交上去，并组装工具返回值（`action:"lift"` 用）。
+ *
+ * 和 `attachAndReturn` 的区别：那边是管线拼好的 sheet（有帧清单、要生成正文），
+ * 这里就是一张已经编码好的图 —— 正文由调用方给，因为"那一帧是哪一刻"只有它知道。
+ */
+async function attachPng(ctx, png, text, meta = {}) {
+  const svc = serviceOf(ctx, 'attachments');
+  if (!svc?.saveImage) {
+    return { text: '拿到帧了，但宿主没有 attachments 服务，交不上去。', meta: { ok: false, ...meta } };
+  }
+  const ref = await svc.saveImage.call(svc, {
+    data: png,
+    mediaType: 'image/png',
+    name: `see-now-lift-${Date.now()}.png`,
+  });
+  return { images: [ref], text, meta: { ...meta, bytes: png.length } };
 }
 
 /** 当前声音状态（status 用）。**听不到声音时第一个要看的就是它。** */
@@ -902,6 +939,8 @@ async function registerAll(ctx) {
       // **这条会话此刻是不是真的在跑回合**：决定用户插话走 steer 还是 followup。
       // 打在空闲会话上的 steer 会起一个空回合、立刻 blocked（见 deliveryMode 的注释）。
       turnRunning: (sid) => turnStates[String(sid ?? '')]?.state === 'running',
+      // 上一回合什么时候结束的：黑听「活跃对话」判定用（刚回合过 = 人还在旁边）
+      lastTurnEndAt: (sid) => Number(turnStates[String(sid ?? '')]?.endedAt) || 0,
       runner,
       log,
       scene: sceneMode,
@@ -1625,6 +1664,52 @@ async function registerAll(ctx) {
         };
       }
 
+      /**
+       * 取「那句话那一刻」的帧（黑听抬头的「看」用）。
+       *
+       * 和 `watch` 的区别：`watch` 给的是**现在**，这里给的是**台词说出口前后那一帧**。
+       * 缓冲里没有那一刻就**明说没了**，绝不拿当前画面顶 —— 机制文档「风险」第一条。
+       * 参数是 ASR 的 `t0`（epoch 毫秒），唤醒文案里会原样给出。
+       */
+      if (action === 'lift') {
+        const since = Number(args.since ?? args.t0);
+        if (!Number.isFinite(since) || since <= 0) {
+          return { text: '`since` 必须是毫秒时间戳 —— 用唤醒文案里那个 `t0`。', meta: { ok: false } };
+        }
+        if (!runner.status().lift?.enabled) {
+          return {
+            text: '留底关着（`see-now.json` 的 `lift.enabled` = false），没有「那一刻」的画面。\n'
+              + '要看现在就 `see_now({action:"watch"})`。',
+            meta: { ok: false, reason: 'disabled' },
+          };
+        }
+        const got = runner.framePng(since);
+        if (!got.ok) {
+          const why = {
+            empty: '缓冲里还没有帧（刚进仅监听？等十来秒）',
+            'too-old': '那一刻比 30 秒缓冲还早，画面已经滑走了',
+            'too-new': '那个时间戳比最新一帧还晚（采集断了，或者这不是这台机器的钟）',
+            far: '离最近的一帧太远',
+            disabled: '留底关着',
+            'write-failed': `写 PNG 失败（${got.error ?? '未知'}）`,
+          }[got.reason] ?? got.reason;
+          return {
+            text: `没取到那一刻的画面：${why}。\n`
+              + '**别拿当前画面顶** —— 那样你看到的是"现在"，不是那句话的时候。要看现在用 `watch`。',
+            meta: { ok: false, reason: got.reason, since },
+          };
+        }
+        const png = readFileSync(got.path);
+        const clock = new Date(got.at).toLocaleTimeString('zh-CN', { hour12: false });
+        return attachPng(
+          ctx,
+          png,
+          `「那一刻」的画面：${clock}（与台词差 ${got.deltaMs} ms）。\n`
+            + '这是台词说出口前后的那一帧，**不是"现在"**。要看现在用 `see_now({action:"watch"})`。',
+          { ok: true, since, frameAt: got.at, deltaMs: got.deltaMs, path: got.path },
+        );
+      }
+
       if (action === 'status') {
         const s = runner.status();
         const voice = voiceState();
@@ -1674,6 +1759,8 @@ async function registerAll(ctx) {
             + `\n听声音：${listenLine(s.listen)}`
             // 留底（黑听抬头 P2-A）：帧数 / 内存 / 采集是否还活着
             + (liftText ? `\n${liftText}` : '')
+            // 档位与今日计数（P2-B）：关掉留底时整段都不出现
+            + (liftText ? `\n${liftGearLine(lp, s.lift)}` : '')
             // 宿主 cookie 拥挤度：只快满了才出现（满了之后插件根本起不来，提醒不到）
             + cookieWarnLine(),
           meta: { ...s, voice, loop: lp, window: windowReport() },

@@ -55,8 +55,15 @@
 
 标题栏入口、悬浮窗、`pace` 都是功能本身 —— 悬浮窗有它自己的一条线，见下一节。
 
-**它还没做完：** 现在能判断「值得抬头」，但抬起头的动作还要模型自己调 `watch` 去完成。
-别按上面这张表预期成品。
+**现在怎么落地的**：警觉只记账（`lift.jsonl` 一行，不取帧、不叫醒）；瞥取「那句话那一刻」的一帧、
+在窗里落一行（不叫醒）；只有最近 5 分钟里有人跟它说过话（或模型刚回合过），才升级成「看」——
+叫醒模型，唤醒里带那句话的 `t0`，模型可以 `see_now({action:"lift", since})` 取回那一刻的画面。
+缓冲里滑走了就**明说没了**，不拿当前画面顶。抬头之后 15 秒没人说话、画面也不动，自己回落到警觉。
+
+> **隐私边界（请务必读这条）**：黑听 = 屏幕仍在被 **0.5 fps** 低频采集 —— 最近 30 秒在内存里滚动，
+> 不落盘、不进上下文、不花 token。但「瞥」到的那一帧会**落盘保留 3 天**
+> （`~/.dsh/see-now/lift/<日期>/`），因为你要能回看那一帧。
+> `see-now.json` 写 `{"lift":{"enabled":false}}` 一键全关；关掉后与没有这个功能完全一样。
 
 ---
 
@@ -104,6 +111,7 @@
 |---|---|---|
 | `~/.dsh/see-now.json` | 节奏、模式、绑定会话等偏好 | 读 + 写（切模式/改绑定时） |
 | `~/.dsh/see-now/` | 运行数据：`chat.jsonl`（窗里对话）、`delivered.jsonl` / `relay-delivered.json`（投递回执与去重）、`missed.jsonl`、`focus.json`、`turn-state.json`、`region.json`、`images/`（粘贴的图）、`audio/`（听声音的分句 wav）、`relay.log`、`plugin-error.log` | 读写 |
+| `~/.dsh/see-now/lift/<日期>/` | 黑听抬头：`log.jsonl`（一条命中一行）+ 「瞥」到的那一帧 PNG（只留 3 天） | 读 + 写 |
 | `~/.dsh/sessions/` | 悬浮窗显示会话标题与历史列表 | 只读 |
 | `~/.dsh/asr.json` / `voice.json` / `tts.json` | 转写、TTS 适配器配置（里面可能有你自己的 key） | 只读 |
 | `%APPDATA%\@deepseek-ai\dsh-desktop\Network\Cookies`（Windows） | 只查 `dsh-auth-*` cookie 的**条数**，用于提醒 cookie 过多会让 DSH 启动失败；**不读 cookie 值、不导出** | 只读 |

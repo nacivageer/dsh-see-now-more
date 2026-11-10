@@ -221,6 +221,17 @@ export function createLiftBuffer({
   }
 
   /**
+   * 最近 n 帧（按时间升序，最后一个是新的）。
+   *
+   * 给「画面不动」判定用：拿最后两帧比像素。返回的是**帧引用的数组拷贝**，
+   * 外面不能拿它改缓冲（`items` 本身不出去）。
+   */
+  function recent(n = 1) {
+    const k = Math.max(0, Math.min(items.length, Math.floor(Number(n) || 0)));
+    return items.slice(items.length - k);
+  }
+
+  /**
    * 账本。`ageSec` 是「最后一帧是多久以前」—— 采集断了的时候，帧还在但已经没有现在了，
    * 状态行必须能看出来（`stale` 就是给状态行用的）。
    */
@@ -249,5 +260,33 @@ export function createLiftBuffer({
     };
   }
 
-  return { push, pickAt, clear, stats };
+  return { push, pickAt, clear, recent, stats };
+}
+
+/**
+ * 两帧「变了多少」：按固定步长采样，返回变化点占比 0–1。
+ *
+ * 为什么采样而不是全量：800×450×3 = 1.08 MB，全量比一遍每 2 秒一次不划算；
+ * 步长 97（质数，避开"每行开头"这类周期性对齐）取 ~11k 个点，足够判「画面在不在动」。
+ *
+ * **阈值 8 是刻意的**：屏幕截图里 ±1~2 的抖动（视频压缩、光标反锯齿）不该算"在动"。
+ *
+ * @param {Buffer} a
+ * @param {Buffer} b
+ * @param {{stride?:number, threshold?:number}} [o]
+ * @returns {number} 0 = 完全一样，1 = 每个采样点都变了（非 Buffer / 空缓冲也按 1 算，宁严勿松）
+ */
+export function changedFraction(a, b, { stride = 97, threshold = 8 } = {}) {
+  if (!Buffer.isBuffer(a) || !Buffer.isBuffer(b)) return 1;
+  const n = Math.min(a.length, b.length);
+  if (!n) return 1;
+  const step = Math.max(1, Math.floor(Number(stride) || 97));
+  const gate = Math.max(0, Number(threshold) || 0);
+  let seen = 0;
+  let changed = 0;
+  for (let i = 0; i < n; i += step) {
+    seen += 1;
+    if (Math.abs(a[i] - b[i]) > gate) changed += 1;
+  }
+  return seen ? changed / seen : 1;
 }

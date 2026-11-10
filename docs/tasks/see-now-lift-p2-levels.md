@@ -10,12 +10,85 @@
 
 - **2026-11-10 22:1x 建档，未动代码。**
 - **2026-11-10 22:2x 四条拍板完成**（见「待你拍板」末尾），可以开工。
+- **2026-11-10 22:5x 第 1–3 步完成**（单测全绿，未接进循环）：
+  - `src/lift-levels.js`：`decideLevel()` 判档（基线 + 对话升一档 + 蓄水池），纯函数；
+  - `src/lift-log.js`：`appendLift()` / `readDay()` / `todayCounts()` / `pruneOld()`，
+    按本地日期分目录，`lift/<日期>/log.jsonl` 与 `<帧时间戳>.png`；
+  - `runner.framePng(t0)`（取帧 → PNG 落盘）与 `runner.still()`（最后两帧像素差）；
+  - `lift-buffer.js` 增 `recent(n)` 与纯函数 `changedFraction()`。
+  **第 4–5 步（loop 接线、index 的 action/status）还没动** —— 那两步会改运行态行为，
+  接完要重启验一遍。
+- **2026-11-10 23:0x 第 4–6 步完成**（单测全绿；**运行态还没验**）：
+  - `loop.js`：`maybeWakeFromLift()` 改成「判档 → 按档做事」；警觉记账、瞥落帧 + 窗内 meta、
+    看才叫醒（文案带 `t0` 与取帧指令）；`holdSec` + `still()` 自动回落；`lastUserSpokeAt` /
+    `lastTurnEndAt` 两个信号算「活跃对话」；`state().lift` 给 status。
+  - `index.js`：`action:"lift"`（`since` → 单帧图，滑走了明说没了）；status 加「档位 / 今日计数」；
+    `startLoop` 传 `lastTurnEndAt`。
+  - `tool-spec.js`：`since` 参数 + action 说明。
+  - `README.md`：黑听抬头的「现在怎么落地」 + **隐私边界**（0.5 fps 采集、瞥的帧留 3 天、
+    `lift.enabled:false` 一键关）+ 文件表里加 `lift/<日期>/`。
+  - 删掉 P2-A 的临时取证 `appendLiftLog`（记录已进 `log.jsonl`）。
+- **2026-11-10 22:5x 「瞥」运行态验过**：黑听 10 分钟没人说话，TTS「你看这个，这个镜头拍得挺好」
+  → `lift.jsonl` 记 `level:"glance"`、`frameAt` 有值、`spoke:false`；`chat.jsonl` 有那条 meta
+  （`👀 22:47:13 听到「你看这个。」，瞥了一眼`）；`status` 今日 瞥 1；**没有叫醒**。
+  **「看」与「holdSec 回落」还没验**（要一轮「刚说过话」的状态）。
+- **2026-11-10 22:5x 踩到一个 tick 停摆（已修）**：听了一段时间后，强命中不再产生任何记录 ——
+  `stop` + 重新 `listen` 后立刻恢复。根因：`maybeWakeFromAudio` 那条路叫醒时，
+  `wakeWithRetry` 里的 `sessions.flush()` 会**等当前回合落定**，模型跑长回合时能挂几分钟；
+  而 `startTicker` 的 `running` 守卫会让后面每一拍都被挡掉 —— 循环"活着但不动"。
+  修法：`wake()` 加 `WAKE_TIMEOUT_MS`（10 秒）竞速，超时只记一行、不动 `consecutiveFails`
+  （宿主慢 ≠ 会话没了）。**通用问题，不只影响 lift**：watch 那条路的叫醒一样会挂。
+- **2026-11-10 23:0x 「看」的一条前置发现**：`turn/start` 会把 `turnStates[sid].endedAt` 置空，
+  所以**模型正在跑回合时 `lastTurnEndAt` 恒为 0** —— 「活跃对话」只在回合之间成立。
+  这不是 bug，但意味着「看」极少在对话进行中触发；验它必须挑「回合刚结束、下一轮还没开始」的空档
+  （用后台任务延时放音可以稳定造出这个空档）。
+- **2026-11-10 23:0x 交接现场**（新会话从这条开始读）：
+  - 代码：P2-B 六步全写完、**未提交**（工作树 11 改 + 3 新）；`node --test` 134 条全绿；
+    副本与源码逐文件一致。
+  - 已验：P2-A 6/6；P2-B 的「瞥」端到端（`level:"glance"` / `frameAt` / `spoke:false` /
+    窗内 meta / 今日计数 +1 / 不叫醒）。
+  - 未验：「看」（要有「回合刚结束」的空档）、`holdSec` 回落。
+  - **卡住**：tick 会停摆 —— `stop` + 重新 `listen` 后跑一阵，新台词不再产生任何记录，
+    循环仍显示「只听」。已加固两处：`wake()` 10 秒超时、`startTicker` 的 `onError` +
+    60 秒心跳写进 `~/.dsh/see-now/lift/debug.log`。**重启后第一步看这份 debug.log**。
+  - **已修的配置问题**：`see-now.json` 的 `session` 钉在旧会话 `85aeff25`，而当前会话是
+    `8de63347` —— 「活跃对话」永远为假、叫醒也投给旧会话。已改绑，备份 `see-now.json.bak-rebind`。
+  - 现场：仅监听开着（耳朵 + 留底 16 帧）；`mode: vision`；悬浮窗进程早就不在（pid 10792）。
 - 前置 P2-A：环形缓冲（0.5 fps / 最近 30 秒 / ≈16 MB）+ `runner.frameAt(t0)` 已写完，
   `node --test` 绿，30 分钟实测 0.15 核；**运行态还没验**（`install-dev` + 重启 Desktop 没做）。
   这一棒开工前它要先过验收 —— 否则四档是建在「取不到帧」的前提上。
 - 现有接线（P0/P1）是**简化口径**：强命中直接叫醒（= 机制里的「看」），弱命中只写一行日志
   （= 连「警觉」都没记账）。`lift.level` / `lift.holdSec` 读了但没用；没有 `lift.jsonl`；
   没有窗内记录；没有今日计数。
+
+- **2026-11-10 23:0x–23:5x 运行态验收（P2-B 收尾，结论以此为准）**：
+  - **不是 tick 停摆**：`lift/debug.log` 的心跳从 23:02 到 23:47 每 60 秒一条没断，
+    全程**没有一条** `tick 抛错`。「钟活着但不动」另有两处真原因，见下面两条。
+  - **「瞥」已验**：23:09:11 / 23:13:29 `level:"glance"`、`frameAt` 比台词早 0.9 s、
+    `spoke:false`、窗内 meta、`status` 今日计数 +1、**不叫醒**。
+  - **「看」已验，但用的是基线 `look`**：23:36:46 `level:"look"` / `spoke:true`，
+    叫醒到达；`see_now({action:"lift", since:1794325003333})` 取回 23:36:42 那一帧
+    （帧里系统时钟 23:36:41，与台词差 −933 ms）。
+  - **`holdSec` 回落已验**：23:37:03 `trigger:"hold"` / `level:"alarm"`，安静 15 秒且画面不动。
+  - **`lift.enabled:false` 已验**：`status` 里「档位」「留底」两行一起消失。
+  - **最省档验了一半**：`lift.level:"alarm"` 下强命中确实不叫醒（23:41:16 `level:"alarm"` /
+    `spoke:false` / `frameAt:null`）；「有对话时最多升到瞥」没跑成 —— 见下一条。
+  - **「看」的升档判据在运行态没验成**：`lastTurnEndAt` 依赖 `turn/end`，它在这个会话上
+    时有时无；更关键的是 `see-now.json` 的 `session` 曾钉在**已经不存在的会话**
+    （`8de63347` → 实际在跑的是 `bb4c6ba7`），叫醒会投给死会话。已改绑到当前会话 ——
+    这是「叫不醒」的直接原因之一，与判档无关。
+  - **漏记的真凶（新证据）**：23:45 之后连放三句「你看这个」一条记录都没有，而 `status` 是
+    `累计 0 句`、`levels.json` 同期 −12 dB（有声音）、`live-*.wav` 不落 ——
+    **转写链路整段没出句，台词根本没进缓冲**，判档压根没机会跑。既不是钟、也不是判档。
+    这条以后能直接看出来：心跳带了 `lines=N` / `asr-err=`。
+  - **新增常驻诊断**（已进代码）：心跳带 `lines=N` 与 `asr-err=`；窗口里有台词时每拍一行
+    `lift-scan lines=/finals=/fresh=`；每次叫醒一行 `lift-wake ok=`。
+  - **修掉一个真 bug**：`lift-log` 原来用 `Number.isFinite(Number(x))` 归一，`Number(null)`
+    = 0，于是「没取到帧」被写成 `frameAt:0`（验收第 5 条要的是 `null`）。改成 `timeOrNull()`
+    并加单测。
+  - **仍未验**：蓄水池运行态（3 声「诶诶诶？」只转出 2 句且没命中 —— 短句转写不可靠，
+    与已知「ASR 会丢很短的话」一致）；`lift.level:"alarm"` + 有对话时的升档；
+    验收第 5 条「帧滑走」的运行时路径（单测覆盖）。
 
 ## 为什么现在做
 
@@ -82,7 +155,8 @@
 1. **`lift.level` 是基线，有活跃对话自动升一档**。默认 `glance` → 安静时只「瞥」、有人说话时「看」；
    设成 `alarm` → 安静只记账，有人说话最多「瞥」一眼、不叫醒（这就是"最省模式"）。
    升档阶梯 `alarm → glance → look`，`look` 封顶；`chase` 不参与自动升。
-2. **「瞥」那一帧落盘**：`~/.dsh/see-now/lift/<本地日期>/<毫秒>.png`（约 30–60 KB/张），
+2. **「瞥」那一帧落盘**：`~/.dsh/see-now/lift/<本地日期>/<毫秒>.png`（实测 **406 KB/张** ——
+   800×450 的 PNG 无损压到这就下不去了，原先按 JPEG 估的 30–60 KB 是错的），
    保留 3 天、启动时顺手清更老的。这是验收第 7 条（窗里点开能看那一帧）唯一的做法。
 3. **新增 `see_now({action:"lift", since})`**：`since` 是 epoch ms（就是台词 `t0`），返回那一刻的
    单帧图（低清档 ≈222 token）。缓冲里没有那一刻时**明确返回"没了"**，不拿当前帧顶。
@@ -154,3 +228,16 @@
 ## 日志
 
 - 2026-11-10 22:1x 建档 → 22:2x 四条拍板（都按倾向）→ 未动代码。
+- 2026-11-10 22:5x 第 1–3 步落地（判档 / 记账 / 取帧 → PNG + 画面不动），单测绿，已同步副本；
+  循环还没接，运行态行为与 P2-A 一致。
+- 2026-11-10 22:5x 注意：`runner.js` 现在 import 了 `lift-log.js` 的 `frameFile` / `pruneOld`，
+  **副本必须与源码一起更新**，否则下次重启会在 import 阶段炸掉整个插件。
+- 2026-11-10 23:0x 第 4–6 步接完（循环四档 / action / status / README / tool-spec），
+  单测绿。运行态待验：重启后先验「看」（有对话 → 叫醒 + 取帧），再验「瞥」（无对话 → 不叫醒）。
+- 2026-11-10 23:0x 用**插件热重载**代替重启 Desktop（`plugin_manager` 停/启 `include:dsh-see-now-more`），
+  会话不用丢；心跳立刻出现 → 新代码确实进了运行进程。以后改插件代码都可以这么省一次重启。
+- 2026-11-10 23:4x 运行态一轮：瞥 / 看 / 回落 / 可关 / 最省档都拿到记录（明细见「状态」块）；
+  发现「叫不醒」的两处真原因（绑定指向死会话、`turn/end` 时有时无）与「漏记」的真原因
+  （转写整段没出句、`累计 0 句`）。诊断加进心跳与扫描账，`frameAt:null` 被写成 0 的 bug 修掉。
+- 2026-11-10 23:5x 单测 135 条全绿；配置已还原（`lift` 段删掉 = 默认 glance，`mode:"vision"`），
+  副本与源码一致；未提交的改动按路径提交。

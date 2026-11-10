@@ -46,6 +46,9 @@ export function seeNowToolSpec() {
       + 'when the plugin wakes you ("有新画面了"), because then you are not inside a `watch` any more.\n'
       + '- `see_now({action:"status"})` — is it still watching, is the loop alive, is sound attached, '
       + 'and is the floating window actually visible.\n'
+      + '- `see_now({action:"lift", since})` — **only while black-listening**: the one frame captured at '
+      + 'that instant (`since` = epoch ms, the ASR line\'s `t0` from a "[黑听]" wake). It is **not** "now" — '
+      + 'if the buffer has slid past it you get an explicit "gone"; do not substitute a fresh frame.\n'
       + '- `see_now({action:"window", show:true})` — bring the floating window back when the user cannot see '
       + 'it (it can be left hidden from an earlier run). `show:false` hides it again. **Whenever a result '
       + 'or `status` says the window is hidden, the user is seeing nothing you say** — fix it with this '
@@ -110,6 +113,13 @@ export function seeNowToolSpec() {
           + '带上区域后：强制 gdigrab（ddagrab 没有偏移参数）、按区域比例出图（竖屏出竖屏）、'
           + '每帧长边 = 档位长边、一张默认 2 帧最多 4 帧。token 会比全屏贵（帧不再被缩小）：'
           + 'low 档 2 帧约 345 token、4 帧约 872（普通全屏 4 帧是 233）；要省钱就降 `quality`。',
+      },
+      since: {
+        type: 'number',
+        description: 'With action:"lift": the moment to fetch, in **epoch milliseconds** — '
+          + 'use the `t0` printed in a "[黑听]" wake ("那句话那一刻"). It returns the single frame '
+          + 'captured around that instant (≈222 tokens). If it is older than the 30-second buffer you '
+          + 'get an explicit "gone" — say so instead of showing the current screen as if it were that moment.',
       },
       show: {
         type: 'boolean',

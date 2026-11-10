@@ -20,7 +20,7 @@
 import { spawnFrames, pickScreenEngine, screenEngineWarning } from './capture.js';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createPipeline } from './pipeline.js';
 import { cellSize } from './layout.js';
 import { chatWatcherShared, enterChatWait, markDelivered, markRelaySeen } from './chat.js';
@@ -28,9 +28,11 @@ import { noteInterjected } from './interject.js';
 import { openWindow, pidStamp, windowAlive, setWindowHidden } from './window.js';
 import { createListener } from './listen.js';
 import {
-  createLiftBuffer, LIFT_CAPTURE_FPS, LIFT_FPS, LIFT_HEIGHT, LIFT_KEEP_EVERY, LIFT_WIDTH,
-  LIFT_WINDOW_SEC,
+  changedFraction, createLiftBuffer, LIFT_CAPTURE_FPS, LIFT_FPS, LIFT_HEIGHT, LIFT_KEEP_EVERY,
+  LIFT_WIDTH, LIFT_WINDOW_SEC,
 } from './lift-buffer.js';
+import { frameFile, pruneOld } from './lift-log.js';
+import { encodePng } from './png.js';
 
 /**
  * 四档清晰度。数字是画布像素（**不含**底部音轨条），实际 token 见 src/tokens.js。
@@ -311,6 +313,8 @@ export function createRunner({
     liftWanted = true;
     liftStarting = true;
     try {
+      // 顺手清掉 3 天前的留底图谱（幂等、便宜；失败不影响采集）
+      try { pruneOld(); } catch { /* 清不掉就下次 */ }
       const src = fixedSrc ?? liftSource(region);
       /**
        * **刻意不走 `pickScreenEngine()`**。
@@ -402,9 +406,65 @@ export function createRunner({
     return { ok: true };
   }
 
+  /**
+   * 「瞥」的那一帧 → PNG 落盘（P2-B）。
+   *
+   * 为什么落盘：窗里要「点开能看那一帧」，而环形缓冲 30 秒后就滑走了 ——
+   * 不落盘就等于没有。落在 `$DSH_HOME/see-now/lift/<日期>/<帧时间戳>.png`，
+   * 文件名用帧自己的时间戳（同一帧不会写两遍），3 天后由 `pruneOld` 清掉。
+   *
+   * 这是**缓冲不落盘**之外的另一件事：缓冲是 16 MB 内存里的滚动窗口，这是用户要看的那一张。
+   *
+   * @param {number} t0 epoch ms（台词 `t0`）
+   * @returns {{ok:true, path:string, at:number, deltaMs:number, size:[number,number]}
+   *          |{ok:false, reason:string}}
+   */
+  function framePng(t0, opts) {
+    if (!liftOn) return { ok: false, reason: 'disabled' };
+    const got = liftBuffer().pickAt(t0, opts);
+    if (!got.ok) return got;
+    const { frame } = got;
+    try {
+      const path = frameFile(frame.at);
+      mkdirSync(dirname(path), { recursive: true });
+      // level 3：800×450 的截图压到 3 档大约 40–70 KB，比 6 档快一倍、体积只大一点
+      writeFileSync(path, encodePng(frame.buf, frame.width, frame.height, { level: 3 }));
+      return { ok: true, path, at: frame.at, deltaMs: got.deltaMs, size: [frame.width, frame.height] };
+    } catch (e) {
+      return { ok: false, reason: 'write-failed', error: String(e?.message ?? e) };
+    }
+  }
+
+  /**
+   * 「画面动没动」：拿缓冲里**最后两帧**比像素（P2-B 的 `holdSec` 回落要用）。
+   *
+   * 为什么不能拿「没新台词」判：纯音乐、默片、暂停后字幕跳变 —— 静音时画面照样在动，
+   * 那种情况回落就是错的。反过来，两帧全等才是真的"没什么可看的了"。
+   *
+   * @param {{stride?:number, maxChangedFrac?:number}} [o]
+   * @returns {{ok:true, still:boolean, changedFrac:number, at:number, prevAt:number, gapSec:number}
+   *          |{ok:false, reason:string}}
+   */
+  function still({ stride = 97, maxChangedFrac = 0.005 } = {}) {
+    if (!liftOn) return { ok: false, reason: 'disabled' };
+    const [prev, last] = liftBuffer().recent(2);
+    if (!prev || !last) return { ok: false, reason: 'too-few-frames' };
+    if (prev.width !== last.width || prev.height !== last.height) {
+      return { ok: false, reason: 'size-changed' };
+    }
+    const frac = changedFraction(prev.buf, last.buf, { stride });
+    return {
+      ok: true,
+      still: frac <= maxChangedFrac,
+      changedFrac: Math.round(frac * 10000) / 10000,
+      at: last.at,
+      prevAt: prev.at,
+      gapSec: Math.round((last.at - prev.at) / 1000),
+    };
+  }
+
   /** status 用的账本。没开留底时只给 `enabled:false`，不去建缓冲实例。 */
-  function liftStatus() {
-    if (!liftOn) return { enabled: false, capturing: false };
+  function liftStatus() {    if (!liftOn) return { enabled: false, capturing: false };
     const st = liftBuffer().stats();
     return {
       enabled: true,
@@ -900,6 +960,16 @@ export function createRunner({
       if (!liftOn) return { ok: false, reason: 'disabled' };
       return liftBuffer().pickAt(t0, opts);
     },
+    /**
+     * 「瞥」那一帧 → PNG 落盘（P2-B）。返回 `{ok, path, at, deltaMs, size}`；
+     * `ok:false` 的 reason 与 `frameAt` 同一套（`too-old` / `too-new` / …）。
+     */
+    framePng,
+    /**
+     * 「画面动没动」（P2-B 的 `holdSec` 回落用）。拿缓冲里最后两帧比像素；
+     * 帧不够（刚进仅监听）时 `ok:false`，**调用方按"判不了"处理，别当成静**。
+     */
+    still,
     /** 留底账本（status 已经带了，这里给脚本/测试一个直读口） */
     lift: () => liftStatus(),
     stop() { teardown('手动'); return { stopped: true }; },

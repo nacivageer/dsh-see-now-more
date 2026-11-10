@@ -38,7 +38,8 @@ import { estimateSpeechMs, nextProactiveAt } from './pacing.js';
 import { listenGap, trajectoryText } from './listen.js';
 import { createLiftPool } from './lift-pool.js';
 import { matchLiftTriggers } from './lift-triggers.js';
-import { appendLiftLog } from './lift-log.js';
+import { appendLift, appendLiftDebug } from './lift-log.js';
+import { decideLevel, shouldFallback } from './lift-levels.js';
 
 /**
  * 用户插话的"同一拍"判定（毫秒）。
@@ -56,6 +57,15 @@ const INTERJECT_GAP_MS = 500;
  * 8 秒是"不快于一口气说完两句话"的下限；真该说的时候（用户插话）不受这个限制。
  */
 const WAKE_MIN_GAP_MS = 8000;
+
+/**
+ * 一次叫醒最多等多久（毫秒）。
+ *
+ * `sessions.flush()` 会等当前回合落定 —— 模型跑长回合时它能挂几分钟，
+ * 而钟的 `running` 守卫会把后面的每一拍都挡掉：循环"活着但不动"（2026-11-10 实测，
+ * 黑听时表现为台词一直进池、抬头却再也不发生）。超过这个时间就当这一拍没叫。
+ */
+const WAKE_TIMEOUT_MS = 10_000;
 /**
  * 听到新台词时的最快唤醒间隔。
  *
@@ -80,6 +90,19 @@ const TICK_MS = 2000;
  * 不会让同一句进池两次、也不会重复报同一次抬头。
  */
 const LIFT_SCAN_OVERLAP_MS = 10_000;
+
+/**
+ * 「活跃对话」的窗口（P2-B）：最近 5 分钟内用户说过话、或模型回合结束过，
+ * 强命中就从「瞥」升成「看」。这是机制文档给的数，不是拍的。
+ */
+const LIFT_ACTIVE_MS = 5 * 60 * 1000;
+
+/** 蓄水池窗口：5 分钟内的警觉次数（≥3 升一次瞥）。 */
+const LIFT_POOL_WINDOW_MS = 5 * 60 * 1000;
+
+/** `holdSec` 缺省 / 配错时用这个（机制文档定 15 秒）。 */
+const LIFT_HOLD_DEFAULT_SEC = 15;
+
 /** 连续这么多次叫不醒就停：会话没了还每 8 秒烧一次模型，是最贵的失败模式 */
 const WAKE_FAILS_MAX = 2;
 
@@ -184,6 +207,11 @@ export function startLoop({
    * 用户插话只在"真在跑"时走 `steer`；打在空闲会话上的 steer 会起空回合被 blocked。
    */
   turnRunning = () => false,
+  /**
+   * 这条会话的模型上一回合**结束**在什么时候（`index.js` 从 `turnStates` 现取）。
+   * 「活跃对话」判定用：刚回合过 = 人还在旁边 → 强命中可以从「瞥」升成「看」。
+   */
+  lastTurnEndAt = () => 0,
   // 逐帧模式：唤醒文案要说"换画面了，说一句这是什么"，而不是"有新画面了"。
   scene = false,
   /**
@@ -370,11 +398,82 @@ export function startLoop({
   const liftPushedT0 = new Set();
   /** 上一轮报过的抬头 hits：跨拍/跨窗口去重（`matchLiftTriggers` 的 `seen`）。 */
   let liftSeen = [];
+  /**
+   * 最近一次**用户真的说了话**的时刻（毫秒；0 = 还没说过）。
+   *
+   * **不能用 `lastUserAt`**：那个在循环启动时初始化成 `Date.now()`，拿它判「活跃对话」
+   * 会让"刚进仅监听"之后的 5 分钟内每一次强命中都算有人陪 → 一律叫醒。
+   * 这里只在真的收到用户消息时更新。
+   */
+  let lastUserSpokeAt = 0;
+  /** 最近一次有台词（音频时间，`wall`）的时刻；`holdSec` 的起算点之一。 */
+  let lastLiftVoiceAt = 0;
+  /** 最近 5 分钟的警觉时刻（蓄水池）：`Date.now()` 的数组，升过一次瞥就清空。 */
+  let liftAlarmTimes = [];
+  /** 当前抬头档位：`'look'` = 抬头看着（在 `holdSec` 里）；`null` = 没抬头。 */
+  let liftLevelNow = null;
+  /** 这一次抬头的起点：`holdSec` 的兜底下限（防一条老台词把计时拉回去）。 */
+  let liftHoldFrom = 0;
+  /** 上一次写心跳的时间（毫秒）：60 秒一条，落在 `lift/debug.log`。 */
+  let lastHeartbeatAt = 0;
   /** 任务模式里已经记进 `missed.jsonl` 的出图序号（每张图只记一次） */
   let lastMissedSeq = 0;
 
+  /** 模型上一回合结束的时刻（取不到就是 0）。活跃对话判定用。 */
+  function liftTurnEndAt() {
+    try {
+      const sid = getTargetSession?.() ?? sessionId;
+      return Number(lastTurnEndAt?.(sid)) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
   /**
-   * 台词触发：定稿台词进池，强命中叫醒，弱命中只记一笔。
+   * 「最近 5 分钟有活跃对话」：用户说过话 **或** 模型回合结束过，取更晚的那个。
+   *
+   * 只有它为真，强命中才从「瞥」升成「看」—— 这是"人在旁边"与"人已经走了"的分界。
+   */
+  function liftDialogActive(now) {
+    const latest = Math.max(lastUserSpokeAt, liftTurnEndAt());
+    return latest > 0 && now - latest <= LIFT_ACTIVE_MS;
+  }
+
+  /**
+   * 抬头之后的自动回落（P2-B）：`holdSec` 到点 **且画面不动** → 回「警觉」。
+   *
+   * 起算点是「最后一次语音/对话结束」而不是抬头那一刻，所以一直有人在说话、
+   * 画面一直在动的时候永远不回。判据在 `shouldFallback()`（纯函数，单测过）。
+   */
+  function maybeFallBackFromLift(now) {
+    if (liftLevelNow !== 'look') return;
+    const raw = Number(tuning?.lift?.holdSec);
+    const holdSec = Number.isFinite(raw) && raw >= 0 ? raw : LIFT_HOLD_DEFAULT_SEC;
+    let still = null;
+    try { still = runner.still?.() ?? null; } catch { still = null; }
+    const since = Math.max(lastLiftVoiceAt, lastUserSpokeAt, liftTurnEndAt(), liftHoldFrom);
+    if (!shouldFallback({ holding: true, now, since, holdSec, still })) return;
+
+    liftLevelNow = null;
+    liftHoldFrom = 0;
+    appendLift({
+      at: now, wall: since, level: 'alarm', trigger: 'hold', text: '', frameAt: null,
+      spoke: false, reason: `安静 ${holdSec}s 且画面不动，回落`,
+    });
+    log(`[lift] 回落：安静 ${holdSec}s 且画面不动`);
+  }
+
+  /**
+   * 台词触发：定稿台词进池 → **判档** → 按档做事（P2-B 的四档）。
+   *
+   * 判档在 `lift-levels.js`（纯函数，穷举测过）；这里只负责把判档要的"上下文"凑出来：
+   * 最近 5 分钟有没有活跃对话、5 分钟内警觉了几次、现在是不是已经抬着头。
+   *
+   * 四档各自的产物：
+   *   - 警觉：`lift.jsonl` 一行；不取帧、不叫醒、不进窗
+   *   - 瞥：取一帧 → PNG 落盘 + 窗内一行 meta + `lift.jsonl`；**不叫醒**
+   *   - 看：叫醒（文案带时间码 / 台词 / 摘要 / 取帧入口）；`lift.jsonl` 记 `spoke:true`
+   *   - 追：插件不做（模型自己调 `watch`）
    *
    * 和 `maybeWakeFromAudio` 的分工：那条负责"声音形状变了"，这条负责"话里在叫人"。
    * 台词更具体，所以这一拍先判它；**两条共用同一条 `listenGap` 退避线**（`lastAudioWakeAt`
@@ -408,54 +507,117 @@ export function startLoop({
     // 重叠扫描只需要挡住"最近这几拍的重放"，不必留整场
     while (liftPushedT0.size > 200) liftPushedT0.delete(liftPushedT0.values().next().value);
 
+    // 有台词 = 有人在说话：`holdSec` 的计时从头算（哪怕这一拍没有新命中）
+    if (fresh.length) {
+      lastLiftVoiceAt = Math.max(lastLiftVoiceAt, Number(fresh[fresh.length - 1].t0) || 0, now);
+    }
+
+    // 回落**每拍都判**：静音之后的那几拍才正是该回的时候
+    maybeFallBackFromLift(now);
+
+    /**
+     * 有台词的那几拍落一行扫描账（P2-B 的常驻诊断，2026-11-10 实测要的）。
+     *
+     * 「钟在敲但什么都没记」在打包后的 Desktop 里没法复现也没法查：心跳只证明钟在敲，
+     * 分不清是 ASR 没出整句（`lines=0`）、整句被过滤（`finals=0`）、还是扫描窗口没吃到
+     * （`fresh=0`）。这几行只在窗口里有台词时写，正常一小时几十行。
+     */
+    if (lines.length) {
+      appendLiftDebug(`lift-scan lines=${lines.length} finals=${finals.length} fresh=${fresh.length}`);
+    }
     if (!fresh.length) return;
 
-    const { level, hits } = matchLiftTriggers(
+    const { hits } = matchLiftTriggers(
       fresh.map((l) => ({ text: l.text.trim(), startMs: Number(l.t0), endMs: Number(l.t1) })),
       { seen: liftSeen },
     );
     if (!hits.length) return;
     liftSeen = [...hits, ...liftSeen].slice(0, 8);
 
-    // 「警觉」只记一笔：不取帧、不叫醒（四档定义见 docs/tasks/see-now-listen-lift.md）
-    if (level !== 'glance') {
-      log(`[lift] 弱命中 ${hits.length} 条（${hits[0].reason}），只记一笔`);
+    const t0 = Number(hits[0].startMs);
+    const strong = hits.some((h) => h.level === 'glance');
+    /** 之前的警觉次数（不含这一批）。 */
+    const priorAlarms = liftAlarmTimes.filter((t) => now - t <= LIFT_POOL_WINDOW_MS).length;
+
+    const decision = decideLevel({
+      hits,
+      baseLevel: tuning?.lift?.level ?? 'glance',
+      active: liftDialogActive(now),
+      alarmsIn5min: priorAlarms + (strong ? 0 : 1),
+    });
+
+    // 蓄水池记账：这一批是警觉就记一笔；升过一次瞥就清空重攒
+    if (decision.level === 'alarm') liftAlarmTimes.push(now);
+    else if (decision.why === 'pool') liftAlarmTimes.length = 0;
+    liftAlarmTimes = liftAlarmTimes.filter((t) => now - t <= LIFT_POOL_WINDOW_MS);
+
+    // 已经抬着头（看之后还在 holdSec 里）：不重复叫，也不再记一条
+    if (liftLevelNow === 'look') {
+      log(`[lift] 命中「${hits[0].text}」，但已经在抬头看着，不重复叫`);
       return;
     }
 
-    // 被退避挡掉的这一拍**不**加 unanswered —— 那不是"叫了没人理"
+    const clock = (ms) => new Date(ms).toLocaleTimeString('zh-CN', { hour12: false });
+
+    if (decision.level === 'alarm') {
+      appendLift({
+        at: now, wall: t0, level: 'alarm', trigger: strong ? 'word' : 'weak', text: hits[0].text,
+        frameAt: null, spoke: false, reason: decision.reason,
+      });
+      log(`[lift] 警觉：${hits[0].text}（${decision.reason}）`);
+      return;
+    }
+
+    // 瞥 / 看都要那一刻的帧；取不到就明说「没了」，绝不拿现在顶
+    const png = runner.framePng?.(t0) ?? { ok: false, reason: 'no-frame' };
+    const frameNote = png.ok ? '' : `（帧没取到：${png.reason}）`;
+
+    if (decision.level === 'glance') {
+      appendLift({
+        at: now, wall: t0, level: 'glance', trigger: decision.why === 'pool' ? 'pool' : 'word',
+        text: hits[0].text, frameAt: png.ok ? png.at : null, spoke: false,
+        reason: `${decision.reason}${frameNote}`,
+      });
+      try {
+        appendSpoken(
+          'meta',
+          `👀 ${clock(t0)} 听到「${hits[0].text}」，瞥了一眼${png.ok ? '' : '（那一刻的画面已滑走）'}`,
+          { speak: false },
+        );
+      } catch { /* 窗不在也能记账 */ }
+      log(`[lift] 瞥：${hits[0].text}（${decision.reason}）`
+        + (png.ok ? `，帧 ${png.path}` : `，帧没取到（${png.reason}）`));
+      return;
+    }
+
+    // 看：叫醒。被退避挡掉的这一拍**不**记"叫了没人理"
     if (now - lastAudioWakeAt < listenGap(unansweredListenWakes)) return;
     lastAudioWakeAt = now;
     unansweredListenWakes += 1;
 
-    /**
-     * 留底自检（P2-A）：只记一行，**不取帧、不改任何行为**。
-     *
-     * 验收要的是「台词 t0 能取回那一刻的帧、偏差 ≤1 秒」，而 P2-A 不暴露取帧 action、
-     * 四档也还没接 —— 不记这一行，运行态就永远没有证据。接上四档后这一行可以删。
-     */
-    try {
-      // 用户关掉留底时别每命中一次就写一行「没取到」
-      if (runner.lift?.()?.enabled !== false) {
-        const probe = runner.frameAt?.(Number(hits[0].startMs));
-        if (probe) {
-          const msg = `[lift] 台词 t0 → 帧 ${probe.ok ? `偏差 ${probe.deltaMs}ms` : `没取到（${probe.reason}）`}`;
-          log(msg);
-          // 控制台在打包后的 Desktop 里看不见，所以同时落一行纯文本（P2-B 换 lift.jsonl）
-          appendLiftLog(probe.ok
-            ? `${msg}  t0=${hits[0].startMs} frameAt=${probe.frame.at} delta=${probe.deltaMs}`
-            : `${msg}  t0=${hits[0].startMs}`);
-        }
-      }
-    } catch { /* 留底不是必选项，自检失败不许影响抬头 */ }
+    appendLift({
+      at: now, wall: t0, level: 'look', trigger: 'dialog', text: hits[0].text,
+      frameAt: png.ok ? png.at : null, spoke: true, reason: `${decision.reason}${frameNote}`,
+    });
 
-    const clock = new Date(now).toLocaleTimeString('zh-CN', { hour12: false });
-    const text = `[黑听] ${clock} · 听到「${hits[0].text}」（${hits[0].reason}）。\n`
+    const frameLine = png.ok
+      ? `那一刻的画面：\`see_now({action:"lift", since:${t0}})\``
+        + `（帧时间 ${clock(png.at)}，与台词差 ${png.deltaMs} ms）`
+      : '那一刻的画面：**没了** —— 比 30 秒缓冲还早。只能按文字判断，别拿现在顶。';
+    const text = `[黑听] ${clock(now)} · 听到「${hits[0].text}」（${hits[0].reason}）—— 最近 5 分钟有对话，抬头看一眼。\n`
+      + `${frameLine}\n`
       + `最近十分钟的台词：\n${liftPool.summary()}\n`
-      + '值得看就 `see_now({action:"watch"})`；不值得就什么都别做，我继续听。'
+      + '值得细看就 `see_now({action:"watch"})`；不值得就什么都别做，我继续听。'
       + lastSaidHint();
     const ok = await wake(text);
-    if (!ok) unansweredListenWakes = Math.max(0, unansweredListenWakes - 1);
+    // 叫醒尝试也记一笔：醒来没醒只有这里有账（默认一晚上几条）
+    appendLiftDebug(`lift-wake ok=${ok} t0=${t0}`);
+    if (!ok) {
+      unansweredListenWakes = Math.max(0, unansweredListenWakes - 1);
+      return;
+    }
+    liftLevelNow = 'look';
+    liftHoldFrom = now;
   }
 
   /**
@@ -537,10 +699,29 @@ export function startLoop({
     // 打在空闲会话上的 steer 会起一个空回合、立刻 blocked（见 deliveryMode 的注释）。
     const mode = steer ? deliveryMode({ running: turnRunning(to) }) : 'followup';
     lastWakeAt = Date.now();
-    const r = await wakeWithRetry({
-      ctx, sessionId: to, text, log, steer: mode === 'steer',
-      appendMeta: (m) => appendSpoken('meta', m, { speak: false }),
-    });
+    /**
+     * **叫醒必须有上限**（2026-11-10 实测）：`wakeWithRetry` 里 `sessions.flush()` 会等
+     * 当前回合落定 —— 模型正在跑长回合时它能挂几分钟。而钟是有 `running` 守卫的：
+     * 一拍挂住，后面每一拍都被挡掉，整个循环就"活着但不动"了（黑听时表现是：
+     * 台词一直进池，抬头却再也不发生）。
+     *
+     * 超时不算"叫不醒"（不动 `consecutiveFails`）：宿主慢不等于会话没了。
+     */
+    const settled = await Promise.race([
+      wakeWithRetry({
+        ctx, sessionId: to, text, log, steer: mode === 'steer',
+        appendMeta: (m) => appendSpoken('meta', m, { speak: false }),
+      }).then((r) => ({ r })).catch((e) => ({ r: { ok: false, reason: String(e?.message ?? e) } })),
+      new Promise((res) => {
+        const t = setTimeout(() => res({ timeout: true }), WAKE_TIMEOUT_MS);
+        t.unref?.();
+      }),
+    ]);
+    if (settled.timeout) {
+      log(`叫醒超时（宿主 ${WAKE_TIMEOUT_MS}ms 没回），这一拍放过 —— 那条消息可能稍后仍会送达`);
+      return false;
+    }
+    const r = settled.r;
     lastWakeOk = Boolean(r?.ok);
     if (r?.ok) {
       wakeCount += 1;
@@ -558,8 +739,30 @@ export function startLoop({
 
   const ticker = startTicker({
     everyMs: TICK_MS,
+    /**
+     * 钟抛错不再静默：打包后的 Desktop 里没有控制台，这类故障的表现只是"它不动了"。
+     * 落一行带栈到 `lift/debug.log`，排查时第一眼就能看到。
+     */
+    onError: (e) => appendLiftDebug(`tick 抛错：${e?.stack ?? e}`),
     tick: async () => {
       if (disposed) return;
+
+      // 心跳：每 60 秒一行。没有它「钟还在不在敲」只能靠猜（2026-11-10 实测的坑）。
+      const beat = Date.now();
+      if (beat - lastHeartbeatAt >= 60_000) {
+        lastHeartbeatAt = beat;
+        /**
+         * `lines` / `asr` 是 2026-11-10 加的第二把尺：黑听时"新台词一点记录都没有"，
+         * 光看心跳分不清是钟停了还是**转写根本没出整句**（本地 ASR 服务会休眠，
+         * 第一次请求失败后这一句就丢了）。`lines` 不涨 = 台词没进缓冲，与判档无关。
+         */
+        let asr = null;
+        try { asr = runner.status()?.listen ?? null; } catch { asr = null; }
+        appendLiftDebug(`心跳 mode=${mode} queue=${queue.length} lift=${liftLevelNow ?? '-'}`
+          + ` alarms=${liftAlarmTimes.length} lines=${asr?.total ?? '?'}`
+          + (asr?.error ? ` asr-err=${String(asr.error).slice(0, 60)}` : '')
+          + (asr?.paused ? ' asr-paused' : ''));
+      }
 
       // ⓪ 有阻塞等待者时**不许碰这条通道**。
       //    工具调用正卡在 `watch()` 里等用户说话，poll 是消费型的 —— 我们一吃，
@@ -571,6 +774,7 @@ export function startLoop({
         if (e?.role === 'user' && String(e.text ?? '').trim()) {
           queue.push({ text: String(e.text).trim(), at: Number(e?.at) || 0 });
           lastUserAt = Date.now();
+          lastUserSpokeAt = lastUserAt;
           wakesSinceUser = 0;
         }
       }
@@ -606,6 +810,7 @@ export function startLoop({
         wakesSinceUser = 0;
         consecutiveFails = 0;
         lastUserAt = Date.now();
+        lastUserSpokeAt = lastUserAt;
         deadTicks = 0;
         unansweredListenWakes = 0;
         log('窗口里有人说话 —— 退出仅监听');
@@ -785,6 +990,16 @@ export function startLoop({
       /** 是否处在用户分配的「盯着」任务里（这种时候不收工） */
       pinned,
       reason: stopReason,
+      /**
+       * 黑听抬头的档位（P2-B）：`look` = 抬头看着（还没到 `holdSec`）；
+       * `null` = 没抬头，按基线。`alarms` 是 5 分钟内的警觉次数（蓄水池）。
+       */
+      lift: {
+        level: liftLevelNow,
+        base: tuning?.lift?.level ?? 'glance',
+        alarms: liftAlarmTimes.length,
+        holdingSince: liftHoldFrom || null,
+      },
       // 当前投递目标（跟着窗口绑定走，见 `resolveTarget`）
       session: resolveTarget(),
       wakes: wakeCount,

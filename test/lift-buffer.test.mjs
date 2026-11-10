@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createLiftBuffer, frameBytes, LIFT_FPS } from '../src/lift-buffer.js';
+import { changedFraction, createLiftBuffer, frameBytes, LIFT_FPS } from '../src/lift-buffer.js';
 
 const W = 8;
 const H = 4;
@@ -178,4 +178,36 @@ test('clear：帧、字节、计数一起归零，取帧回到 empty', () => {
   assert.equal(st.bytes, 0);
   assert.equal(st.pushed, 0);
   assert.deepEqual(b.pickAt(T0), { ok: false, reason: 'empty' });
+});
+
+test('recent：给最后 n 帧（升序），n 越界不抛', () => {
+  const b = mk();
+  for (let i = 0; i < 5; i += 1) b.push({ buf: frame(i), at: T0 + i * 2000 });
+  assert.deepEqual(b.recent(2).map((f) => f.buf[0]), [3, 4]);
+  assert.equal(b.recent(0).length, 0);
+  assert.equal(b.recent(99).length, 5);
+  assert.equal(b.recent(-3).length, 0);
+});
+
+test('changedFraction：一样是 0，全变是 1，一半是一半', () => {
+  const a = Buffer.alloc(100, 0);
+  const same = Buffer.alloc(100, 0);
+  assert.equal(changedFraction(a, same, { stride: 1, threshold: 0 }), 0);
+
+  const all = Buffer.alloc(100, 100);
+  assert.equal(changedFraction(a, all, { stride: 1, threshold: 0 }), 1);
+
+  // 隔一个字节变一次 → 正好一半
+  const half = Buffer.from(a);
+  for (let i = 0; i < 100; i += 2) half[i] = 100;
+  assert.equal(changedFraction(a, half, { stride: 1, threshold: 0 }), 0.5);
+
+  // 阈值内的抖动不算"变了"
+  const jitter = Buffer.alloc(100, 3);
+  assert.equal(changedFraction(a, jitter, { stride: 1, threshold: 8 }), 0, '±3 的噪声不算动');
+});
+
+test('changedFraction：非 Buffer / 空缓冲按 1 算（宁严勿松）', () => {
+  assert.equal(changedFraction(null, Buffer.alloc(4)), 1);
+  assert.equal(changedFraction(Buffer.alloc(0), Buffer.alloc(0)), 1);
 });
