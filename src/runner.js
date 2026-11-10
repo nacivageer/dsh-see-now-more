@@ -649,6 +649,14 @@ export function createRunner({
     clearMissed,
     /** 最近一段的声学轨迹（仅监听的唤醒文案用） */
     trajectory: (a, b) => listener.trajectoryBetween(a, b),
+    /**
+     * 最近一段的台词（仅监听的抬头触发用）。
+     *
+     * **只读**：`between` 不消费缓冲，和出图时 `attachLines` 读的是同一份数据。
+     * 给 4000 字上限是为了 ASR 积压时别从新往旧丢 —— 一拍只有 2 秒的台词，
+     * 正常远到不了；真到 4000 字说明已经堵了，那时丢谁都是丢。
+     */
+    recentLines: (a, b) => listener.between(a, b, { maxChars: 4000 }),
     stop() { teardown('手动'); return { stopped: true }; },
     /**
      * 用户关掉了悬浮窗 = 明确表示"不看了"。

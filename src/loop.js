@@ -36,6 +36,8 @@ import { noteInterjected } from './interject.js';
 import { onSpeech, speechSubscribers } from './speech.js';
 import { estimateSpeechMs, nextProactiveAt } from './pacing.js';
 import { listenGap, trajectoryText } from './listen.js';
+import { createLiftPool } from './lift-pool.js';
+import { matchLiftTriggers } from './lift-triggers.js';
 
 /**
  * 用户插话的"同一拍"判定（毫秒）。
@@ -69,6 +71,14 @@ const LINE_WAKE_GAP_MS = 60_000;
  */
 const IDLE_WAKE_MS = 15 * 60_000;
 const TICK_MS = 2000;
+/**
+ * 台词扫描窗口往回多留多久。
+ *
+ * ASR 是异步的：一句在 t1 结束，转写完成可能已经过了一两拍。只看 [上一拍, 现在]
+ * 会把"迟到的定稿"漏掉 —— 漏掉的正是那句「你看这个」。重叠部分靠 t0 去重，
+ * 不会让同一句进池两次、也不会重复报同一次抬头。
+ */
+const LIFT_SCAN_OVERLAP_MS = 10_000;
 /** 连续这么多次叫不醒就停：会话没了还每 8 秒烧一次模型，是最贵的失败模式 */
 const WAKE_FAILS_MAX = 2;
 
@@ -351,8 +361,80 @@ export function startLoop({
   let lastAudioKind = null;
   let lastAudioWakeAt = 0;
   let unansweredListenWakes = 0;
+  /** 仅监听时的警觉池（10 分钟台词）。**每个循环一个**，不与其他会话共用。 */
+  const liftPool = createLiftPool();
+  /** 上次扫台词的时间：扫描窗口从它往回多留 `LIFT_SCAN_OVERLAP_MS`。 */
+  let lastLiftScanAt = Date.now();
+  /** 已经进过池的台词 `t0`（重叠扫描时防重放；只留最近一批）。 */
+  const liftPushedT0 = new Set();
+  /** 上一轮报过的抬头 hits：跨拍/跨窗口去重（`matchLiftTriggers` 的 `seen`）。 */
+  let liftSeen = [];
   /** 任务模式里已经记进 `missed.jsonl` 的出图序号（每张图只记一次） */
   let lastMissedSeq = 0;
+
+  /**
+   * 台词触发：定稿台词进池，强命中叫醒，弱命中只记一笔。
+   *
+   * 和 `maybeWakeFromAudio` 的分工：那条负责"声音形状变了"，这条负责"话里在叫人"。
+   * 台词更具体，所以这一拍先判它；**两条共用同一条 `listenGap` 退避线**（`lastAudioWakeAt`
+   * / `unansweredListenWakes`）——各开一条的话，同一拍能连着叫两次。
+   *
+   * 只认定稿（`partial === false`）：快照是"还在说"的中间版本，先报一次、定稿再报一次，
+   * 等于同一句话抬头两回。
+   */
+  async function maybeWakeFromLift() {
+    if (tuning?.lift?.enabled === false) return;
+
+    const now = Date.now();
+    const lines = runner.recentLines?.(lastLiftScanAt - LIFT_SCAN_OVERLAP_MS, now) ?? [];
+    lastLiftScanAt = now;
+
+    const finals = lines
+      .filter((l) => l && l.partial === false && typeof l.text === 'string' && l.text.trim())
+      .sort((a, b) => Number(a.t0) - Number(b.t0));
+    const fresh = finals.filter((l) => !liftPushedT0.has(l.t0));
+
+    for (const line of fresh) {
+      liftPushedT0.add(line.t0);
+      liftPool.push({
+        at: now,
+        wall: Number(line.t0),
+        kind: 'speech',
+        text: line.text.trim(),
+        src: 'listen',
+      });
+    }
+    // 重叠扫描只需要挡住"最近这几拍的重放"，不必留整场
+    while (liftPushedT0.size > 200) liftPushedT0.delete(liftPushedT0.values().next().value);
+
+    if (!fresh.length) return;
+
+    const { level, hits } = matchLiftTriggers(
+      fresh.map((l) => ({ text: l.text.trim(), startMs: Number(l.t0), endMs: Number(l.t1) })),
+      { seen: liftSeen },
+    );
+    if (!hits.length) return;
+    liftSeen = [...hits, ...liftSeen].slice(0, 8);
+
+    // 「警觉」只记一笔：不取帧、不叫醒（四档定义见 docs/tasks/see-now-listen-lift.md）
+    if (level !== 'glance') {
+      log(`[lift] 弱命中 ${hits.length} 条（${hits[0].reason}），只记一笔`);
+      return;
+    }
+
+    // 被退避挡掉的这一拍**不**加 unanswered —— 那不是"叫了没人理"
+    if (now - lastAudioWakeAt < listenGap(unansweredListenWakes)) return;
+    lastAudioWakeAt = now;
+    unansweredListenWakes += 1;
+
+    const clock = new Date(now).toLocaleTimeString('zh-CN', { hour12: false });
+    const text = `[黑听] ${clock} · 听到「${hits[0].text}」（${hits[0].reason}）。\n`
+      + `最近十分钟的台词：\n${liftPool.summary()}\n`
+      + '值得看就 `see_now({action:"watch"})`；不值得就什么都别做，我继续听。'
+      + lastSaidHint();
+    const ok = await wake(text);
+    if (!ok) unansweredListenWakes = Math.max(0, unansweredListenWakes - 1);
+  }
 
   /**
    * 「值不值得抬头」：插件只摆事实（最近 60 秒的轨迹），**预测和取舍交给模型**。
@@ -493,7 +575,8 @@ export function startLoop({
       //      这一拍除了"听"什么都不做。
       if (mode === 'listen') {
         if (!queue.length) {
-          // 没人说话：看看耳朵有没有听到值得抬头的东西
+          // 没人说话：先看台词里有没有人在叫人，再看声音形状值不值得抬头
+          await maybeWakeFromLift();
           await maybeWakeFromAudio();
           return;
         }

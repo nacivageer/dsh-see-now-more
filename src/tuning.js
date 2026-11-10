@@ -90,6 +90,24 @@ export const LISTEN_DEFAULTS = Object.freeze({
 /** 可用节奏。和 runner.js 的 PACES 同步，但不在模块层 import（避免环形依赖）。 */
 export const PACES_KEYS = Object.freeze(['calm', 'normal', 'dense', 'game-economic']);
 
+/**
+ * 「黑听抬头」（lift）段的默认值（`see-now.json` 的 `lift` 段）。
+ *
+ * 四档的机读名（`lift.jsonl` 的 `level` 字段，和 `see-now-listen-lift.md` 一一对应）：
+ *   alarm = 警觉（只记一笔）→ glance = 瞥（取 1 帧）→ look = 看（叫醒）→ chase = 追（连续看）
+ *
+ * `holdSec`：抬头之后多久自动回落。**起算点 = 最后一次语音/对话结束**，不是抬头那一刻
+ * （否则长静音里的一次抬头会立刻回）。`0` = 关掉自动回落（一直保持到收工线）。
+ */
+export const LIFT_DEFAULTS = Object.freeze({
+  enabled: true,
+  level: 'glance',
+  holdSec: 15,
+});
+
+/** 可用档位。顺序就是成本梯度，越往后越贵。 */
+export const LIFT_LEVELS = Object.freeze(['alarm', 'glance', 'look', 'chase']);
+
 function dshHome(env) {
   return env.DSH_HOME || join(env.USERPROFILE || env.HOME || homedir(), '.dsh');
 }
@@ -143,6 +161,41 @@ function readListen(raw) {
     out.liveStep = out.maxSeg;
   }
   return { listen: out, warnings: bad };
+}
+
+/**
+ * `lift` 段：黑听抬头的开关、默认档与回落时间。
+ *
+ * 这里只做「配置怎么读、越界怎么办」；机制本身（纯函数）在
+ * `lift-pool.js` / `lift-triggers.js`。写成非法值时退回默认并记一条 warn ——
+ * 配置不该把黑听弄停。
+ */
+function readLift(raw) {
+  const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  const out = { ...LIFT_DEFAULTS };
+  const bad = [];
+
+  if (src.enabled !== undefined) {
+    if (typeof src.enabled === 'boolean') out.enabled = src.enabled;
+    else bad.push('lift.enabled 只能是 true / false，已用默认 true');
+  }
+
+  if (src.level !== undefined) {
+    const want = typeof src.level === 'string' ? src.level.trim() : '';
+    if (LIFT_LEVELS.includes(want)) out.level = want;
+    else bad.push(`lift.level 只能是 ${LIFT_LEVELS.join(' / ')}（警觉/瞥/看/追），已用默认 glance`);
+  }
+
+  if (src.holdSec !== undefined) {
+    const v = clampInt(src.holdSec, 0, 600, LIFT_DEFAULTS.holdSec);
+    // 比的是「原值有没有被接受」，不是「等不等于默认」—— 0 是合法值（关掉自动回落）
+    if (Number(src.holdSec) !== v) {
+      bad.push('lift.holdSec 必须是 0–600 的整数（秒，0 = 关掉自动回落），已用默认 15');
+    }
+    out.holdSec = v;
+  }
+
+  return { lift: out, warnings: bad };
 }
 
 /**
@@ -233,6 +286,9 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
   const listenCfg = readListen(raw.listen);
   warnings.push(...listenCfg.warnings);
 
+  const liftCfg = readLift(raw.lift);
+  warnings.push(...liftCfg.warnings);
+
   const session = readBoundSession(raw, warnings);
 
   /**
@@ -275,6 +331,7 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     idleCaptureMin,
     scoreNormalize,
     listen: listenCfg.listen,
+    lift: liftCfg.lift,
     path,
     warnings,
   };
