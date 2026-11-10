@@ -38,6 +38,7 @@ import { estimateSpeechMs, nextProactiveAt } from './pacing.js';
 import { listenGap, trajectoryText } from './listen.js';
 import { createLiftPool } from './lift-pool.js';
 import { matchLiftTriggers } from './lift-triggers.js';
+import { appendLiftLog } from './lift-log.js';
 
 /**
  * 用户插话的"同一拍"判定（毫秒）。
@@ -426,6 +427,27 @@ export function startLoop({
     if (now - lastAudioWakeAt < listenGap(unansweredListenWakes)) return;
     lastAudioWakeAt = now;
     unansweredListenWakes += 1;
+
+    /**
+     * 留底自检（P2-A）：只记一行，**不取帧、不改任何行为**。
+     *
+     * 验收要的是「台词 t0 能取回那一刻的帧、偏差 ≤1 秒」，而 P2-A 不暴露取帧 action、
+     * 四档也还没接 —— 不记这一行，运行态就永远没有证据。接上四档后这一行可以删。
+     */
+    try {
+      // 用户关掉留底时别每命中一次就写一行「没取到」
+      if (runner.lift?.()?.enabled !== false) {
+        const probe = runner.frameAt?.(Number(hits[0].startMs));
+        if (probe) {
+          const msg = `[lift] 台词 t0 → 帧 ${probe.ok ? `偏差 ${probe.deltaMs}ms` : `没取到（${probe.reason}）`}`;
+          log(msg);
+          // 控制台在打包后的 Desktop 里看不见，所以同时落一行纯文本（P2-B 换 lift.jsonl）
+          appendLiftLog(probe.ok
+            ? `${msg}  t0=${hits[0].startMs} frameAt=${probe.frame.at} delta=${probe.deltaMs}`
+            : `${msg}  t0=${hits[0].startMs}`);
+        }
+      }
+    } catch { /* 留底不是必选项，自检失败不许影响抬头 */ }
 
     const clock = new Date(now).toLocaleTimeString('zh-CN', { hour12: false });
     const text = `[黑听] ${clock} · 听到「${hits[0].text}」（${hits[0].reason}）。\n`

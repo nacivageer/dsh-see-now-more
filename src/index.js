@@ -348,6 +348,31 @@ function listenLine(l) {
 }
 
 /**
+ * 「留底」一行（黑听抬头的 P2-A）。
+ *
+ * 必须**分开说三件事**，不然「怎么取不到那一刻的画面」只能靠猜：
+ *   - 关着（`lift.enabled:false`）→ 明确说配置项，别只写"没在留底"
+ *   - 在留底 → 帧数 / 内存 / 窗口（验收第 1 条要的就是「留底中：N 帧 / ≈M MB」）
+ *   - 没在采 → 为什么（没进仅监听 / 采集挂了，挂了的把错误原文带上）
+ *
+ * `stale`（最后一帧很久以前）也要说：帧还在、但已经不是"现在"了，
+ * 那种状态下「瞥」拿到的会是几分钟前的画面 —— 必须看得见。
+ */
+function liftLine(l) {
+  // 关掉时一个字都不加（验收第 4 条：`lift.enabled:false` 之后 status 不显示留底，
+  // 行为回到 P2-A 之前）。想确认配置有没有生效看 `status` 的 meta.lift。
+  if (!l || !l.enabled) return null;
+  if (!l.capturing) {
+    return l.error
+      ? `留底：没在采 —— ${l.error}`
+      : '留底：没在采（进仅监听才留底；看画面时用不到它）';
+  }
+  const stale = l.stale ? `，最后一帧 ${l.ageSec}s 前（采集可能断了）` : '';
+  return `留底中：${l.frames} 帧 / ≈${l.mb} MB`
+    + `（最近 ${l.windowSec} 秒，${l.fps} fps${stale}）`;
+}
+
+/**
  * 变化面积 → 人话。分级不是为了好看：<0.1% 的两位小数是噪声，
  * 80% 后面跟两个小数位也没有信息量。上限截到 100% 是因为逐像素阈值统计
  * 在整屏换页时会给出 99.x，写成 100% 更直白。
@@ -645,6 +670,8 @@ async function registerAll(ctx) {
     mode: tuning.mode,
     // 亮度归一 + 黑边补偿（see-now.json 的 scoreNormalize，默认开）
     scoreNormalize: tuning.scoreNormalize,
+    // 黑听抬头（see-now.json 的 lift 段）：enabled 决定仅监听时要不要留底
+    lift: tuning.lift,
   });
   disposers.push(() => runner.stop());
 
@@ -1474,14 +1501,33 @@ async function registerAll(ctx) {
         lp?.enterListen?.();
         lp?.setPinned?.(false);
         runner.stopVision('模型进仅监听');
-        const r = await runner.listenOnly();
+        /**
+         * 留底抓哪一块：看过画面就沿用他框的那块（瞥到的该和看的一致），
+         * 没看过就用落盘的选择。**别让这里抓整屏、watch 抓一小块** —— 模型会以为
+         * 「瞥到的那一格」是用户盯的东西。
+         */
+        const before = runner.status();
+        const region = before.lastSource?.kind === 'screen'
+          ? before.lastSource.region ?? null
+          : loadRegion();
+        const r = await runner.listenOnly({ region });
         syncFocus();
         const ok = r?.ok !== false;
+        /**
+         * 留底那行**读实时状态**，不读 `listenOnly` 的返回值：那个只有
+         * `{enabled, ok, engine, source}`，没有 `capturing` —— 拿它判会永远显示「没在采」
+         * （2026-11-10 运行态实测踩到）。留底关着时这段一个字都不加，回复和 P2-A 之前一样。
+         */
+        const liftNow = runner.status().lift;
+        const liftText = ok ? liftLine(liftNow) : null;
         return {
           text: ok
             ? '进入仅监听：画面停了，耳朵还开着。听到值得看的我会叫你；要看就说一声。'
+              + (liftText
+                ? `\n${liftText}\n（取帧按台词的时间戳走；那一刻不在窗口里会直说「没了」，不拿当前帧冒充。）`
+                : '')
             : `进入仅监听，但耳朵没打开：${r?.reason ?? '未知原因'}（画面也停了）`,
-          meta: { ok, listening: Boolean(r?.ok), mode: 'listen' },
+          meta: { ok, listening: Boolean(r?.ok), mode: 'listen', lift: liftNow },
         };
       }
 
@@ -1583,6 +1629,8 @@ async function registerAll(ctx) {
         const s = runner.status();
         const voice = voiceState();
         const lp = loop?.state() ?? null;
+        // 关掉留底时这里是 null，status 一行都不多（验收第 4 条）
+        const liftText = liftLine(s.lift);
         return {
           text: (s.running
             ? `在看 ${s.source?.kind} @${s.size?.[0]}×${s.size?.[1]}（${s.quality}，${s.since}s，收到 ${s.frames} 帧，留帧 ${s.stats?.kept ?? 0}，出图 ${s.stats?.sheets ?? 0}）`
@@ -1624,6 +1672,8 @@ async function registerAll(ctx) {
                 : '没配 —— 写 ~/.dsh/voice.json 的 {"adapter":"…"} 才有声音'}`
             // 听声音（视频里的台词）：**"它不知道台词"时第一个要看的就是这一行**
             + `\n听声音：${listenLine(s.listen)}`
+            // 留底（黑听抬头 P2-A）：帧数 / 内存 / 采集是否还活着
+            + (liftText ? `\n${liftText}` : '')
             // 宿主 cookie 拥挤度：只快满了才出现（满了之后插件根本起不来，提醒不到）
             + cookieWarnLine(),
           meta: { ...s, voice, loop: lp, window: windowReport() },

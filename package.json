@@ -60,6 +60,7 @@
     "test": "node --test",
     "install-dev": "node scripts/install-dev.mjs",
     "check": "node scripts/install-dev.mjs --check",
+    "probe:lift": "node scripts/lift-buffer-probe.mjs",
     "sync:window": "node scripts/sync-window.mjs",
     "check:window": "node scripts/sync-window.mjs --check"
   },

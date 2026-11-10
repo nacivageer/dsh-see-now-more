@@ -320,6 +320,8 @@ export function captureArgs({
 
   return {
     done,
+    /** 子进程 pid：测量（CPU 归因）和"进程收干净了没"都要它。 */
+    pid: child.pid ?? null,
     stop() {
       try { child.kill('SIGKILL'); } catch { /* 已经没了 */ }
     },

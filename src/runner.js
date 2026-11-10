@@ -27,6 +27,10 @@ import { chatWatcherShared, enterChatWait, markDelivered, markRelaySeen } from '
 import { noteInterjected } from './interject.js';
 import { openWindow, pidStamp, windowAlive, setWindowHidden } from './window.js';
 import { createListener } from './listen.js';
+import {
+  createLiftBuffer, LIFT_CAPTURE_FPS, LIFT_FPS, LIFT_HEIGHT, LIFT_KEEP_EVERY, LIFT_WIDTH,
+  LIFT_WINDOW_SEC,
+} from './lift-buffer.js';
 
 /**
  * 四档清晰度。数字是画布像素（**不含**底部音轨条），实际 token 见 src/tokens.js。
@@ -202,6 +206,16 @@ export function createRunner({
    * 调用方显式传 `opts.scoreNormalize` 时以调用方为准。
    */
   scoreNormalize = true,
+  /**
+   * 黑听抬头（`see-now.json` 的 `lift` 段）。这一棒只用 `enabled`：
+   * 它决定「仅监听时要不要留底」；`level` / `holdSec` 留给四档闭环。
+   */
+  lift = null,
+  /**
+   * 采集函数（默认 `capture.js` 的 `spawnFrames`）。**只为测试**：留底那一路和 `start()`
+   * 都从这里起，测试可以塞一个假采集，不必真的开屏 —— 否则每个生命周期用例都要跑 ffmpeg。
+   */
+  spawnCapture = spawnFrames,
 } = {}) {
   let pipeline = null;   // 当前（或刚停的）引擎 —— 停采集后仍留着，好把队列里剩的图发完
   let running = false;
@@ -223,6 +237,197 @@ export function createRunner({
    * 开始看就开听，收工就停，中途换清晰度/换 region 也不用重启（音频跟画面无关）。
    */
   const listener = createListener({ ctx, log, listen });
+
+  /* ------------------------------------------------------------ 黑听留底（P2-A） */
+  /**
+   * 「瞥」要有画面可给：仅监听时后台以 0.5 fps 采一路，只留最近 30 秒的缩略帧
+   * （环形缓冲本身在 `lift-buffer.js`，这里只管采集进程的生死）。
+   *
+   * 三条边界，都不是随手定的：
+   *
+   * ① **不进 pipeline**：这些帧是给「按 t0 回取」用的，不是给模型看图用的 ——
+   *    不拼图、不落盘、不花 token。喂给 pipeline 的话队列/出图/唤醒全会被它搅乱。
+   * ② **与看画面互斥**：`start()` 一进来就停掉并清空（两路同时抓屏是白烧 CPU，而且
+   *    上一场的帧留着只会让「瞥」拿旧画面冒充现在）。
+   * ③ **起不来不嚎**：留底是可选能力，失败只记进 status 的 `lift.error`；听声音照旧。
+   */
+  const liftOn = lift?.enabled !== false;
+  /** 环形缓冲实例：懒建（没进过仅监听就不占内存），停的时候 `clear` 而不销毁。 */
+  let liftBuf = null;
+  /** 留底那一路的采集句柄。null = 没在采。 */
+  let liftRun = null;
+  /** 这一次留底抓的是哪个源（重试要沿用，不能中途换地方）。 */
+  let liftSrc = null;
+  let liftError = null;
+  let liftStartedAt = 0;
+  /** 本次留底一共收到多少帧（含滑出窗口的）：`0 帧` 和 `15 帧` 是两种问题。 */
+  let liftFrames = 0;
+  /** 用户**想要**留底吗（进仅监听 = 要，开始看画面 / 收工 = 不要）。重试看它。 */
+  let liftWanted = false;
+  let liftStarting = false;
+  let liftRetry = null;
+  let liftRetries = 0;
+
+  const liftBuffer = () => (liftBuf ??= createLiftBuffer({
+    windowSec: LIFT_WINDOW_SEC, fps: LIFT_FPS, width: LIFT_WIDTH, height: LIFT_HEIGHT,
+  }));
+
+  /**
+   * 留底抓什么。
+   *
+   * 屏幕源沿用上一次的 region（框过一块的人，瞥到的也该是那一块）；`obs` / `camera`
+   * 就沿用那个设备。**文件源不沿用** —— 回放的文件不会因为黑听继续往前走，
+   * 用户此刻在屏幕上看什么才是「那一刻的画面」。
+   */
+  function liftSource(regionArg) {
+    const prev = lastSource ?? source;
+    if (prev && (prev.kind === 'obs' || prev.kind === 'camera')) return { ...prev };
+    const region = regionArg !== undefined
+      ? regionArg
+      : (prev?.kind === 'screen' ? prev.region ?? null : null);
+    if (region) return { kind: 'screen', region: { ...region }, engine: 'gdigrab' };
+    return { kind: 'screen' };
+  }
+
+  function scheduleLiftRetry(why) {
+    if (!liftWanted || liftRetry) return;
+    if (liftRetries >= 3) {
+      log(`留底：${why}，重试 3 次仍不行 —— 先停着（重新进仅监听会再试）`);
+      return;
+    }
+    liftRetries += 1;
+    const wait = 3000 * liftRetries;
+    liftRetry = setTimeout(() => {
+      liftRetry = null;
+      if (liftWanted) void startLiftCapture({ src: liftSrc });
+    }, wait);
+    liftRetry.unref?.();
+    log(`留底：${why}，${wait / 1000}s 后重试（第 ${liftRetries} 次）`);
+  }
+
+  async function startLiftCapture({ region = undefined, src: fixedSrc = null } = {}) {
+    if (!liftOn) return { enabled: false, ok: false, reason: 'disabled' };
+    if (liftRun || liftStarting) return { enabled: true, ok: true, reason: 'already' };
+    liftWanted = true;
+    liftStarting = true;
+    try {
+      const src = fixedSrc ?? liftSource(region);
+      /**
+       * **刻意不走 `pickScreenEngine()`**。
+       *
+       * 它给的是 ddagrab（桌面复制 API），而 ddagrab 是「桌面有变化才出帧」的路子：
+       * 静止屏幕上 12 秒只给 1–2 帧（2026-11-10 实测）。留底要的是**固定节拍** ——
+       * 没有帧进来，「那一刻还在不在」就会被误判成「没了」。gdigrab 在 2 fps 下实测
+       * 0.50s 一帧，整屏和 region 都一样稳；顺带省掉一次 400ms 的探测 spawn。
+       */
+      const engine = process.platform === 'darwin' ? 'avfoundation' : 'gdigrab';
+      if (!liftWanted) return { enabled: true, ok: false, reason: 'stopped' };
+      const buf = liftBuffer();
+      /**
+       * 尺寸：整屏 800×450；**框过一块时按那块的比例算**（`cellSize`，和看画面时同一套），
+       * 否则竖屏区域会被拉成 16:9 —— 「瞥」一眼看到的形状是错的，比糊更误导。
+       */
+      const [w, h] = src.region ? cellSize(LIFT_WIDTH, src.region) : [LIFT_WIDTH, LIFT_HEIGHT];
+      const run = spawnCapture({
+        source: src,
+        width: w,
+        height: h,
+        fps: LIFT_CAPTURE_FPS,
+        ffmpegPath,
+        engine,
+        onFrame: (f) => {
+          /**
+           * 抽稀：2 fps 采集 → 0.5 fps 留底。**按帧号取模，不按时间** ——
+           * 丢一两帧不会让相位漂；`i` 缺失（测试里的假采集）时全留。
+           */
+          const idx = Number.isFinite(f?.i) ? f.i : 0;
+          if (idx % LIFT_KEEP_EVERY !== 0) return;
+          liftFrames += 1;
+          try {
+            /**
+             * 帧时间是**收到这一帧的墙上时间**（epoch ms）—— 和 ASR 的 `t0/t1` 同一个时钟。
+             * 别改成 `i / fps`：那会假设 ffmpeg 严格按 2 秒节拍吐帧，实测 ddagrab
+             * 在显示器休眠/全屏切换后会有几百毫秒的漂移，按它算反而对不上台词。
+             */
+            buf.push({ buf: f.buf, width: w, height: h, at: Date.now(), i: f.i ?? null });
+          } catch (e) {
+            // 一帧坏了不能让整条留底停摆（与 `start()` 里 push 兜底同一个口径）
+            liftError = `留底：收帧失败（${e?.message ?? e}）`;
+          }
+        },
+        onStderr: (s) => { if (process.env.DSH_SEE_NOW_DEBUG) log(String(s).trim()); },
+      });
+      liftRun = run;
+      liftSrc = src;
+      liftStartedAt = Date.now();
+      liftError = null;
+      liftRetries = 0;
+      const where = src.region ? `region ${src.region.w}×${src.region.h}` : '整屏';
+      log(`留底：开始（${w}×${h}，采 ${LIFT_CAPTURE_FPS}fps → 留 ${LIFT_FPS}fps，${where}）`);
+      run.done.then((r) => {
+        if (liftRun !== run) return;             // 我们自己停的，不是故障
+        liftRun = null;
+        if (r?.frames) log(`留底：ffmpeg 退出（${r.frames} 帧 / ${Math.round(r.ms / 1000)}s）`);
+        scheduleLiftRetry('ffmpeg 退出');
+      }).catch((e) => {
+        if (liftRun !== run) return;
+        liftRun = null;
+        liftError = `留底采集：${e?.message ?? e}`;
+        log(liftError);
+        scheduleLiftRetry('采集失败');
+      });
+      return { enabled: true, ok: true, engine, source: src };
+    } finally {
+      liftStarting = false;
+    }
+  }
+
+  /**
+   * 停留底。
+   *
+   * `clear` 由调用方按语义给：**开始看画面 / 收工要清**（那些帧是上一场的，留着会冒充
+   * 现在）；采集自己挂了不算 —— 那时旧帧还在时间窗里，`pickAt` 会照实说「太旧」。
+   */
+  function stopLiftCapture({ clear = false, why = '' } = {}) {
+    const was = Boolean(liftRun);
+    liftWanted = false;
+    if (liftRetry) { clearTimeout(liftRetry); liftRetry = null; }
+    const run = liftRun;
+    liftRun = null;
+    run?.stop();
+    liftFrames = 0;
+    liftStartedAt = 0;
+    if (clear && liftBuf) liftBuf.clear();
+    if (was && why) log(`留底：停（${why}）`);
+    return { ok: true };
+  }
+
+  /** status 用的账本。没开留底时只给 `enabled:false`，不去建缓冲实例。 */
+  function liftStatus() {
+    if (!liftOn) return { enabled: false, capturing: false };
+    const st = liftBuffer().stats();
+    return {
+      enabled: true,
+      level: lift?.level ?? 'glance',
+      capturing: Boolean(liftRun),
+      /** 留底那一路 ffmpeg 的 pid（测量 CPU、确认进程收干净都要它） */
+      pid: liftRun?.pid ?? null,
+      frames: st.frames,
+      mb: st.mb,
+      bytes: st.bytes,
+      spanSec: st.spanSec,
+      ageSec: st.ageSec,
+      stale: st.stale,
+      fps: LIFT_FPS,
+      windowSec: LIFT_WINDOW_SEC,
+      // 实际尺寸（region 模式下不是 800×450，见 lift-buffer 的 stats）
+      size: [st.width, st.height],
+      framesSeen: liftFrames,
+      sinceSec: liftStartedAt ? Math.round((Date.now() - liftStartedAt) / 1000) : 0,
+      error: liftError,
+    };
+  }
+
   /**
    * 上一张图的时间窗末尾（epoch ms）。台词按"上一张到现在"取，
    * 不能按这一张自己的 from/to —— 静止屏幕上两张之间隔 60 秒，中间说的话会整段漏掉。
@@ -315,6 +520,8 @@ export function createRunner({
     running = false;
     source = null;
     stoppedAt = Date.now();
+    // 留底跟着收工：`stop` 之后「取那一刻」不该再拿到上一场的帧（验收第 5 条）
+    stopLiftCapture({ clear: true });
     // 采集收工，声音也一起停：一个抓回环的进程常驻在后台，用户是看不见的
     listener.stop('采集收工');
     if (why) log(`收工：${why}`);
@@ -414,6 +621,14 @@ export function createRunner({
     // 走到这里就是"明确要开始看"（watch 的自动重启已经在前面被硬闸挡住了）。
     hungUp = false;
     endedSource = null;
+    /**
+     * 开始看画面 = 留底那一路必须停。
+     *
+     * 两个理由：① 两路同时抓屏是白烧 CPU（这棒的原则是黑听才付这笔钱）；
+     * ② 那 15 帧是上一场「只听」时的画面，留着只会让「瞥」拿旧画面冒充现在。
+     * **放在 running 的早退之后**：已经在看时再调 start 不该把别人的缓冲清掉。
+     */
+    stopLiftCapture({ clear: true, why: '开始看画面' });
     // **窗被用户关掉之后，这里必须复位**：`windowState` 缓存着 `{ok:true}`，
     // `windowOpened` 也还是 true —— 不复位的话下一次 watch 会（a）不再开窗，
     // （b）循环立刻又把"窗没了"判成用户关窗，落第二条挂断说明。
@@ -466,7 +681,7 @@ export function createRunner({
     source = s;
     lastSource = s;
     startedAt = Date.now();
-    run = spawnFrames({
+    run = spawnCapture({
       source: s,
       width: p.constants.width,
       height: p.constants.height,
@@ -558,13 +773,26 @@ export function createRunner({
     return { ok: true, running, listening: listener.state().enabled };
   }
 
-  /** 只起耳朵、不抓画面。幂等：已经在听就返回 `already`。 */
-  async function listenOnly() {
+  /**
+   * 只起耳朵、不抓画面。幂等：已经在听就返回 `already`。
+   *
+   * **顺便把留底那一路拉起来**（`lift.enabled` 关着时跳过）：黑听要有「那一刻的画面」
+   * 可给，靠的就是它。留底只在耳朵真起来了之后才起 —— 没耳朵就没有触发，
+   * 采一路画面纯属白烧 CPU。
+   *
+   * @param {{region?:{x:number,y:number,w:number,h:number}|null, audio?:boolean}} [o]
+   *   `region` 只在**这一场没看过画面**（没有 `lastSource`）时才用得上：框过一块的人，
+   *   瞥到的也该是那一块。`audio:false` 只给测试和测量用（不拉 ASR 进程）。
+   */
+  async function listenOnly({ region = undefined, audio = true } = {}) {
     // 用户明确要耳朵了：把「只看」那个记忆态改回来，否则之后 watch 还是没声
-    modeWanted = 'both';
-    const r = await listener.start();
-    if (!r?.ok) log(`听声音没开：${r.reason}`);
-    return r;
+    if (audio) modeWanted = 'both';
+    const r = audio ? await listener.start() : { ok: true, enabled: false, skipped: true };
+    if (audio && !r?.ok) log(`听声音没开：${r.reason}`);
+    const lifted = r?.ok
+      ? await startLiftCapture({ region })
+      : { enabled: liftOn, ok: false, reason: 'no-audio' };
+    return { ...r, lift: lifted };
   }
 
   /** 上一张记进 `missed.jsonl` 的结束时间（秒，从采集起点算）；空档标记用 */
@@ -657,6 +885,23 @@ export function createRunner({
      * 正常远到不了；真到 4000 字说明已经堵了，那时丢谁都是丢。
      */
     recentLines: (a, b) => listener.between(a, b, { maxChars: 4000 }),
+    /**
+     * 「`t0` 那一刻」的帧（P2-A 只做内部接口，四档闭环来调）。
+     *
+     * 返回 `{ok:true, frame, deltaMs}` 或
+     * `{ok:false, reason:'disabled'|'empty'|'too-old'|'too-new'|'far'}`。
+     * **`ok:false` 时调用方不许拿当前帧顶上** —— 机制文档「风险」第一条：
+     * 只报文字 + 说明「那一刻的画面没了」，比给一张假的强。
+     *
+     * @param {number} t0 epoch ms（ASR 的 `line.t0`）
+     * @param {{maxDeltaMs?:number}} [opts] 不传就用缓冲的默认容差（1.5 秒）
+     */
+    frameAt(t0, opts) {
+      if (!liftOn) return { ok: false, reason: 'disabled' };
+      return liftBuffer().pickAt(t0, opts);
+    },
+    /** 留底账本（status 已经带了，这里给脚本/测试一个直读口） */
+    lift: () => liftStatus(),
     stop() { teardown('手动'); return { stopped: true }; },
     /**
      * 用户关掉了悬浮窗 = 明确表示"不看了"。
@@ -1050,6 +1295,8 @@ export function createRunner({
         // 听声音的状态。"它好像没听见台词"时第一个要看的就是它：
         // enabled=false 的 reason 会直接说是缺服务、缺 Python、还是抓不到回环设备
         listen: listener.state(),
+        // 黑听留底：帧数 / 内存 / 最后一帧多久以前（采集断了但帧还在时，status 必须看得出来）
+        lift: liftStatus(),
       };
     },
   };
