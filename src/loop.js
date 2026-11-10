@@ -531,7 +531,23 @@ export function startLoop({
       fresh.map((l) => ({ text: l.text.trim(), startMs: Number(l.t0), endMs: Number(l.t1) })),
       { seen: liftSeen },
     );
-    if (!hits.length) return;
+    if (!hits.length) {
+      /**
+       * 有整句、却没命中：把**这两句的前 40 字**写进 `debug.log`（2026-11-11 拍板要的）。
+       *
+       * 没有它，「有 fresh 但没记录」永远分不清是**转写错了**还是**词表漏了** ——
+       * 2026-11-10 晚就卡在这里：同一句「你看这个」转写有时是「你看这个。」、有时
+       * 干脆没有强触发词，而日志只剩一个 `fresh=1`。
+       *
+       * 代价要明说：`debug.log` 从此会留下**没命中**的台词片段（命中句本来就进
+       * `lift.jsonl`）。只写这一种情况、只写 40 字、只在有整句时写。
+       */
+      const sample = fresh.slice(-2)
+        .map((l) => String(l.text).replace(/\s+/g, ' ').trim().slice(0, 40))
+        .join(' / ');
+      appendLiftDebug(`lift-miss fresh=${fresh.length} text=${sample}`);
+      return;
+    }
     liftSeen = [...hits, ...liftSeen].slice(0, 8);
 
     const t0 = Number(hits[0].startMs);
