@@ -260,3 +260,6 @@
   00:17:16 `lift-miss` 记到 `text=你刚刚看见了呀？`，新诊断当场派上用场。
 - 2026-11-11 00:2x 注意：**会话 id 又换了**（`bb4c6ba7` → `66abcc69`，00:12:04 新建）。
   `see-now.json` 的 `session` 已指向 `66abcc69`；换对话后要先对 `see_now status` 的「绑定会话」。
+- 2026-11-11 00:2x P2-B 收尾发版 **0.1.1-more.7**：annotated tag + prerelease
+  （`https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.7`），`main` 推上去了。
+  本会话（`bb4c6ba7`）记忆库归档：4 段 / 1 跨链。绑定改回 `bb4c6ba7`（`66abcc69` 是另一个对话）。
