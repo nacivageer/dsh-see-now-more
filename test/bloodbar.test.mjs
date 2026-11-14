@@ -116,7 +116,7 @@ test('bloodbarLine：没框 / 未采 / 有读数 / 框里没有血条', () => {
   assert.match(bloodbarLine({ region: null, threshold: 0.3 }), /没框/);
   assert.equal(
     bloodbarLine({ region: { x: 1, y: 2, w: 3, h: 4 }, threshold: 0.3 }),
-    '血条：框 1,2,3,4（阈值 30%）· 未采（P1a 只框不算）',
+    '血条：框 1,2,3,4（阈值 30%）· 未采（调 `read:true` 读一次）',
   );
   assert.equal(
     bloodbarLine({ region: { x: 1, y: 2, w: 3, h: 4 }, threshold: 0.3 }, { ok: true, ratio: 0.62, below: false }),
@@ -155,6 +155,36 @@ test('通道数只认 3/4；其他一律 bad-frame', () => {
   const px = new Uint8Array(4 * 4 * 3).fill(255);
   assert.equal(ratioFromPixels(px, { width: 4, height: 4, channels: 2 }).reason, 'bad-frame');
   assert.equal(ratioFromPixels(px, { width: 4, height: 4, channels: 3 }).ok, true);
+});
+
+test('band 模式：上下暗边被剔除，只按亮行带里填了几列算', () => {
+  // 40×20 的框：血条只占中间 10 行（y5..14），左半填充；上下 5 行是暗边。
+  const f = frame(40, 20, (x, y) => (y >= 5 && y < 15 && x < 20 ? [255, 255, 255] : [30, 30, 30]));
+  const full = ratioFromRgba(f, { width: 40, height: 20 });
+  const band = ratioFromRgba(f, { width: 40, height: 20, mode: 'band' });
+  assert.equal(full.ratio, 0.25, '全框占比被暗边稀释');
+  assert.equal(band.ok, true);
+  assert.equal(band.ratio, 0.5, '行带内左半填充');
+  assert.deepEqual(band.band, { top: 5, bottom: 14, left: 0, right: 19 });
+});
+
+test('band 模式：数字在中间不影响左右端点', () => {
+  // 满血白条带，中间 8 列被数字压掉下半（每列 50% 亮）——端点法仍判满。
+  const f = frame(40, 20, (x, y) => {
+    const inBand = y >= 5 && y < 15;
+    if (!inBand) return [30, 30, 30];
+    if (x >= 16 && x < 24 && y >= 10) return [20, 20, 20];
+    return [255, 255, 255];
+  });
+  const band = ratioFromRgba(f, { width: 40, height: 20, mode: 'band' });
+  assert.equal(band.ratio, 1, '数字列不碰左右端点，仍算满血');
+});
+
+test('band 模式：全暗 / 彩色 → gone', () => {
+  const dark = frame(40, 20, () => [20, 20, 20]);
+  assert.equal(ratioFromRgba(dark, { width: 40, height: 20, mode: 'band' }).reason, 'gone');
+  const red = frame(40, 20, () => [255, 0, 0]);
+  assert.equal(ratioFromRgba(red, { width: 40, height: 20, mode: 'band' }).reason, 'gone');
 });
 
 test('readBloodbarOnce：没框直接拒，不启动 ffmpeg', async () => {

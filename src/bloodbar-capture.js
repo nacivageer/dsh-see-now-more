@@ -67,7 +67,7 @@ export async function readBloodbarOnce({
 
   return {
     ok: true,
-    reading: ratioFromRgba(buf, { width: w, height: h, threshold }),
+    reading: ratioFromRgba(buf, { width: w, height: h, threshold, mode: 'band' }),
     ms: Date.now() - t0,
   };
 }

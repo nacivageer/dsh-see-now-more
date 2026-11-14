@@ -33,6 +33,26 @@ export const DEFAULT_MAX_SAT = 0.25;
 /** 低于这个占比就当「框里没有血条」（过场 / 菜单 / 加载 / 框挪走了）。 */
 export const DEFAULT_MIN_VISIBLE = 0.02;
 
+/**
+ * band 模式下「这一列算填充」的门槛：行带内亮像素占列高的比例。
+ *
+ * 用 0.2 而不是 0.5：数字「17222/18980」的黑笔画每列仍留白底，0.5 会把数字区
+ * 整段判成空档；0.2 只挡真正没东西的列。
+ */
+export const DEFAULT_COL_FILL = 0.2;
+
+/** 行带扩展的阈值：行亮 >= 最亮行 × 这个比例才算「条内的行」。 */
+export const BAND_ROW_RATIO = 0.8;
+
+/**
+ * 填充端点判定（band 模式）：列亮比例 >= 这个值才算「填充段」。
+ *
+ * 2026-11-14 在云鸣潮血条上量的分布：填充 0.94–0.97 / 数字 0.47 /
+ * 未填充区 0.41 / 右端装饰括号 0.56–0.80。取 0.9 一条线，只有真正填满的白列过线；
+ * 数字只影响中间，端点取「第一个」和「最后一个」过线的列。
+ */
+export const DEFAULT_STRONG_FILL = 0.9;
+
 /** 框选配置落盘位置（与 `region.json` 分开）。 */
 export function bloodbarFile(env = process.env) {
   return join(chatDir(env), 'bloodbar.json');
@@ -98,6 +118,10 @@ export function ratioFromPixels(pixels, {
   minVisible = DEFAULT_MIN_VISIBLE,
   brightV = DEFAULT_BRIGHT_V,
   maxSat = DEFAULT_MAX_SAT,
+  /** `full` = 全框亮色占比（旧口径）；`band` = 找亮行带 + 扫描填充长度（血条用）。 */
+  mode = 'full',
+  colFill = DEFAULT_COL_FILL,
+  strongFill = DEFAULT_STRONG_FILL,
 } = {}) {
   const w = Number(width);
   const h = Number(height);
@@ -112,18 +136,90 @@ export function ratioFromPixels(pixels, {
   }
 
   const vFloor = 255 * brightV;
-  let bright = 0;
-  for (let i = 0; i < total; i += 1) {
+  const isBright = (i) => {
     const o = i * ch;
     const r = pixels[o];
     const g = pixels[o + 1];
     const b = pixels[o + 2];
     const max = Math.max(r, g, b);
-    if (max < vFloor) continue;
+    if (max < vFloor) return false;
     const min = Math.min(r, g, b);
-    if (max > 0 && (max - min) / max > maxSat) continue;
-    bright += 1;
+    return max === 0 ? false : (max - min) / max <= maxSat;
+  };
+
+  /**
+   * **band 模式（血条用）**：先在框内找出「亮行带」，再在带内按列判填充。
+   *
+   * 为什么不用全框占比（2026-11-14 实测）：框高 36px 里血条只占中间 ~23px，
+   * 上下是暗边，全框占比被稀释到 37%；数字又是黑的，再挖掉一块 —— 屏幕上是
+   * 90.7%，读数只有 37%。行带把上下暗边剔掉，列判定让数字只影响它自己那几列。
+   */
+  if (mode === 'band') {
+    const rowCount = new Array(h).fill(0);
+    let brightTotal = 0;
+    for (let y = 0; y < h; y += 1) {
+      let c = 0;
+      for (let x = 0; x < w; x += 1) if (isBright(y * w + x)) c += 1;
+      rowCount[y] = c;
+      brightTotal += c;
+    }
+    const maxRow = Math.max(...rowCount);
+    // 最亮的一行连框宽的 10% 都不到 → 框里没有血条（过场 / 菜单 / 框挪走了）
+    if (maxRow < Math.max(1, w * 0.1)) {
+      return { ok: false, ratio: 0, visible: false, reason: 'gone', bright: brightTotal, total };
+    }
+    const peak = rowCount.indexOf(maxRow);
+    let top = peak;
+    let bottom = peak;
+    /**
+     * 行带只取**接近最亮行**的连续段（0.8），不取 0.5。
+     *
+     * 2026-11-14 实测：框里条只占中间 20 行，但条上下还有场景/边框的亮行，
+     * 用 0.5 会把整框 32 行都算进带里 —— 右侧未填充区因此每列都有 41% 亮，
+     * 被当成填充，读数 96.8% 而屏幕是 90.7%。0.8 只留条本身那十几二十行。
+     */
+    while (top > 0 && rowCount[top - 1] >= maxRow * 0.8) top -= 1;
+    while (bottom < h - 1 && rowCount[bottom + 1] >= maxRow * 0.8) bottom += 1;
+    const bandH = bottom - top + 1;
+    /**
+     * 每列的亮比例，然后**从左往右扫填充**：遇到连续 `darkGap` 列不亮就停。
+     *
+     * 两种数法都试过，都栽在数字上：
+     *   - 数「有多少列被填充」：数字黑笔画把每列压到 <50%，整段被判空档（75% vs 90.7%）。
+     *   - 取「最右的亮列」：条右端的装饰括号是浅色的，right 直接跑到框边（100%）。
+     *
+     * 现在：数字列有白底（亮比例 0.3–0.5，>= 0.2）不会触发停止；装饰括号前隔着
+     * 几十列真正的暗区，连续 4 列就停。分母用 `w - left`，假定框框住了整条。
+     */
+    const colRatio = new Array(w);
+    for (let x = 0; x < w; x += 1) {
+      let c = 0;
+      for (let y = top; y <= bottom; y += 1) if (isBright(y * w + x)) c += 1;
+      colRatio[x] = c / bandH;
+    }
+    let left = -1;
+    let right = -1;
+    for (let x = 0; x < w; x += 1) {
+      if (colRatio[x] >= strongFill) {
+        if (left < 0) left = x;
+        right = x;
+      }
+    }
+    if (left < 0) {
+      return { ok: false, ratio: 0, visible: false, reason: 'gone', bright: brightTotal, total };
+    }
+    const ratio = (right - left + 1) / (w - left);
+    if (ratio < minVisible) {
+      return { ok: false, ratio, visible: false, reason: 'gone', bright: brightTotal, total };
+    }
+    return {
+      ok: true, ratio, visible: true, below: ratio < threshold,
+      bright: brightTotal, total, band: { top, bottom, left, right },
+    };
   }
+
+  let bright = 0;
+  for (let i = 0; i < total; i += 1) if (isBright(i)) bright += 1;
 
   const ratio = bright / total;
   if (ratio < minVisible) {
@@ -161,7 +257,7 @@ export function bloodbarLine(cfg, reading = null) {
   if (!cfg || !cfg.region) return '血条：没框（调 `see_now({action:"bloodbar"})` 框一条）';
   const pct = (n) => `${Math.round(n * 100)}%`;
   const head = `血条：框 ${bloodbarText(cfg.region)}（阈值 ${pct(cfg.threshold)}）`;
-  if (!reading) return `${head}· 未采（P1a 只框不算）`;
+  if (!reading) return `${head}· 未采（调 \`read:true\` 读一次）`;
   if (reading.ok === false) return `${head}· 现在框里没有血条（${reading.reason}）`;
   return `${head}· 最近 ${pct(reading.ratio)}${reading.below ? '（低于阈值）' : ''}`;
 }
