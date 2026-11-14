@@ -1,6 +1,6 @@
 # 黑听抬头内部模块化：把编排从 `startLoop` 闭包抽成 `createLift(ports)`
 
-状态：进行中（第 1–5 步完成，150/150 全绿；第 6 步运行态冒烟待重启 DSH）
+状态：进行中（第 1–5 步完成，150/150；第 6 步心跳/status 已验证，强命中待耳朵环境修复）
 对象：把黑听抬头的判档/取帧/唤醒编排从 `src/loop.js` 的 `startLoop` 闭包里抽成 `src/lift/index.js` 的 `createLift(ports)`；行为不变、测试可脱离 DSH / ffmpeg / Python / 窗口运行。不拆包、不上架。
 归属：session-3ed91486-446a-4e93-b76f-0dc42846bc78 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
 下一步：新会话在 `see-now-more` 打开后，先读本文件和 `docs/决策记录.md`；从第 0 步开始，只做只读与基线，不改代码。
@@ -24,6 +24,11 @@
   （`git show --stat` 只有重命名 + import 行 + seam 测试的 `log.js` 例外）。
   `node --test` 仍 150/150。第 6 步：`install-dev --check` 显示装机副本 `0.1.1-more.7` 一致，
   但**当前 DSH 进程仍是旧代码**，冒烟要装新代码 + 重启 Desktop 后才验。
+- 2026-11-14 21:0x 第 6 步运行态（格重启后，profile 副本是 20:50 装的代码）：
+  `see_now status` 正常、留底行与档位行都在；`listen` 进仅监听后 `~/.dsh/see-now/lift/debug.log`
+  出现 `心跳 mode=listen lift=- alarms=0`（21:06:16Z），**无 `tick 抛错`**；`stop` 正常。
+  **强命中端到端未验**：`pyaudiowpatch` 不在 runtime Python 3.12 / PATH Python 3.14 /
+  `H:\asr-local\.venv` 任一处，`listen` 起不来耳朵（与本次重构无关，是环境缺包）。
 
 ## 为什么做
 
