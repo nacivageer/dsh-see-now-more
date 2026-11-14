@@ -24,7 +24,7 @@ import { shouldIdleStop } from './idle.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
-import { todayCounts } from './lift-log.js';
+import { todayCounts } from './lift/log.js';
 import { liftLine, liftGearLine } from './lift/status.js';
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';

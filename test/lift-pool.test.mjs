@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 
 import {
   createLiftPool, POOL_MAX, POOL_WINDOW_MS, SUMMARY_MAX_CHARS,
-} from '../src/lift-pool.js';
+} from '../src/lift/pool.js';
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 10, 10, 4, 0, 0);

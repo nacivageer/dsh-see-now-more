@@ -22,8 +22,13 @@ const FORBIDDEN = [
   { re: /import\(\s*['"]\.\.\/(loop|index|runner|window|client)\.js['"]/, why: '反向动态 import 宿主模块' },
   { re: /(?:from|import)\s+['"]node:child_process['"]/, why: '模块不起进程' },
   { re: /(?:from|import)\s+['"]child_process['"]/, why: '模块不起进程' },
-  { re: /DSH_HOME/, why: '不直接读 DSH_HOME（走端口）' },
+  { re: /DSH_HOME/, why: '不直接读 DSH_HOME（走端口）', except: ['log.js'] },
 ];
+
+/** 例外文件只跳过对应那一条检查，别的边界照样管（`log.js` 就是默认 store 本身）。 */
+function allowed(name, rule) {
+  return Array.isArray(rule.except) && rule.except.includes(name);
+}
 
 function liftFiles() {
   return readdirSync(DIR)
@@ -40,7 +45,9 @@ test('src/lift/** 不越界 import、不起进程、不直接读 DSH_HOME', () =
   const offences = [];
 
   for (const { name, text } of files) {
-    for (const { re, why } of FORBIDDEN) {
+    for (const rule of FORBIDDEN) {
+      if (allowed(name, rule)) continue;
+      const { re, why } = rule;
       // 允许在注释里提这些名字（说明边界时本来就会写），只查真正的 import / 使用行
       const lines = text.split('\n');
       lines.forEach((src, i) => {

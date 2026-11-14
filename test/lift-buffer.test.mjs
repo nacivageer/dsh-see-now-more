@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { changedFraction, createLiftBuffer, frameBytes, LIFT_FPS } from '../src/lift-buffer.js';
+import { changedFraction, createLiftBuffer, frameBytes, LIFT_FPS } from '../src/lift/buffer.js';
 
 const W = 8;
 const H = 4;

@@ -26,7 +26,7 @@ process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-lift-probe-'));
 
 const { createRunner } = await import('../src/runner.js');
 const { resolveFfmpeg } = await import('../src/binaries.js');
-const { LIFT_FPS, LIFT_WINDOW_SEC } = await import('../src/lift-buffer.js');
+const { LIFT_FPS, LIFT_WINDOW_SEC } = await import('../src/lift/buffer.js');
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => {

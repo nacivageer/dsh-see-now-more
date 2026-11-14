@@ -12,8 +12,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createLiftPool, SUMMARY_MAX_CHARS } from '../src/lift-pool.js';
-import { matchLiftTriggers } from '../src/lift-triggers.js';
+import { createLiftPool, SUMMARY_MAX_CHARS } from '../src/lift/pool.js';
+import { matchLiftTriggers } from '../src/lift/triggers.js';
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 10, 10, 4, 0, 0);

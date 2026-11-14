@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import {
   appendLift, dayKey, dayDir, frameFile, liftRoot, logFile, pruneOld, readDay, resetCountCache,
   todayCounts,
-} from '../src/lift-log.js';
+} from '../src/lift/log.js';
 
 /** 本地时间 2026-11-10 12:00（避免 UTC 构造在东八区跨天）。 */
 const T = new Date(2026, 10, 10, 12, 0, 0).getTime();

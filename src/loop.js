@@ -36,7 +36,7 @@ import { noteInterjected } from './interject.js';
 import { onSpeech, speechSubscribers } from './speech.js';
 import { estimateSpeechMs, nextProactiveAt } from './pacing.js';
 import { listenGap, trajectoryText } from './listen.js';
-import { appendLift, appendLiftDebug } from './lift-log.js';
+import { appendLift, appendLiftDebug } from './lift/log.js';
 import { createLift } from './lift/index.js';
 
 /**

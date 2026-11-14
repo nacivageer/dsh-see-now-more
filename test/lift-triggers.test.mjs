@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { matchLiftTriggers, LIFT_DEDUPE_MS } from '../src/lift-triggers.js';
+import { matchLiftTriggers, LIFT_DEDUPE_MS } from '../src/lift/triggers.js';
 
 const u = (text, startMs, extra = {}) => ({ text, startMs, endMs: startMs + 2000, ...extra });
 

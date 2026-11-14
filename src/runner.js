@@ -30,8 +30,8 @@ import { createListener } from './listen.js';
 import {
   changedFraction, createLiftBuffer, LIFT_CAPTURE_FPS, LIFT_FPS, LIFT_HEIGHT, LIFT_KEEP_EVERY,
   LIFT_WIDTH, LIFT_WINDOW_SEC,
-} from './lift-buffer.js';
-import { frameFile, pruneOld } from './lift-log.js';
+} from './lift/buffer.js';
+import { frameFile, pruneOld } from './lift/log.js';
 import { encodePng } from './png.js';
 
 /**

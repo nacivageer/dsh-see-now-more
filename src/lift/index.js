@@ -21,9 +21,9 @@
  * 不读 `DSH_HOME`（`test/lift-seam.test.mjs` 守着）。
  */
 
-import { createLiftPool } from '../lift-pool.js';
-import { matchLiftTriggers } from '../lift-triggers.js';
-import { decideLevel, shouldFallback } from '../lift-levels.js';
+import { createLiftPool } from './pool.js';
+import { matchLiftTriggers } from './triggers.js';
+import { decideLevel, shouldFallback } from './levels.js';
 
 /**
  * 台词扫描窗口往回多留多久。

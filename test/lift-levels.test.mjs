@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { decideLevel, levelRank, shouldFallback, LIFT_LEVEL_ORDER } from '../src/lift-levels.js';
+import { decideLevel, levelRank, shouldFallback, LIFT_LEVEL_ORDER } from '../src/lift/levels.js';
 
 const strong = (text = '你看这个') => ({ level: 'glance', text, startMs: 1 });
 const weak = (text = '啊？') => ({ level: 'alarm', text, startMs: 2 });
