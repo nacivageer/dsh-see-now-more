@@ -25,6 +25,7 @@ import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } 
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { todayCounts } from './lift-log.js';
+import { liftLine, liftGearLine } from './lift/status.js';
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -346,48 +347,6 @@ function listenLine(l) {
   const part = l.partials ? `，临时字幕 ${l.partials} 次` : '';
   // 声学指纹是 A 层唯一的可观测出口：它和台词是两条线，纯音乐时这里还有数。
   return `在听（${l.backend}，累计 ${l.total} 句${last}${lag}${part}）${describeAcoustic(l.acoustic)}${describeEvents(l.audioEvents)}`;
-}
-
-/**
- * 「留底」一行（黑听抬头的 P2-A）。
- *
- * 必须**分开说三件事**，不然「怎么取不到那一刻的画面」只能靠猜：
- *   - 关着（`lift.enabled:false`）→ 明确说配置项，别只写"没在留底"
- *   - 在留底 → 帧数 / 内存 / 窗口（验收第 1 条要的就是「留底中：N 帧 / ≈M MB」）
- *   - 没在采 → 为什么（没进仅监听 / 采集挂了，挂了的把错误原文带上）
- *
- * `stale`（最后一帧很久以前）也要说：帧还在、但已经不是"现在"了，
- * 那种状态下「瞥」拿到的会是几分钟前的画面 —— 必须看得见。
- */
-function liftLine(l) {
-  // 关掉时一个字都不加（验收第 4 条：`lift.enabled:false` 之后 status 不显示留底，
-  // 行为回到 P2-A 之前）。想确认配置有没有生效看 `status` 的 meta.lift。
-  if (!l || !l.enabled) return null;
-  if (!l.capturing) {
-    return l.error
-      ? `留底：没在采 —— ${l.error}`
-      : '留底：没在采（进仅监听才留底；看画面时用不到它）';
-  }
-  const stale = l.stale ? `，最后一帧 ${l.ageSec}s 前（采集可能断了）` : '';
-  return `留底中：${l.frames} 帧 / ≈${l.mb} MB`
-    + `（最近 ${l.windowSec} 秒，${l.fps} fps${stale}）`;
-}
-
-/**
- * 「档位」一行（P2-B）：当前停在哪个档 + 今日各档计数。
- *
- * 用户问「它刚才叫得对不对」时，这行是唯一能对账的地方：档位说明"现在会不会打扰你"，
- * 计数说明"今天打扰了几次"。数字从 `lift.jsonl` 现算（按天切、重启不丢）。
- */
-function liftGearLine(lp, l) {
-  const label = { alarm: '警觉', glance: '瞥', look: '看', chase: '追' };
-  const now = lp?.lift?.level;
-  const base = lp?.lift?.base ?? l?.level ?? 'glance';
-  const cur = now === 'look' ? '看（抬头中）' : (label[base] ?? '瞥');
-  const alarms = Number(lp?.lift?.alarms) || 0;
-  const c = todayCounts();
-  return `档位：${cur}（基线 ${label[base] ?? base}）· 5 分钟警觉 ${alarms}`
-    + ` · 今日 警觉 ${c.alarm} · 瞥 ${c.glance} · 看 ${c.look}`;
 }
 
 /**
@@ -1760,7 +1719,7 @@ async function registerAll(ctx) {
             // 留底（黑听抬头 P2-A）：帧数 / 内存 / 采集是否还活着
             + (liftText ? `\n${liftText}` : '')
             // 档位与今日计数（P2-B）：关掉留底时整段都不出现
-            + (liftText ? `\n${liftGearLine(lp, s.lift)}` : '')
+            + (liftText ? `\n${liftGearLine(lp, s.lift, todayCounts())}` : '')
             // 宿主 cookie 拥挤度：只快满了才出现（满了之后插件根本起不来，提醒不到）
             + cookieWarnLine(),
           meta: { ...s, voice, loop: lp, window: windowReport() },

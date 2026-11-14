@@ -1,6 +1,6 @@
 # 黑听抬头内部模块化：把编排从 `startLoop` 闭包抽成 `createLift(ports)`
 
-状态：进行中（任务书已建档，尚未开工）
+状态：进行中（第 1–4 步完成，150/150 全绿；第 5 步目录整理与第 6 步运行态冒烟待做）
 对象：把黑听抬头的判档/取帧/唤醒编排从 `src/loop.js` 的 `startLoop` 闭包里抽成 `src/lift/index.js` 的 `createLift(ports)`；行为不变、测试可脱离 DSH / ffmpeg / Python / 窗口运行。不拆包、不上架。
 归属：session-3ed91486-446a-4e93-b76f-0dc42846bc78 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
 下一步：新会话在 `see-now-more` 打开后，先读本文件和 `docs/决策记录.md`；从第 0 步开始，只做只读与基线，不改代码。
@@ -13,6 +13,13 @@
 ## 日志
 
 - 2026-11-12 21:20 建档；基线 135/135；对象、端口、步骤、验收、风险定稿。
+- 2026-11-14 20:5x 开工（session 待记）。第 0 步：`node --test` 135/135 @ `68f22b7`；行号锚已核。
+  计划经格确认：`action:"lift"` 仍直连 `runner.framePng`（不绕 `createLift.frameAt` 纯转发），
+  第 5 步目录整理留到最后单独 commit。
+- 2026-11-14 21:0x 第 1–4 步完成（session-10a846f1）：`src/lift/index.js`（`createLift`）、
+  `src/lift/status.js`（两行文案）、`loop.js` 只剩端口接线（-252 行）、`index.js` 只调用。
+  `node --test` **150/150**（135 基线 + 10 时间线 + 2 边界 + 3 文案）。
+  反向 import 手工验过一次：seam 测试确实变红，验完已删。第 5/6 步未做。
 
 ## 为什么做
 
