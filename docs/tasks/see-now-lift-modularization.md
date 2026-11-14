@@ -1,6 +1,6 @@
 # 黑听抬头内部模块化：把编排从 `startLoop` 闭包抽成 `createLift(ports)`
 
-状态：进行中（第 1–5 步完成，150/150；第 6 步心跳/status 已验证，强命中待耳朵环境修复）
+状态：完成（第 1–6 步全过；150/150；强命中端到端已验）
 对象：把黑听抬头的判档/取帧/唤醒编排从 `src/loop.js` 的 `startLoop` 闭包里抽成 `src/lift/index.js` 的 `createLift(ports)`；行为不变、测试可脱离 DSH / ffmpeg / Python / 窗口运行。不拆包、不上架。
 归属：session-3ed91486-446a-4e93-b76f-0dc42846bc78 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
 下一步：新会话在 `see-now-more` 打开后，先读本文件和 `docs/决策记录.md`；从第 0 步开始，只做只读与基线，不改代码。
@@ -29,6 +29,16 @@
   出现 `心跳 mode=listen lift=- alarms=0`（21:06:16Z），**无 `tick 抛错`**；`stop` 正常。
   **强命中端到端未验**：`pyaudiowpatch` 不在 runtime Python 3.12 / PATH Python 3.14 /
   `H:\asr-local\.venv` 任一处，`listen` 起不来耳朵（与本次重构无关，是环境缺包）。
+- 2026-11-14 22:46 第 6 步收口（格重启后）：
+  - 装 `pyaudiowpatch 0.2.12.9` 到 runtime 3.12 后耳朵恢复，`status` 显示
+    「听声音：在听（本地 http://127.0.0.1:8000/v1，累计 30 句…）」。
+  - 强命中端到端通过：`lift.jsonl` 落
+    `{"level":"look","trigger":"dialog","text":"你看这个。","frameAt":1794667611088,"spoke":true,…}`，
+    `debug.log` 有 `lift-wake ok=true t0=…`；字段与改造前同形。
+  - 之前 22:29–22:34 的「有 PNG、无记录」已解释：那是 `look` 档被
+    `maybeWakeFromAudio` 的共享退避线挡掉（`canWake=false` 时 record 在 gate 之后），
+    属 P2-B 既有行为，不是模块化引入的 bug。`appendLift` 的静默 catch 已加一行
+    `lift-log 写失败` 留痕（`ee89a68`），保留作排查用。
 
 ## 为什么做
 
