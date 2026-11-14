@@ -1,12 +1,12 @@
 # 黑听抬头内部模块化：把编排从 `startLoop` 闭包抽成 `createLift(ports)`
 
-状态：进行中（第 1–4 步完成，150/150 全绿；第 5 步目录整理与第 6 步运行态冒烟待做）
+状态：进行中（第 1–5 步完成，150/150 全绿；第 6 步运行态冒烟待重启 DSH）
 对象：把黑听抬头的判档/取帧/唤醒编排从 `src/loop.js` 的 `startLoop` 闭包里抽成 `src/lift/index.js` 的 `createLift(ports)`；行为不变、测试可脱离 DSH / ffmpeg / Python / 窗口运行。不拆包、不上架。
 归属：session-3ed91486-446a-4e93-b76f-0dc42846bc78 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
 下一步：新会话在 `see-now-more` 打开后，先读本文件和 `docs/决策记录.md`；从第 0 步开始，只做只读与基线，不改代码。
 证据：
   - `node --test`：135 个通过 / 0 失败（2026-11-12，HEAD `56cedd9`）
-  - 已拆模块：`src/lift-buffer.js`、`lift-levels.js`、`lift-log.js`、`lift-pool.js`、`lift-triggers.js`
+  - 已拆模块：`src/lift/{buffer,levels,log,pool,triggers}.js`
   - 未拆编排：`src/loop.js` 的 `maybeWakeFromLift` / `maybeFallBackFromLift` / `liftDialogActive` 及其闭包状态
 更新：2026-11-12 21:20 CST
 
@@ -20,6 +20,10 @@
   `src/lift/status.js`（两行文案）、`loop.js` 只剩端口接线（-252 行）、`index.js` 只调用。
   `node --test` **150/150**（135 基线 + 10 时间线 + 2 边界 + 3 文案）。
   反向 import 手工验过一次：seam 测试确实变红，验完已删。第 5/6 步未做。
+- 2026-11-14 21:0x 第 5 步完成（`4c877e2`）：五个 `lift-*.js` 收进 `src/lift/`
+  （`git show --stat` 只有重命名 + import 行 + seam 测试的 `log.js` 例外）。
+  `node --test` 仍 150/150。第 6 步：`install-dev --check` 显示装机副本 `0.1.1-more.7` 一致，
+  但**当前 DSH 进程仍是旧代码**，冒烟要装新代码 + 重启 Desktop 后才验。
 
 ## 为什么做
 
@@ -40,11 +44,11 @@
 
 | 文件 | 职责 | 测试 |
 |---|---|---|
-| `src/lift-buffer.js` | 0.5 fps 环形缓冲、`frameAt(t0)`、`changedFraction` | `test/lift-buffer.test.mjs` |
-| `src/lift-levels.js` | `decideLevel` / `shouldFallback` 纯函数 | `test/lift-levels.test.mjs` |
-| `src/lift-log.js` | `lift.jsonl`、每日帧目录、`todayCounts`、`pruneOld` | `test/lift-log.test.mjs` |
-| `src/lift-pool.js` | 十分钟台词池、`summary()` | `test/lift-pool.test.mjs` |
-| `src/lift-triggers.js` | 强/弱命中词表与去重 | `test/lift-triggers.test.mjs` |
+| `src/lift/buffer.js` | 0.5 fps 环形缓冲、`frameAt(t0)`、`changedFraction` | `test/lift-buffer.test.mjs` |
+| `src/lift/levels.js` | `decideLevel` / `shouldFallback` 纯函数 | `test/lift-levels.test.mjs` |
+| `src/lift/log.js` | `lift.jsonl`、每日帧目录、`todayCounts`、`pruneOld` | `test/lift-log.test.mjs` |
+| `src/lift/pool.js` | 十分钟台词池、`summary()` | `test/lift-pool.test.mjs` |
+| `src/lift/triggers.js` | 强/弱命中词表与去重 | `test/lift-triggers.test.mjs` |
 | `src/runner.js` | 采集生命周期、`frameAt` / `framePng` / `recentLines` / `still` | `test/runner-lift.test.mjs`（假采集） |
 
 还没拆的：
@@ -207,7 +211,7 @@ createLift({
 - `src/loop.js`：`startLoop`、`maybeWakeFromLift`、`maybeFallBackFromLift`、`liftDialogActive`、`HANGUP_NOTE`
 - `src/index.js`：`liftLine`、`liftGearLine`、`action === 'lift'`、`action === 'stop'`、`status`
 - `src/runner.js`：`createRunner`（`frameAt` / `framePng` / `recentLines` / `still` / `stop`）
-- `src/lift-buffer.js`、`lift-levels.js`、`lift-log.js`、`lift-pool.js`、`lift-triggers.js`
+- `src/lift/buffer.js`、`levels.js`、`log.js`、`pool.js`、`triggers.js`、`index.js`、`status.js`
 - `test/lift-*.test.mjs`、`test/runner-lift.test.mjs`
 - `docs/决策记录.md`（单仓理由、第二个消费者才抽包）
 - `docs/tasks/see-now-lift-p2-buffer.md`、`docs/tasks/see-now-lift-p2-levels.md`
