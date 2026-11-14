@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import {
   ratioFromRgba, ratioFromRgb, ratioFromPixels,
   loadBloodbar, saveBloodbar, clearBloodbar, bloodbarLine, bloodbarText,
-  DEFAULT_THRESHOLD,
+  shouldGlance, DEFAULT_THRESHOLD, DEFAULT_GLANCE_COOLDOWN_MS,
 } from '../src/bloodbar.js';
 import { readBloodbarOnce } from '../src/bloodbar-capture.js';
 
@@ -190,4 +190,17 @@ test('band 模式：全暗 / 彩色 → gone', () => {
 test('readBloodbarOnce：没框直接拒，不启动 ffmpeg', async () => {
   assert.equal((await readBloodbarOnce({})).reason, 'no-region');
   assert.equal((await readBloodbarOnce({ region: { x: 0, y: 0, w: 0, h: 0 } })).reason, 'no-region');
+});
+
+test('shouldGlance：够低 + 出冷却才记；不可见/满血/冷却中都不记', () => {
+  const low = { ok: true, below: true, ratio: 0.2 };
+  assert.equal(shouldGlance({ reading: low, now: 1_000_000, lastGlanceAt: 0 }), true);
+  assert.equal(shouldGlance({ reading: low, now: 1_000_000, lastGlanceAt: 1_000_000 - 1000 }), false);
+  assert.equal(
+    shouldGlance({ reading: low, now: 1_000_000, lastGlanceAt: 1_000_000 - DEFAULT_GLANCE_COOLDOWN_MS }),
+    true,
+  );
+  assert.equal(shouldGlance({ reading: { ok: true, below: false, ratio: 0.8 }, now: 1_000_000 }), false);
+  assert.equal(shouldGlance({ reading: { ok: false, reason: 'gone', ratio: 0 }, now: 1_000_000 }), false);
+  assert.equal(shouldGlance({ reading: null, now: 1_000_000 }), false);
 });

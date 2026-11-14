@@ -32,6 +32,7 @@ import {
   LIFT_WIDTH, LIFT_WINDOW_SEC,
 } from './lift/buffer.js';
 import { frameFile, pruneOld } from './lift/log.js';
+import { ratioFromRgba } from './bloodbar.js';
 import { encodePng } from './png.js';
 
 /**
@@ -213,6 +214,13 @@ export function createRunner({
    * 它决定「仅监听时要不要留底」；`level` / `holdSec` 留给四档闭环。
    */
   lift = null,
+  /**
+   * 血条读数（P1c）：`{region, threshold, fps}`。没框过就是 null。
+   *
+   * 与 `lift` 并列但不是同一路：留底是 0.5 fps 存缩略帧（给「瞥」取），
+   * 血条是每秒算一个比例（只出数，不出图、不进上下文）。
+   */
+  bloodbar = null,
   /**
    * 采集函数（默认 `capture.js` 的 `spawnFrames`）。**只为测试**：留底那一路和 `start()`
    * 都从这里起，测试可以塞一个假采集，不必真的开屏 —— 否则每个生命周期用例都要跑 ffmpeg。
@@ -406,6 +414,123 @@ export function createRunner({
     return { ok: true };
   }
 
+  /* ------------------------------------------------------------ 血条读数（P1c） */
+  let bloodbarOn = Boolean(bloodbar?.region);
+  /** 血条那一路的采集句柄。null = 没在采。 */
+  let bloodbarRun = null;
+  /** 最近一次读数（`ratioFromRgba` 的结果 + `at`）。 */
+  let bloodbarReading = null;
+  let bloodbarError = null;
+  let bloodbarRetry = null;
+  let bloodbarRetries = 0;
+  let bloodbarWanted = false;
+
+  function scheduleBloodbarRetry(why) {
+    if (!bloodbarWanted || bloodbarRetry) return;
+    if (bloodbarRetries >= 3) {
+      log(`血条：${why}，重试 3 次仍不行 —— 先停着（重新进仅监听会再试）`);
+      return;
+    }
+    bloodbarRetries += 1;
+    const wait = 3000 * bloodbarRetries;
+    bloodbarRetry = setTimeout(() => {
+      bloodbarRetry = null;
+      if (bloodbarWanted) startBloodbarCapture();
+    }, wait);
+    bloodbarRetry.unref?.();
+    log(`血条：${why}，${wait / 1000}s 后重试（第 ${bloodbarRetries} 次）`);
+  }
+
+  /**
+   * 起血条读数那一路（默认 1 fps，只算比例、不出图、不进上下文）。
+   *
+   * 和留底同一条约束：**起不来不嚎**，失败只记 `status().bloodbar.error`，
+   * 听声音与抬头照旧。帧格式用 BGRA（gdigrab 原生、零转换），
+   * 亮色判定只看 max/min，BGR 顺序不影响。
+   */
+  function startBloodbarCapture() {
+    if (!bloodbarOn) return { ok: false, reason: 'no-region' };
+    if (bloodbarRun) return { ok: true, reason: 'already' };
+    bloodbarWanted = true;
+    const region = bloodbar.region;
+    const threshold = Number(bloodbar.threshold) > 0 ? Number(bloodbar.threshold) : 0.3;
+    const fps = Number(bloodbar.fps) > 0 ? Number(bloodbar.fps) : 1;
+    try {
+      const run = spawnCapture({
+        source: { kind: 'screen', region: { ...region } },
+        width: region.w,
+        height: region.h,
+        fps,
+        ffmpegPath,
+        engine: 'gdigrab',
+        channels: 4,
+        pixFmt: 'bgra',
+        onFrame: (f) => {
+          try {
+            bloodbarReading = {
+              ...ratioFromRgba(f.buf, { width: region.w, height: region.h, threshold, mode: 'band' }),
+              at: Date.now(),
+            };
+          } catch (e) {
+            bloodbarError = `血条：算比例失败（${e?.message ?? e}）`;
+          }
+        },
+      });
+      bloodbarRun = run;
+      bloodbarError = null;
+      bloodbarRetries = 0;
+      log(`血条：开始读（${region.w}×${region.h}，${fps} fps）`);
+      run.done.then(() => {
+        if (bloodbarRun !== run) return;      // 我们自己停的，不是故障
+        bloodbarRun = null;
+        scheduleBloodbarRetry('ffmpeg 退出');
+      }).catch((e) => {
+        if (bloodbarRun !== run) return;
+        bloodbarRun = null;
+        bloodbarError = `血条采集：${e?.message ?? e}`;
+        log(bloodbarError);
+        scheduleBloodbarRetry('采集失败');
+      });
+      return { ok: true };
+    } catch (e) {
+      bloodbarError = `血条采集：${e?.message ?? e}`;
+      log(bloodbarError);
+      scheduleBloodbarRetry('起不来');
+      return { ok: false, reason: 'spawn-failed' };
+    }
+  }
+
+  function stopBloodbarCapture({ why = '' } = {}) {
+    const was = Boolean(bloodbarRun);
+    bloodbarWanted = false;
+    if (bloodbarRetry) { clearTimeout(bloodbarRetry); bloodbarRetry = null; }
+    const run = bloodbarRun;
+    bloodbarRun = null;
+    run?.stop();
+    if (was && why) log(`血条：停（${why}）`);
+    return { ok: true };
+  }
+
+  function bloodbarStatus() {
+    return {
+      enabled: bloodbarOn,
+      region: bloodbar?.region ?? null,
+      threshold: Number(bloodbar?.threshold) > 0 ? Number(bloodbar.threshold) : 0.3,
+      capturing: Boolean(bloodbarRun),
+      reading: bloodbarReading,
+      error: bloodbarError,
+    };
+  }
+
+  /** 重新框选 / 改阈值之后热更新（正在采就按新框重开，不用重启循环）。 */
+  function setBloodbar(cfg) {
+    bloodbar = cfg ?? null;
+    bloodbarOn = Boolean(bloodbar?.region);
+    bloodbarReading = null;
+    if (bloodbarRun) stopBloodbarCapture({ why: '配置变了' });
+    return { ok: true, enabled: bloodbarOn };
+  }
+
   /**
    * 「瞥」的那一帧 → PNG 落盘（P2-B）。
    *
@@ -582,6 +707,7 @@ export function createRunner({
     stoppedAt = Date.now();
     // 留底跟着收工：`stop` 之后「取那一刻」不该再拿到上一场的帧（验收第 5 条）
     stopLiftCapture({ clear: true });
+    stopBloodbarCapture({ why: '收工' });
     // 采集收工，声音也一起停：一个抓回环的进程常驻在后台，用户是看不见的
     listener.stop('采集收工');
     if (why) log(`收工：${why}`);
@@ -689,6 +815,8 @@ export function createRunner({
      * **放在 running 的早退之后**：已经在看时再调 start 不该把别人的缓冲清掉。
      */
     stopLiftCapture({ clear: true, why: '开始看画面' });
+    // 血条那一路只在黑听时读：看画面时再抓一条窄带没有意义，白烧 CPU
+    stopBloodbarCapture({ why: '开始看画面' });
     // **窗被用户关掉之后，这里必须复位**：`windowState` 缓存着 `{ok:true}`，
     // `windowOpened` 也还是 true —— 不复位的话下一次 watch 会（a）不再开窗，
     // （b）循环立刻又把"窗没了"判成用户关窗，落第二条挂断说明。
@@ -852,7 +980,9 @@ export function createRunner({
     const lifted = r?.ok
       ? await startLiftCapture({ region })
       : { enabled: liftOn, ok: false, reason: 'no-audio' };
-    return { ...r, lift: lifted };
+    // 血条读数与耳朵并行：只听时才有意义（看画面时循环也不再跑这个分支）
+    const bb = bloodbarOn ? startBloodbarCapture() : { ok: false, reason: 'no-region' };
+    return { ...r, lift: lifted, bloodbar: bb };
   }
 
   /** 上一张记进 `missed.jsonl` 的结束时间（秒，从采集起点算）；空档标记用 */
@@ -972,6 +1102,10 @@ export function createRunner({
     still,
     /** 留底账本（status 已经带了，这里给脚本/测试一个直读口） */
     lift: () => liftStatus(),
+    /** 血条读数账本（P1c）：`{enabled, region, threshold, capturing, reading, error}` */
+    bloodbar: () => bloodbarStatus(),
+    /** 重新框选 / 改阈值后热更新（不重启循环） */
+    setBloodbar,
     stop() { teardown('手动'); return { stopped: true }; },
     /**
      * 用户关掉了悬浮窗 = 明确表示"不看了"。
@@ -1367,6 +1501,8 @@ export function createRunner({
         listen: listener.state(),
         // 黑听留底：帧数 / 内存 / 最后一帧多久以前（采集断了但帧还在时，status 必须看得出来）
         lift: liftStatus(),
+        // 血条读数（P1c）：框在哪、阈值、最近一次比例、采集活着没
+        bloodbar: bloodbarStatus(),
       };
     },
   };

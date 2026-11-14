@@ -38,6 +38,7 @@ import { estimateSpeechMs, nextProactiveAt } from './pacing.js';
 import { listenGap, trajectoryText } from './listen.js';
 import { appendLift, appendLiftDebug } from './lift/log.js';
 import { createLift } from './lift/index.js';
+import { shouldGlance } from './bloodbar.js';
 
 /**
  * 用户插话的"同一拍"判定（毫秒）。
@@ -387,6 +388,8 @@ export function startLoop({
   let lastHeartbeatAt = 0;
   /** 任务模式里已经记进 `missed.jsonl` 的出图序号（每张图只记一次） */
   let lastMissedSeq = 0;
+  /** 血条（P1c）：上一次因为低血记「瞥」的时刻（冷却用；0 = 还没记过）。 */
+  let lastBloodbarGlanceAt = 0;
 
   const lift = createLift({
     config: {
@@ -424,6 +427,35 @@ export function startLoop({
       noteNoAnswer: () => { unansweredListenWakes = Math.max(0, unansweredListenWakes - 1); },
     },
   });
+
+  /**
+   * 血条低了就记一条「瞥」（P1c）。
+   *
+   * 只记账 + 窗内一行灰字：**不出图、不叫醒**。血条那条窄带本身没有场景可看，
+   * 就算取一帧也只能看到一条白条；真要判断"还有没有翻盘空间"，等模型被别的东西
+   * 叫醒之后再 `watch`。阈值与冷却都在 `shouldGlance()` 里（纯函数，单测过）。
+   */
+  function maybeGlanceBloodbar() {
+    let st = null;
+    try { st = runner.status()?.bloodbar ?? null; } catch { st = null; }
+    if (!st?.reading) return;
+    const now = Date.now();
+    if (!shouldGlance({ reading: st.reading, now, lastGlanceAt: lastBloodbarGlanceAt })) return;
+    lastBloodbarGlanceAt = now;
+    const pct = Math.round(st.reading.ratio * 100);
+    const limit = Math.round((st.threshold ?? 0.3) * 100);
+    const clock = new Date(now).toLocaleTimeString('zh-CN', { hour12: false });
+    try {
+      appendLift({
+        at: now, wall: st.reading.at, level: 'glance', trigger: 'bloodbar',
+        text: `血量 ${pct}%`, frameAt: null, spoke: false,
+        reason: `血条 ${pct}% 低于阈值 ${limit}%`,
+      });
+    } catch { /* 记账失败不影响听 */ }
+    try {
+      appendSpoken('meta', `🩸 ${clock} 血量 ${pct}%（阈值 ${limit}%），可以瞥一眼`, { speak: false });
+    } catch { /* 窗不在也能记账 */ }
+  }
 
   /**
    * 「值不值得抬头」：插件只摆事实（最近 60 秒的轨迹），**预测和取舍交给模型**。
@@ -609,6 +641,7 @@ export function startLoop({
         if (!queue.length) {
           // 没人说话：先看台词里有没有人在叫人，再看声音形状值不值得抬头
           await lift.tick();
+          maybeGlanceBloodbar();
           await maybeWakeFromAudio();
           return;
         }

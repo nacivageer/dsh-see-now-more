@@ -670,6 +670,8 @@ async function registerAll(ctx) {
     scoreNormalize: tuning.scoreNormalize,
     // 黑听抬头（see-now.json 的 lift 段）：enabled 决定仅监听时要不要留底
     lift: tuning.lift,
+    // 血条读数（P1c）：框过才有；没框时不采（startBloodbarCapture 会直接拒）
+    bloodbar: loadBloodbar(),
   });
   disposers.push(() => runner.stop());
 
@@ -1696,6 +1698,8 @@ async function registerAll(ctx) {
           }[r.reason] ?? `取框没成（${r.reason}）。`;
           return { text: why, meta: { ok: false, reason: r.reason, detail: r.detail ?? null } };
         }
+        // 热更新：正在黑听的话，下一次读就用新框（不用重启循环）
+        try { runner.setBloodbar?.(loadBloodbar()); } catch { /* 下次 listen 生效 */ }
         return {
           text: `血条框好了：**${bloodbarText(r.region)}**（${r.region.w}×${r.region.h}，屏幕物理像素）。\n`
             + '只框血条本身：别把数字、图标、队友血条带进去，框越小越准。\n'
@@ -1790,8 +1794,8 @@ async function registerAll(ctx) {
               + '（写回 see-now.json 的 mode，重开 DSH 沿用）'
             // 区域：只看一小块时，模型得知道自己看到的不是整屏
             + `\n区域：${regionText(s.lastSource?.region ?? loadRegion()) ?? '整屏'}`
-            // 血条（P1a）：只看坐标框得对不对；还没接采集，所以明说「未采」
-            + `\n${bloodbarLine(loadBloodbar())}`
+            // 血条（P1c）：框在哪、阈值、最近一次读数；没在采时明说
+            + `\n${bloodbarLine(loadBloodbar(), s.bloodbar?.reading ?? null)}`
             // 声音单独一行：听不到声音时第一个要看的就是这里
             + `\n声音：${voice.speakers > 0
               ? `已接上 ${voice.adapters.join(', ') || '适配器'}（${voice.speakers} 个会出声的订阅者）`

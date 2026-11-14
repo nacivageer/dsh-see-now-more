@@ -245,6 +245,28 @@ export function bloodbarText(region) {
   return region ? `${region.x},${region.y},${region.w},${region.h}` : null;
 }
 
+/** 同一次低血不要每拍都记：默认 30 秒一条。 */
+export const DEFAULT_GLANCE_COOLDOWN_MS = 30_000;
+
+/**
+ * 这一拍要不要因为血条低了记一条 glance（P1c）。
+ *
+ * 纯函数：只看读数、时间与上次记账时刻，不碰采集、不碰文件。三条同时成立才记：
+ *   1. 读数是好的（`ok:true`，不是"框里没有血条"）；
+ *   2. 低于阈值（`below:true`，比例已经从上面算好）；
+ *   3. 出了冷却（同一次掉血一晚上只该记一次，而不是每 2 秒一条）。
+ *
+ * @param {{reading: {ok:boolean, below?:boolean, ratio?:number}|null, now:number,
+ *          lastGlanceAt?:number, cooldownMs?:number}} o
+ * @returns {boolean}
+ */
+export function shouldGlance({ reading, now, lastGlanceAt = 0, cooldownMs = DEFAULT_GLANCE_COOLDOWN_MS } = {}) {
+  if (!reading || reading.ok !== true || reading.below !== true) return false;
+  if (!Number.isFinite(now)) return false;
+  if (!Number.isFinite(lastGlanceAt) || lastGlanceAt < 0) lastGlanceAt = 0;
+  return now - lastGlanceAt >= cooldownMs;
+}
+
 /**
  * `status` 里的一行。
  *
