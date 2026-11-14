@@ -66,7 +66,9 @@ export function pickScript() {
  * @returns {Promise<{ok:true, region:{x:number,y:number,w:number,h:number}}|{ok:false, reason:string, detail?:string}>}
  *   `reason`: `cancelled`（用户 Esc / 右键）/ `timeout` / `no-python` / `no-script` / `failed`
  */
-export async function pickRegion({ log = () => {}, timeoutMs = PICK_TIMEOUT_MS, env = process.env } = {}) {
+export async function pickRegion({
+  log = () => {}, timeoutMs = PICK_TIMEOUT_MS, env = process.env, save = saveRegion,
+} = {}) {
   const script = pickScript();
   if (!existsSync(script)) return { ok: false, reason: 'no-script', detail: script };
 
@@ -74,14 +76,14 @@ export async function pickRegion({ log = () => {}, timeoutMs = PICK_TIMEOUT_MS, 
   for (const python of pythonCandidates()) {
     if (!hasTkinter(python)) { tried.push(`${python}（无 tkinter）`); continue; }
 
-    const r = await runPicker(python, script, timeoutMs, env);
+    const r = await runPicker(python, script, timeoutMs, env, save);
     if (r.spawned === false) { tried.push(`${python}（${r.detail}）`); continue; }
     return r.result;
   }
   return { ok: false, reason: 'no-python', detail: tried.join(' / ') || '没有候选解释器' };
 }
 
-function runPicker(python, script, timeoutMs, env) {
+function runPicker(python, script, timeoutMs, env, save = saveRegion) {
   return new Promise((resolve) => {
     let child;
     try {
@@ -127,7 +129,7 @@ function runPicker(python, script, timeoutMs, env) {
         finish({ result: { ok: false, reason: 'failed', detail: '框到主屏外面了（负坐标），请在主屏里框' } });
         return;
       }
-      saveRegion(region, env);
+      save(region, env);
       finish({ result: { ok: true, region } });
     });
   });

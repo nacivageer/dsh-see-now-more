@@ -24,6 +24,7 @@ import { shouldIdleStop } from './idle.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
+import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
 import { todayCounts } from './lift/log.js';
 import { liftLine, liftGearLine } from './lift/status.js';
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
@@ -1624,6 +1625,48 @@ async function registerAll(ctx) {
       }
 
       /**
+       * 血条框选（黑听抬头血条线 P1a）。
+       *
+       * 和 `action:"region"` 的区别：那个决定「模型看哪块」，这个决定「量哪条血条」。
+       * 两块分开存（`region.json` / `bloodbar.json`），互不覆盖 —— 看图要看整屏、
+       * 血条只框一条，本来就不可能共用一个坐标。
+       *
+       * 只存坐标与阈值；读数（亮色占比）要等 P1b 接上低帧率采集。
+       */
+      if (action === 'bloodbar') {
+        if (/^(off|none|clear)$/i.test(String(args.region ?? '').trim())) {
+          const had = loadBloodbar().region;
+          clearBloodbar();
+          return {
+            text: had ? `已取消血条框（原来是 ${bloodbarText(had)}）。` : '本来就没框过血条。',
+            meta: { ok: true, region: null },
+          };
+        }
+        const r = await pickRegion({
+          log,
+          // pickRegion 的回调形状是 (region, env)，配置这边收 { region, threshold }
+          save: (region, env) => saveBloodbar({ region }, env),
+        });
+        if (!r.ok) {
+          const why = {
+            cancelled: '用户取消了框选（Esc / 右键），什么都没改。',
+            timeout: '等了三分钟没框完，取框窗已经收掉了。',
+            'no-python': `找不到能跑取框窗的 python（要带 tkinter）：${r.detail ?? ''}`,
+            'no-script': `取框脚本不见了：${r.detail ?? ''}`,
+            failed: `取框失败：${r.detail ?? ''}`,
+          }[r.reason] ?? `取框没成（${r.reason}）。`;
+          return { text: why, meta: { ok: false, reason: r.reason, detail: r.detail ?? null } };
+        }
+        return {
+          text: `血条框好了：**${bloodbarText(r.region)}**（${r.region.w}×${r.region.h}，屏幕物理像素）。\n`
+            + '只框血条本身：别把数字、图标、队友血条带进去，框越小越准。\n'
+            + '换游戏或换 UI 缩放，重新框一次就行。\n'
+            + '现在只存了坐标（P1a 还没接采集），所以 `status` 里显示「未采」。',
+          meta: { ok: true, region: r.region },
+        };
+      }
+
+      /**
        * 取「那句话那一刻」的帧（黑听抬头的「看」用）。
        *
        * 和 `watch` 的区别：`watch` 给的是**现在**，这里给的是**台词说出口前后那一帧**。
@@ -1708,6 +1751,8 @@ async function registerAll(ctx) {
               + '（写回 see-now.json 的 mode，重开 DSH 沿用）'
             // 区域：只看一小块时，模型得知道自己看到的不是整屏
             + `\n区域：${regionText(s.lastSource?.region ?? loadRegion()) ?? '整屏'}`
+            // 血条（P1a）：只看坐标框得对不对；还没接采集，所以明说「未采」
+            + `\n${bloodbarLine(loadBloodbar())}`
             // 声音单独一行：听不到声音时第一个要看的就是这里
             + `\n声音：${voice.speakers > 0
               ? `已接上 ${voice.adapters.join(', ') || '适配器'}（${voice.speakers} 个会出声的订阅者）`

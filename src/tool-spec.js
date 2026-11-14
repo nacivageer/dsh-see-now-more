@@ -88,10 +88,13 @@ export function seeNowToolSpec() {
     parameters: {
       action: {
         type: 'string',
-        description: 'watch (default) | peek | listen | start | stop | status | window | region\n'
+        description: 'watch (default) | peek | listen | start | stop | status | window | region | bloodbar\n'
           + '- `listen` — **只留耳朵**：停画面、音频不停、常驻循环继续跑。用户说「先只听 / 黑听」时用。'
           + '之后听到值得看的东西，插件会用一条带「最近 60 秒声音轨迹」的消息叫你，'
-          + '你自己判断要不要 `watch` 抬眼；判断不值得就什么都不做。',
+          + '你自己判断要不要 `watch` 抬眼；判断不值得就什么都不做。\n'
+          + '- `bloodbar` — 让用户框一条**血条**（黑听抬头血条线，P1a）。'
+          + '坐标存 `~/.dsh/see-now/bloodbar.json`，与看图的 `region` 分开；'
+          + '现在只存框、还没接采集，`status` 会显示「未采」。',
       },
       task: {
         type: 'string',
