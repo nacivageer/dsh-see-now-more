@@ -115,7 +115,10 @@ export function appendLift(rec, { env = process.env, now = () => Date.now() } = 
     appendFileSync(logFile(at, env), `${JSON.stringify(row)}\n`, 'utf8');
     cache.delete(`${env.DSH_HOME ?? ''}|${dayKey(at)}`);
     return row;
-  } catch {
+  } catch (e) {
+    // 静默返回 null 是给黑听用的（记账坏了不能把听弄停），但**排查时要看得见**：
+    // 2026-11-14 实测「取了帧、lift.jsonl 没写」，没有这行只能靠猜。
+    try { appendLiftDebug(`lift-log 写失败：${e?.code ?? ''} ${e?.message ?? e} path=${logFile(at, env)}`); } catch { /* 自己都写不进就算了 */ }
     return null;
   }
 }
