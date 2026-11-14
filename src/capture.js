@@ -153,6 +153,13 @@ export function sourceArgs(
 /** ddagrab 出来的帧还在 GPU 上，得先 hwdownload 再缩。 */
 function isDda(source, engine, platform = process.platform) {
   if (source?.kind !== 'screen') return false;
+  /**
+   * **带 region 一定不是 ddagrab**（2026-11-14 实测）：ddagrab 是 filter source，
+   * 没有 `-offset_x`/`-video_size`，带 region 时 `sourceArgs` 已经退到 gdigrab；
+   * 这里若还按 `engine === 'auto'` 返回 true，就会给 gdigrab 的帧挂 `hwdownload`，
+   * ffmpeg 报 "Impossible to convert between the formats … Function not implemented"。
+   */
+  if (source?.region) return false;
   const e = source?.engine ?? engine;
   if (e === 'ddagrab') return true;
   // `auto` 在 Windows 上默认就是 ddagrab；macOS 上它不是候选，别给它套 hwdownload
@@ -168,7 +175,7 @@ function isDda(source, engine, platform = process.platform) {
  */
 export function captureArgs({
   source, width, height, fps, ffmpegPath = 'ffmpeg', engine = 'auto',
-  fast = true, sws = 'area', platform = process.platform,
+  fast = true, sws = 'area', platform = process.platform, pixFmt = 'rgb24',
 } = {}) {
   const args = [ffmpegPath, '-hide_banner', '-v', 'error', '-nostdin'];
   const engineUsed = source?.engine ?? engine;
@@ -197,13 +204,21 @@ export function captureArgs({
     const r = source.region;
     filters.push(`crop=${r.w}:${r.h}:${r.x}:${r.y}`);
   }
-  filters.push(`scale=${width}:${height}:flags=${sws}`);
-  args.push('-vf', filters.join(','));
+  /**
+   * **同尺寸不挂 scale**（2026-11-14 实测）：gdigrab 的 bgr0 喂给
+   * `scale=…:flags=area` 会报 "Impossible to convert between the formats …
+   * Function not implemented"，一帧都出不来；`-video_size` 已经是目标尺寸时
+   * 根本不需要缩放，跳过滤镜即可。全屏那条走 ddagrab → bgra，不受影响。
+   */
+  const sameSize = source?.region
+    && Number(width) === Number(source.region.w) && Number(height) === Number(source.region.h);
+  if (!sameSize) filters.push(`scale=${width}:${height}:flags=${sws}`);
+  if (filters.length) args.push('-vf', filters.join(','));
 
   if (source?.kind !== 'screen' || (platform === 'darwin' || engineUsed === 'avfoundation')) {
     args.push('-r', String(fps));
   }
-  args.push('-f', 'rawvideo', '-pix_fmt', 'rgb24', '-');
+  args.push('-f', 'rawvideo', '-pix_fmt', pixFmt, '-');
   return args;
 }
 
@@ -215,10 +230,12 @@ export function captureArgs({
  */export function spawnFrames({
   source, width, height, fps, ffmpegPath = 'ffmpeg', engine = 'auto',
   onFrame, onStderr = null, onFirst = null,
+  /** 原始帧通道数：默认 RGB24（3）；gdigrab 的 region 路径用 BGRA（4）。 */
+  channels = 3, pixFmt = 'rgb24',
 } = {}) {
-  const args = captureArgs({ source, width, height, fps, ffmpegPath, engine }).slice(1);
+  const args = captureArgs({ source, width, height, fps, ffmpegPath, engine, pixFmt }).slice(1);
   const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-  const need = width * height * 3;
+  const need = width * height * channels;
   /**
    * 拼帧缓冲：**一帧只分配一次、只拷贝一次**。
    *

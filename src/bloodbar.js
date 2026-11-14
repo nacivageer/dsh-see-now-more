@@ -80,17 +80,20 @@ export function clearBloodbar(env = process.env) {
 }
 
 /**
- * 一帧 RGBA 像素 → 亮色占比。
+ * 一帧像素 → 亮色占比（`channels` 是 3 或 4）。
  *
- * @param {Uint8Array|Buffer} rgba 长度至少 `width*height*4`
- * @param {{width:number, height:number, threshold?:number, minVisible?:number,
+ * 采集链路给的是 **RGB24**（`capture.js` 的 rawvideo），截图 / PNG 解码通常是 RGBA ——
+ * 同一条算法两种通道都要能用。
+ *
+ * @param {Uint8Array|Buffer} pixels 长度至少 `width*height*channels`
+ * @param {{width:number, height:number, channels?:3|4, threshold?:number, minVisible?:number,
  *          brightV?:number, maxSat?:number}} opts
  * @returns {{ok:true, ratio:number, visible:true, below:boolean, bright:number, total:number}
  *         | {ok:false, ratio:number|null, visible:false, reason:string, bright?:number, total?:number}}
  *   `ok:false` 的 `reason`：`bad-frame`（尺寸/像素对不上）/ `gone`（框里几乎没有亮色）。
  */
-export function ratioFromRgba(rgba, {
-  width, height,
+export function ratioFromPixels(pixels, {
+  width, height, channels = 4,
   threshold = DEFAULT_THRESHOLD,
   minVisible = DEFAULT_MIN_VISIBLE,
   brightV = DEFAULT_BRIGHT_V,
@@ -98,21 +101,23 @@ export function ratioFromRgba(rgba, {
 } = {}) {
   const w = Number(width);
   const h = Number(height);
+  const ch = Number(channels);
   const total = w * h;
-  if (!rgba || !Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) {
+  if (!pixels || !Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0
+      || (ch !== 3 && ch !== 4)) {
     return { ok: false, ratio: null, visible: false, reason: 'bad-frame' };
   }
-  if (rgba.length < total * 4) {
+  if (pixels.length < total * ch) {
     return { ok: false, ratio: null, visible: false, reason: 'bad-frame', total };
   }
 
   const vFloor = 255 * brightV;
   let bright = 0;
   for (let i = 0; i < total; i += 1) {
-    const o = i * 4;
-    const r = rgba[o];
-    const g = rgba[o + 1];
-    const b = rgba[o + 2];
+    const o = i * ch;
+    const r = pixels[o];
+    const g = pixels[o + 1];
+    const b = pixels[o + 2];
     const max = Math.max(r, g, b);
     if (max < vFloor) continue;
     const min = Math.min(r, g, b);
@@ -127,6 +132,16 @@ export function ratioFromRgba(rgba, {
   return {
     ok: true, ratio, visible: true, below: ratio < threshold, bright, total,
   };
+}
+
+/** RGBA 版本（`channels: 4`）。 */
+export function ratioFromRgba(rgba, opts = {}) {
+  return ratioFromPixels(rgba, { ...opts, channels: 4 });
+}
+
+/** RGB24 版本（采集链路用）。 */
+export function ratioFromRgb(rgb, opts = {}) {
+  return ratioFromPixels(rgb, { ...opts, channels: 3 });
 }
 
 /** `{x,y,w,h}` → `"x,y,w,h"`。 */

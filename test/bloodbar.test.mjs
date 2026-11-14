@@ -11,9 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  ratioFromRgba, loadBloodbar, saveBloodbar, clearBloodbar, bloodbarLine, bloodbarText,
+  ratioFromRgba, ratioFromRgb, ratioFromPixels,
+  loadBloodbar, saveBloodbar, clearBloodbar, bloodbarLine, bloodbarText,
   DEFAULT_THRESHOLD,
 } from '../src/bloodbar.js';
+import { readBloodbarOnce } from '../src/bloodbar-capture.js';
 
 /** 造一帧 RGBA：`paint(x, y)` 返回 `[r,g,b,a?]`。 */
 function frame(width, height, paint) {
@@ -129,4 +131,33 @@ test('bloodbarLine：没框 / 未采 / 有读数 / 框里没有血条', () => {
     /现在框里没有血条/,
   );
   assert.equal(bloodbarText({ x: 1, y: 2, w: 3, h: 4 }), '1,2,3,4');
+});
+
+test('RGB24 版本（采集链路）：半白半黑 → 0.5；彩色不认', () => {
+  const rgb = new Uint8Array(10 * 4 * 3);
+  for (let y = 0; y < 4; y += 1) {
+    for (let x = 0; x < 10; x += 1) {
+      const o = (y * 10 + x) * 3;
+      const v = x < 5 ? 255 : 30;
+      rgb[o] = v; rgb[o + 1] = v; rgb[o + 2] = v;
+    }
+  }
+  const half = ratioFromRgb(rgb, { width: 10, height: 4 });
+  assert.equal(half.ok, true);
+  assert.equal(half.ratio, 0.5);
+
+  const red = new Uint8Array(4 * 2 * 3);
+  for (let i = 0; i < 4 * 2; i += 1) { red[i * 3] = 255; }
+  assert.equal(ratioFromRgb(red, { width: 4, height: 2 }).reason, 'gone');
+});
+
+test('通道数只认 3/4；其他一律 bad-frame', () => {
+  const px = new Uint8Array(4 * 4 * 3).fill(255);
+  assert.equal(ratioFromPixels(px, { width: 4, height: 4, channels: 2 }).reason, 'bad-frame');
+  assert.equal(ratioFromPixels(px, { width: 4, height: 4, channels: 3 }).ok, true);
+});
+
+test('readBloodbarOnce：没框直接拒，不启动 ffmpeg', async () => {
+  assert.equal((await readBloodbarOnce({})).reason, 'no-region');
+  assert.equal((await readBloodbarOnce({ region: { x: 0, y: 0, w: 0, h: 0 } })).reason, 'no-region');
 });

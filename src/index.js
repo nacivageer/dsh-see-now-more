@@ -25,6 +25,7 @@ import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } 
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
+import { readBloodbarOnce } from './bloodbar-capture.js';
 import { todayCounts } from './lift/log.js';
 import { liftLine, liftGearLine } from './lift/status.js';
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
@@ -1642,12 +1643,50 @@ async function registerAll(ctx) {
             meta: { ok: true, region: null },
           };
         }
+        if (args.read === true || args.read === 'true' || args.read === 1) {
+          const cfg = loadBloodbar();
+          if (!cfg.region) {
+            return {
+              text: '还没框过血条。先调 `see_now({action:"bloodbar"})` 让用户拖一个框。',
+              meta: { ok: false, reason: 'no-region' },
+            };
+          }
+          const got = await readBloodbarOnce({
+            region: cfg.region, threshold: cfg.threshold, ffmpegPath: resolveFfmpeg().path,
+          });
+          if (!got.ok) {
+            const why = {
+              'no-region': '没框过血条',
+              'spawn-failed': 'ffmpeg 起不来',
+              'no-frame': '这一下没抓到帧（ffmpeg 没出画面？）',
+              'capture-failed': `抓帧失败：${got.detail ?? ''}`,
+            }[got.reason] ?? got.reason;
+            return { text: `血条读数失败：${why}`, meta: { ok: false, reason: got.reason } };
+          }
+          const reading = got.reading;
+          if (reading.ok === false) {
+            return {
+              text: `框里现在没有血条（${reading.reason}）—— 过场 / 菜单 / 框挪走了？不记 0 血、不补判。`,
+              meta: { ok: false, reason: reading.reason, ratio: reading.ratio, region: cfg.region },
+            };
+          }
+          const pct = Math.round(reading.ratio * 100);
+          return {
+            text: `血条读数：**${pct}%**（阈值 ${Math.round(cfg.threshold * 100)}%`
+              + `${reading.below ? '，已低于阈值' : '，没到阈值'}）\n`
+              + `框 ${bloodbarText(cfg.region)} · 亮色 ${reading.bright}/${reading.total} 像素 · 用时 ${got.ms}ms`,
+            meta: {
+              ok: true, ratio: reading.ratio, below: reading.below,
+              region: cfg.region, ms: got.ms,
+            },
+          };
+        }
+
         const r = await pickRegion({
           log,
           // pickRegion 的回调形状是 (region, env)，配置这边收 { region, threshold }
           save: (region, env) => saveBloodbar({ region }, env),
-        });
-        if (!r.ok) {
+        });        if (!r.ok) {
           const why = {
             cancelled: '用户取消了框选（Esc / 右键），什么都没改。',
             timeout: '等了三分钟没框完，取框窗已经收掉了。',
