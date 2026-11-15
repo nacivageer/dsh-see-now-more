@@ -5,9 +5,10 @@
 
 ## 一句话现状
 
-**采集、报告、被遮挡读取都已经跑通并在真机验过；「读数准」这一项在低血时失败**——
-不是 bug，是像素法的原理局限：鸣潮掉到低血时血条从白变成**暗红**，亮度和背景分不开。
-下一步要么上 OCR 读框里的 `当前/最大`，要么重做成「与背景的色差」。
+**采集、报告、被遮挡读取都跑通并在真机验过；「读数准」的解法是 OCR 读框里的 `当前/最大`**——
+2026-11-16 写了（`0.1.1-more.8`）：同一帧再认一次数字，数字优先、比例兜底。
+像素法在低血时仍会偏（条变暗红、白字抢端点），但那时它只是兜底，不再是唯一读数。
+**运行态待验**：重启 DSH 后 `status` 里应看到「最近 15%（2798/17638）」这种带数字的行。
 
 ## 已经能做的（真机验过）
 
@@ -25,7 +26,7 @@
   实测：置顶黑窗盖住血条时窗口抓 `ratio=1`、屏幕抓 `ratio=0`。
   `watch` 时**不停**这条（`start()` 里只对 gdigrab 停），否则一看画面读数就冻结。
 
-## 未解决：低血时读数不准（最重要）
+## 曾经的未解决：低血时读数不准（2026-11-16 已用 OCR 解决，代码 `0.1.1-more.8`）
 
 2026-11-16 00:3x 实测，屏幕 `882/20725 = 4.3%`，算法给 **11%**。同一帧像素统计：
 
@@ -38,25 +39,29 @@
 三件事叠在一起：① 填充变暗红，`V ≥ 0.55` 的门槛把它当背景；② 数字白字比填充更亮，抢端点；
 ③ 右端 `Lv.90` 的白字也会抢端点（这一条已用「连续暗列」修掉）。
 
-**方向**：优先 OCR 读框内数字（Windows.Media.Ocr，框只有 421×16，1 fps 跑得动），
-它解决的是「读数准」本身，还能防「条被特效遮住」。色差法次选——暗红与暗紫灰的距离只有 42，阈值难定。
+**做法**：同一帧再认一次数字（`py/ocr_sidecar.py` + `src/ocr.js`），数字优先、比例兜底。
+`血条 16%（2798/17638）`；读不出数字时退回 `血条 15%` 并标 `no-digits`。
 
-**OCR 已离线验通（2026-11-16 00:4x）**，接线的形状照这个来：
+接线的参数（**别"简化"掉画布高度**）：
 
-- 引擎：`Windows.Media.Ocr`，从 **Python `winrt`** 调（venv 实测 **40–43ms/帧**）；
-  PowerShell 也能调（55–75ms + 进程启动），但 Python 直接接进 sidecar 更省事。
-- 预处理的关键**不是反色，是画布高度**：16px 的条直接放大 2/4/6/8× 全是 0 行；
-  **4× Lanczos 放大后贴进 ≥240px 高的黑底画布**就稳定读出（3× 会丢一位，6× 带噪声）。
+- 引擎：`Windows.Media.Ocr`，从 **Python `winrt`** 调；常驻 sidecar，实测 **12–92ms/帧**（首帧含冷启动）。
+- 预处理：**4× Lanczos 放大后贴进 ≥240px 高的黑底画布**。16px 的条直接放大 2/4/6/8× 全是 0 行；
+  3× 会丢一位，6× 带噪声。数字是白字压暗底，**不用反色**（反色是给整屏浅色 UI 用的）。
 - 同帧对照：OCR `2798/17638` = **15.86%**，同帧像素法 **14.87–15.14%**，差 **0.7–1.0 点**。
-- 依赖（**未装进 DSH runtime python**）：`winrt-runtime` +
-  `winrt-Windows.{Media.Ocr,Graphics.Imaging,Storage,Globalization,Foundation,Foundation.Collections}`。
+- 依赖（**已装进 DSH runtime python，升级后要重装**）：`winrt-runtime` +
+  `winrt-Windows.{Media.Ocr,Graphics.Imaging,Storage,Storage.Streams,Globalization,Foundation,Foundation.Collections}`。
+
+**验证到哪一步**：sidecar 协议、真实帧数字、简报口径都有测试（`test/ocr.test.mjs`，
+没有 winrt 时整组 skip）；`scripts/install-dev.mjs` 的依赖段会打「血条数字 ✓/✗」。
+**运行态未验**：需要重启 DSH（插件树是进程启动时组合的）。
 
 ## 待办（按优先级）
 
-1. **低血读数**（上面那条）。
-2. **窗口移动会让框失效**：`region` 存的是**屏幕坐标**，窗口一挪就指向别处（2026-11-16 实测：
-   窗口从 x1267 挪到 x1428，框还停在旧位置，抓到的是场景）。两个修法二选一：
-   存窗口内相对坐标，或框选时记下窗口 rect、运行时换算。
+1. **运行态验数字**：重启 DSH 后开一局，`status` / `watch` 里的血条行应带 `（当前/最大）`；
+   与本机 `see_now({action:"bloodbar", read:true})` 的「比例法 N%」对照，差 ≤1 点。
+2. **窗口移动会让框失效**：`region` 存的是**屏幕坐标**，窗口一挪就指向别处
+   （2026-11-16 两次踩到：窗口从 x1267 挪到 x1428、另一次整窗移动，框还停在旧位置，抓到的是场景）。
+   修法二选一：存窗口内相对坐标，或框选时记下窗口 rect、运行时换算。
 3. **glance 记录只在仅监听时落**：`maybeGlanceBloodbar()` 在 `loop.js` 的 `listen` 分支里；
    看画面（`active`）时不记。这是设计，但如果要在「看画面时也复盘」，得另外落一条。
 4. **换游戏验证**：浅色 HUD 的游戏框一次就能用；换游戏 / 换 UI 缩放要重框。
@@ -78,16 +83,22 @@
 - **验证脚本别写死坐标**：窗口挪了 161px，脚本还框着旧位置，抓到场景会被误读成「算法把血条读成 gone」。
 - `windows_capture/__init__.py` 顶层 `import cv2`：sidecar 塞 `sys.modules['cv2']` stub 绕开；
   `resolveWgcPython()` 的探针必须带同样的 stub，否则出现假阴性。
-- `draw_border=False` 在 Win10 会抛异常，别传。
+- **`draw_border=False` 在 Win10 会抛异常，别传。**
 - `pick_region.py` 的 `MIN_SIDE` 原为 24，血条只有 10–20px 高，**松手永远不确认**（已降到 8）。
 - `capture.js` 的 `isDda()`：带 region 的屏幕源会被误判成 ddagrab，gdigrab 的 bgr0 过不去
   （`Function not implemented`）。带 region 一律不走 dda、同尺寸不缩放、输出 BGRA。
 - **框必须盖住整条**：只盖左半时端点法会给出 100% 的假读数。
+- **OCR 的画布高度别省**：16px 条直接放大 2–8× 读 0 行，必须贴到 ≥240px 黑底画布（原因见上）。
+- **OCR sidecar 的 stdout/stderr 要钉 utf8**（`s.reconfigure(encoding="utf-8")`）：Windows 上重定向到管道
+  时按 locale（cp936）编码，Node 按 utf8 解就会把 JSON 里的中文打碎。
+- **OCR 帧尺寸在启动时定死**（`--w/--h`），重框（换尺寸）必须重起 sidecar —— 协议里没有逐帧头。
 
 ## 相关
 
 - 任务书：`see-now/docs/tasks/see-now-audio-cluster.md`
 - 代码：`src/bloodbar.js`（纯函数）、`src/bloodbar-capture.js`（单次读）、`src/capture-window.js`（WGC）、
-  `py/wgc_capture.py`（sidecar）、`src/runner.js`（bloodbar 段）、`src/loop.js`（`maybeGlanceBloodbar` / `bloodbarTail`）
-- 测试：`test/bloodbar.test.mjs`（176 条全量里含 band 模式、端点、简报、配置读写）
-- 提交：`see-now-more` `d4c4e2a`（HEAD）
+  `py/wgc_capture.py`（WGC sidecar）、`src/ocr.js` + `py/ocr_sidecar.py`（数字识别）、
+  `src/runner.js`（bloodbar 段）、`src/loop.js`（`maybeGlanceBloodbar` / `bloodbarTail`）
+- 测试：`test/bloodbar.test.mjs`（band 模式、端点、简报、配置读写、数字优先）、
+  `test/ocr.test.mjs`（sidecar 真跑一帧；没有 winrt 时 skip）、fixture `test/fixtures/bloodbar-2798x17638.bgra`
+- 提交：`see-now-more` `0.1.1-more.8` 起（数字识别；上一个稳定点 `d4c4e2a`）

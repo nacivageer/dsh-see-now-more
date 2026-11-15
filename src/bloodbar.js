@@ -319,7 +319,18 @@ export function pushTrack(track, reading, { keepMs = DEFAULT_TRACK_MS } = {}) {
   const at = Number(reading.at);
   if (!Number.isFinite(at) || at <= 0) return pts;
   const next = pts.filter((p) => Number.isFinite(p?.at) && at - p.at <= keepMs);
-  next.push({ at, ratio: reading.ratio });
+  const point = { at, ratio: reading.ratio };
+  /**
+   * OCR 的 `当前/最大` 跟着同一条点走（2026-11-16 加）。
+   *
+   * 不另开一份轨迹：**比例和数字必须是同一帧的**，分两份存就会在简报里错配
+   * （比例是十秒前的、数字是刚才的）。数字读不出时这条点就只有比例。
+   */
+  if (Number.isFinite(reading.cur) && Number.isFinite(reading.max) && reading.max > 0) {
+    point.cur = reading.cur;
+    point.max = reading.max;
+  }
+  next.push(point);
   return next;
 }
 
@@ -346,24 +357,42 @@ export function bloodbarBrief({
   if (!last) return null;
   const pct = (n) => `${Math.round(n * 100)}%`;
   const clock = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour12: false });
-  const below = last.ratio < threshold;
+
+  /**
+   * 一条读数「以哪个数为准」：**OCR 的 `当前/最大` 优先，比例是兜底**。
+   *
+   * 为什么不是反过来：比例是像素统计，暗红条、白字压条、装饰抢端点都会偏
+   * （2026-11-16 同帧实测：屏幕 4.3%，比例法 11%）。数字是画在条上的原文，
+   * 读出来就是真值。读不出数字时才退回比例 —— 那时它就是唯一读数。
+   */
+  const value = (p) => (Number.isFinite(p?.cur) && Number.isFinite(p?.max) && p.max > 0
+    ? p.cur / p.max
+    : p.ratio);
+  const hp = Number.isFinite(last.cur) && Number.isFinite(last.max) && last.max > 0
+    ? `${last.cur}/${last.max}`
+    : null;
+
+  const shown = value(last);
+  const below = shown < threshold;
 
   const tail = [];
   const before = [...pts].reverse().find((p) => last.at - p.at >= 30_000);
-  if (before) tail.push(`30 秒前 ${pct(before.ratio)}`);
+  if (before) tail.push(`30 秒前 ${pct(value(before))}`);
   const recent = pts.filter((p) => last.at - p.at <= 60_000);
   if (recent.length > 2) {
-    const lo = Math.min(...recent.map((p) => p.ratio));
-    const hi = Math.max(...recent.map((p) => p.ratio));
+    const vals = recent.map(value);
+    const lo = Math.min(...vals);
+    const hi = Math.max(...vals);
     tail.push(lo === hi ? `近 60 秒都是 ${pct(lo)}` : `近 60 秒 ${pct(lo)}–${pct(hi)}`);
   }
   if (lastBelowAt) tail.push(`上次低血 ${clock(lastBelowAt)}`);
 
   const age = Math.max(0, now - last.at);
-  const text = `血条 ${pct(last.ratio)}（${below ? `低于阈值 ${pct(threshold)}` : `阈值 ${pct(threshold)}`}）`
+  const text = `血条 ${pct(shown)}${hp ? `（${hp}）` : ''}`
+    + `（${below ? `低于阈值 ${pct(threshold)}` : `阈值 ${pct(threshold)}`}）`
     + (age > staleMs ? ` · ${Math.round(age / 1000)} 秒前的读数` : '')
     + (tail.length ? ` · ${tail.join('，')}` : '');
-  return { text, below, ratio: last.ratio, at: last.at };
+  return { text, below, ratio: shown, at: last.at, hp };
 }
 
 /**
@@ -375,7 +404,7 @@ export function bloodbarBrief({
  * @param {{ratio:number, below:boolean}|null} reading
  * @param {{lastBelowAt?: number}} [o] 最近一次低于阈值的时刻（毫秒；0 = 从没低过）
  */
-export function bloodbarLine(cfg, reading = null, { lastBelowAt = 0 } = {}) {
+export function bloodbarLine(cfg, reading = null, { lastBelowAt = 0, ocr = null } = {}) {
   if (!cfg || !cfg.region) return '血条：没框（调 `see_now({action:"bloodbar"})` 框一条）';
   const pct = (n) => `${Math.round(n * 100)}%`;
   const head = `血条：框 ${bloodbarText(cfg.region)}（阈值 ${pct(cfg.threshold)}）`
@@ -383,7 +412,17 @@ export function bloodbarLine(cfg, reading = null, { lastBelowAt = 0 } = {}) {
   const low = lastBelowAt
     ? ` · 上次低血 ${new Date(lastBelowAt).toLocaleTimeString('zh-CN', { hour12: false })}`
     : '';
-  if (!reading) return `${head}· 未采（调 \`read:true\` 读一次）${low}`;
-  if (reading.ok === false) return `${head}· 现在框里没有血条（${reading.reason}）${low}`;
-  return `${head}· 最近 ${pct(reading.ratio)}${reading.below ? '（低于阈值）' : ''}${low}`;
+  /**
+   * OCR 那一行是**升级自检**：`winrt` 装在 DSH 的 runtime python 里，
+   * DSH 一升级就可能没了（和 `windows-capture` 同一个坑）。没装时这里直接说，
+   * 不指望谁记得。
+   */
+  const ocrNote = ocr === false
+    ? ' · OCR 不可用（缺 winrt，读数退回比例）'
+    : '';
+  if (!reading) return `${head}· 未采（调 \`read:true\` 读一次）${low}${ocrNote}`;
+  if (reading.ok === false) return `${head}· 现在框里没有血条（${reading.reason}）${low}${ocrNote}`;
+  const hp = Number.isFinite(reading.cur) && Number.isFinite(reading.max) && reading.max > 0
+    ? `（${reading.cur}/${reading.max}）` : '';
+  return `${head}· 最近 ${pct(reading.ratio)}${hp}${reading.below ? '（低于阈值）' : ''}${low}${ocrNote}`;
 }

@@ -34,6 +34,7 @@ import {
 } from './lift/buffer.js';
 import { frameFile, pruneOld } from './lift/log.js';
 import { bloodbarBrief, pushTrack, ratioFromRgba } from './bloodbar.js';
+import { resolveOcrPython, startOcr } from './ocr.js';
 import { encodePng } from './png.js';
 
 /**
@@ -436,6 +437,50 @@ export function createRunner({
   let bloodbarRetry = null;
   let bloodbarRetries = 0;
   let bloodbarWanted = false;
+  /**
+   * 数字识别那一路（`py/ocr_sidecar.py`）。与采集**同生命周期**但不共命运：
+   * OCR 起不来就 `bloodbarOcrWhy` 记一句，比例照报（`status` 里能看见）。
+   */
+  let bloodbarOcr = null;
+  let bloodbarOcrWhy = null;
+  let bloodbarOcrBusy = false;
+
+  function startBloodbarOcr(region) {
+    if (bloodbarOcr) return;
+    const probe = resolveOcrPython();
+    if (!probe.ok) {
+      bloodbarOcrWhy = probe.reason ?? 'no-winrt';
+      return;
+    }
+    try {
+      const o = startOcr({
+        w: region.w,
+        h: region.h,
+        python: probe.python,
+        onStderr: (d) => {
+          const line = String(d).trim();
+          if (line && line !== 'done') bloodbarEngineNote = line.slice(-300);
+        },
+        onReady: () => { bloodbarOcrWhy = null; },
+      });
+      bloodbarOcr = o;
+      o.done.catch((e) => {
+        if (bloodbarOcr === o) bloodbarOcr = null;
+        bloodbarOcrWhy = `OCR 退出：${e?.message ?? e}`;
+        log(`血条：数字识别停了（${e?.message ?? e}），比例照报`);
+      });
+    } catch (e) {
+      bloodbarOcr = null;
+      bloodbarOcrWhy = `OCR 起不来：${e?.message ?? e}`;
+    }
+  }
+
+  function stopBloodbarOcr() {
+    const o = bloodbarOcr;
+    bloodbarOcr = null;
+    bloodbarOcrBusy = false;
+    try { o?.stop(); } catch { /* 已经退了 */ }
+  }
 
   function scheduleBloodbarRetry(why) {
     if (!bloodbarWanted || bloodbarRetry) return;
@@ -484,6 +529,30 @@ export function createRunner({
         // 只在真正读到数时进轨迹：`gone`（过场/菜单/框挪走）不是一个"血量"
         bloodbarTrack = pushTrack(bloodbarTrack, reading);
         if (reading.ok === true && reading.below === true) bloodbarLastBelowAt = reading.at;
+        /**
+         * 同一帧再认一次数字（异步，不耽误这一帧的比例）。
+         *
+         * **认出来才覆盖显示**：`bloodbarBrief` 优先用 `当前/最大`，读不出就还是比例。
+         * 只认"比例已经算出来"的帧：`gone` 时没有条可读，白花 40ms。
+         */
+        if (bloodbarOcr && !bloodbarOcrBusy && reading.ok === true) {
+          bloodbarOcrBusy = true;
+          const at = reading.at;
+          bloodbarOcr.recognize(f.buf).then((out) => {
+            if (!out || !Number.isFinite(out.cur) || !Number.isFinite(out.max) || out.max <= 0) return;
+            for (let i = bloodbarTrack.length - 1; i >= 0; i -= 1) {
+              if (bloodbarTrack[i].at === at) {
+                bloodbarTrack[i].cur = out.cur;
+                bloodbarTrack[i].max = out.max;
+                break;
+              }
+            }
+            if (bloodbarReading && bloodbarReading.at === at) {
+              bloodbarReading = { ...bloodbarReading, cur: out.cur, max: out.max, ocrText: out.text ?? '' };
+            }
+          }).catch(() => { /* 单帧识别失败不影响比例；状态里已有 OCR 退出原因 */ })
+            .finally(() => { bloodbarOcrBusy = false; });
+        }
       } catch (e) {
         bloodbarError = `血条：算比例失败（${e?.message ?? e}）`;
       }
@@ -513,6 +582,7 @@ export function createRunner({
       bloodbarEngine = engine;
       bloodbarError = null;
       bloodbarRetries = 0;
+      startBloodbarOcr(region);
       log(`血条：开始读（${region.w}×${region.h}，${fps} fps，${engine === 'wgc' ? `按窗口「${windowTitle}」` : '按屏幕'}）`);
       run.done.then(() => {
         if (bloodbarRun !== run) return;      // 我们自己停的，不是故障
@@ -542,6 +612,7 @@ export function createRunner({
     const run = bloodbarRun;
     bloodbarRun = null;
     run?.stop();
+    stopBloodbarOcr();
     if (was && why) log(`血条：停（${why}）`);
     return { ok: true };
   }
@@ -560,6 +631,15 @@ export function createRunner({
       reading: bloodbarReading,
       /** 最近一次低于阈值的时刻（0 = 从没低过）。 */
       lastBelowAt: bloodbarLastBelowAt || null,
+      /**
+       * 数字识别那一路的状态。`ok:false` 时 `why` 就是给人看的：
+       * 最常见的不是"算法崩了"，是 **DSH 升级后 winrt 没了**（和 windows-capture 同坑）。
+       */
+      ocr: {
+        ok: Boolean(bloodbarOcr),
+        ready: Boolean(bloodbarOcr && bloodbarOcr.ready),
+        why: bloodbarOcrWhy,
+      },
       /** 一行简报（与 runner.bloodbarNote() 同一个东西，省得调用方再算一遍）。 */
       brief: bloodbarNote(),
       error: bloodbarError,

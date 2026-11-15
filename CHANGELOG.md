@@ -2,6 +2,28 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.8] - 2026-11-16
+
+### Added — 血条数字识别（OCR）：读数从「比例」升级成「当前/最大」
+
+像素法在低血时会读错——条从白变暗红，`V≥0.55` 的亮色门槛把它当背景；数字白字又抢端点。
+2026-11-16 实测同一帧：屏幕 `882/20725 = 4.3%`，比例法给 **11%**。
+
+现在同一帧再认一次数字（Windows.Media.Ocr，常驻 Python sidecar，实测 12–92ms/帧）：
+
+- **数字优先、比例兜底**：认出来就写 `血条 16%（2798/17638）`，阈值判断也按数字走；
+  读不出数字（`no-digits`）时照旧只报比例，不编。同一帧的比例与数字进同一条轨迹点。
+- **`read:true` 单次读也带数字**，并在同一行里同时给出「比例法 N%」——两条读数可对照。
+- **预处理**：4× Lanczos + 240px 黑底画布。16px 条直接放大 2–8× 都是 0 行；
+  3× 丢一位、6× 带噪声（这是这轮唯一真卡住的地方，别再"简化"掉画布高度）。
+- **失败不拖垮采集**：OCR 起不来（没装 winrt / 没有中文识别器）只记 `status().bloodbar.ocr.why`，
+  比例照报；`status` 的血条行会写「OCR 不可用」。
+
+### 依赖（DSH 升级后要重装，别再当新鲜事）
+
+`winrt-runtime` + `winrt-Windows.{Media.Ocr,Graphics.Imaging,Storage,Storage.Streams,Globalization,Foundation,Foundation.Collections}`
+装进 **DSH 的 runtime python**（与 `windows-capture` 同一个坑）。`status` 的 OCR 行就是自检入口。
+
 ## [0.1.1-more.7] - 2026-11-11
 
 ### Added — 黑听抬头四档闭环（警觉 / 瞥 / 看 / 追）+ 按台词取帧（P2-A + P2-B）

@@ -332,3 +332,54 @@ test('bloodbarLine：带上「上次低血」时刻', () => {
   // 没传 → 不出现（旧行为不变）
   assert.doesNotMatch(bloodbarLine(cfg, { ok: true, ratio: 0.64, below: false }), /上次低血/);
 });
+
+/* ------------------------------------------- OCR 数字（2026-11-16：读数准的答案） */
+
+test('pushTrack：同一帧的数字跟着点走，不另开一份轨迹', () => {
+  const t = pushTrack([], { ok: true, ratio: 0.15, at: 1_000, cur: 2798, max: 17638 });
+  assert.deepEqual(t, [{ at: 1_000, ratio: 0.15, cur: 2798, max: 17638 }]);
+  // 数字不合法（0 / NaN）就只留比例，别写一对废数
+  assert.deepEqual(pushTrack([], { ok: true, ratio: 0.5, at: 2, cur: 0, max: 0 }), [{ at: 2, ratio: 0.5 }]);
+  assert.deepEqual(pushTrack([], { ok: true, ratio: 0.5, at: 3, cur: 5, max: NaN }), [{ at: 3, ratio: 0.5 }]);
+});
+
+test('bloodbarBrief：有数字就用数字（比例只当兜底），并把 cur/max 写出来', () => {
+  const now = 1_000_000;
+  // 比例法读 15%、真值 2798/17638 = 15.86% —— 显示与阈值都按数字走
+  const b = bloodbarBrief({
+    track: [{ at: now, ratio: 0.15, cur: 2798, max: 17638 }], threshold: 0.3, now,
+  });
+  assert.equal(b.ratio, 2798 / 17638);
+  assert.equal(b.hp, '2798/17638');
+  assert.match(b.text, /^血条 16%（2798\/17638）（低于阈值 30%）/);
+});
+
+test('bloodbarBrief：数字低于阈值、比例高于阈值时，按数字判「低于」', () => {
+  const now = 1_000_000;
+  const b = bloodbarBrief({
+    track: [{ at: now, ratio: 0.35, cur: 2000, max: 20000 }], threshold: 0.3, now,
+  });
+  assert.equal(b.below, true, '0.35 的像素读数不许盖过 10% 的真值');
+  assert.match(b.text, /血条 10%（2000\/20000）（低于阈值 30%）/);
+});
+
+test('bloodbarBrief：30 秒前 / 近 60 秒区间也按数字算（同一条轨迹里可能混着有数字和没数字的点）', () => {
+  const now = 1_000_000;
+  const track = [
+    { at: now - 40_000, ratio: 0.70, cur: 14000, max: 20000 },
+    { at: now - 20_000, ratio: 0.30 },                       // OCR 没读出 → 用比例
+    { at: now, ratio: 0.10, cur: 2000, max: 20000 },
+  ];
+  const b = bloodbarBrief({ track, threshold: 0.3, now });
+  assert.match(b.text, /30 秒前 70%/);
+  assert.match(b.text, /近 60 秒 10%–70%/);
+});
+
+test('bloodbarLine：有数字就写出来；OCR 不可用时明说（升级自检）', () => {
+  const cfg = { region: { x: 1, y: 2, w: 421, h: 16 }, threshold: 0.3 };
+  const withHp = bloodbarLine(cfg, { ok: true, ratio: 0.15, cur: 2798, max: 17638 });
+  assert.match(withHp, /最近 15%（2798\/17638）/);
+  const broken = bloodbarLine(cfg, { ok: true, ratio: 0.15 }, { ocr: false });
+  assert.match(broken, /OCR 不可用/);
+  assert.doesNotMatch(bloodbarLine(cfg, { ok: true, ratio: 0.15 }), /OCR 不可用/, '不知道时不许瞎说');
+});

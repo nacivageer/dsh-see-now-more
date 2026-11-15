@@ -1688,13 +1688,21 @@ async function registerAll(ctx) {
               meta: { ok: false, reason: reading.reason, ratio: reading.ratio, region: cfg.region },
             };
           }
-          const pct = Math.round(reading.ratio * 100);
+          // 数字优先：条上的 `当前/最大` 是真值，比例只是像素统计（暗红条会读偏）
+          const hp = Number.isFinite(reading.cur) && Number.isFinite(reading.max) && reading.max > 0
+            ? { cur: reading.cur, max: reading.max } : null;
+          const shown = hp ? hp.cur / hp.max : reading.ratio;
+          const pct = Math.round(shown * 100);
+          const ocrWhy = reading.ocr && reading.ocr.ok === false ? ` · 数字没读出（${reading.ocr.why}）` : '';
           return {
-            text: `血条读数：**${pct}%**（阈值 ${Math.round(cfg.threshold * 100)}%`
-              + `${reading.below ? '，已低于阈值' : '，没到阈值'}）\n`
-              + `框 ${bloodbarText(cfg.region)} · 亮色 ${reading.bright}/${reading.total} 像素 · 用时 ${got.ms}ms`,
+            text: `血条读数：**${pct}%**${hp ? `（${hp.cur}/${hp.max}）` : ''}`
+              + `（阈值 ${Math.round(cfg.threshold * 100)}%`
+              + `${shown < cfg.threshold ? '，已低于阈值' : '，没到阈值'}）${ocrWhy}\n`
+              + `框 ${bloodbarText(cfg.region)} · 亮色 ${reading.bright}/${reading.total} 像素`
+              + ` · 比例法 ${Math.round(reading.ratio * 100)}% · 用时 ${got.ms}ms`,
             meta: {
-              ok: true, ratio: reading.ratio, below: reading.below,
+              ok: true, ratio: reading.ratio, below: shown < cfg.threshold,
+              ...(hp ? { cur: hp.cur, max: hp.max } : {}),
               region: cfg.region, ms: got.ms,
             },
           };
@@ -1846,7 +1854,10 @@ async function registerAll(ctx) {
             // 区域：只看一小块时，模型得知道自己看到的不是整屏
             + `\n区域：${regionText(s.lastSource?.region ?? loadRegion()) ?? '整屏'}`
             // 血条（P1c）：框在哪、阈值、最近一次读数；没在采时明说
-            + `\n${bloodbarLine(loadBloodbar(), s.bloodbar?.reading ?? null, { lastBelowAt: s.bloodbar?.lastBelowAt })}`
+            + `\n${bloodbarLine(loadBloodbar(), s.bloodbar?.reading ?? null, {
+              lastBelowAt: s.bloodbar?.lastBelowAt,
+              ocr: s.bloodbar?.ocr && s.bloodbar.ocr.ok === false ? false : null,
+            })}`
             // 声音单独一行：听不到声音时第一个要看的就是这里
             + `\n声音：${voice.speakers > 0
               ? `已接上 ${voice.adapters.join(', ') || '适配器'}（${voice.speakers} 个会出声的订阅者）`

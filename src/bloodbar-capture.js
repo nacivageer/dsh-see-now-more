@@ -11,9 +11,44 @@
 import { spawnFrames } from './capture.js';
 import { spawnWindowFrames } from './capture-window.js';
 import { ratioFromRgba } from './bloodbar.js';
+import { resolveOcrPython, startOcr } from './ocr.js';
 
 /** 等第一帧的上限：gdigrab 起进程 + 首帧一般 1–2 秒，给 8 秒足够。 */
 export const READ_TIMEOUT_MS = 8000;
+
+/**
+ * 单次读也要数字：起一个一次性 OCR 进程认这一帧（约 0.7s，含 python 冷启动）。
+ *
+ * 失败**不影响**读数：返回 `{ok:false, why}`，调用方只报比例。
+ * 这里不抛 —— 单次读的价值是「现在到底多少」，OCR 缺席不该让整次读失败。
+ *
+ * @returns {Promise<{ok:true, cur:number, max:number, text:string, ms:number}
+ *                 | {ok:false, why:string}>}
+ */
+async function ocrFrame(buf, w, h, timeoutMs = 5000) {
+  const probe = resolveOcrPython();
+  if (!probe.ok) return { ok: false, why: probe.reason ?? 'no-winrt' };
+  let o = null;
+  try {
+    o = startOcr({ w, h, python: probe.python, timeoutMs });
+    const r = await o.recognize(buf);
+    if (!r || !Number.isFinite(r.cur) || !Number.isFinite(r.max) || r.max <= 0) {
+      return { ok: false, why: 'no-digits' };
+    }
+    return { ok: true, cur: r.cur, max: r.max, text: r.text ?? '', ms: r.ms ?? 0 };
+  } catch (e) {
+    return { ok: false, why: String(e?.message ?? e) };
+  } finally {
+    try { o?.stop(); } catch { /* 已经退了 */ }
+    try { await o?.done; } catch { /* 上面已经处理过 */ }
+  }
+}
+
+/** 把 OCR 结果并进 reading（只并数字，不动比例）。 */
+function withOcr(reading, ocr) {
+  if (!ocr?.ok) return { ...reading, ocr };
+  return { ...reading, cur: ocr.cur, max: ocr.max, text: ocr.text, ocr };
+}
 
 /**
  * 抓一帧框内像素并算亮色占比。
@@ -66,9 +101,10 @@ export async function readBloodbarOnce({
     };
   }
 
+  const reading = ratioFromRgba(buf, { width: w, height: h, threshold, mode: 'band' });
   return {
     ok: true,
-    reading: ratioFromRgba(buf, { width: w, height: h, threshold, mode: 'band' }),
+    reading: withOcr(reading, reading.ok === true ? await ocrFrame(buf, w, h) : null),
     ms: Date.now() - t0,
   };
 }
@@ -125,9 +161,10 @@ export async function readBloodbarWindowOnce({
       detail: failure ? String(failure).slice(0, 300) : null,
     };
   }
+  const reading = ratioFromRgba(buf, { width: w, height: h, threshold, mode: 'band' });
   return {
     ok: true,
-    reading: ratioFromRgba(buf, { width: w, height: h, threshold, mode: 'band' }),
+    reading: withOcr(reading, reading.ok === true ? await ocrFrame(buf, w, h) : null),
     ms: Date.now() - t0,
   };
 }

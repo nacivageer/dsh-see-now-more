@@ -73,6 +73,23 @@ function runtimePythons() {
   return out;
 }
 
+function probeModules(python, code) {
+  if (!python) return null;
+  try {
+    const r = spawnSync(python, ['-c', code], { timeout: 15000, windowsHide: true, stdio: 'ignore' });
+    return r?.status === 0;
+  } catch {
+    return null;
+  }
+}
+
+/** `windows_capture` 顶层 import cv2（只为 imwrite）—— 探针要带同样的 stub，否则假阴性。 */
+const WGC_PROBE = "import sys,types;m=types.ModuleType('cv2');m.imwrite=lambda *a,**k:False;"
+  + "sys.modules.setdefault('cv2',m);import windows_capture";
+/** 血条数字识别：WinRT 的 OCR / 位图 / 流 / 语言四个命名空间。 */
+const OCR_PROBE = 'import winrt.windows.media.ocr, winrt.windows.graphics.imaging, '
+  + 'winrt.windows.storage.streams, winrt.windows.globalization';
+
 function checkPython() {
   const probe = 'import tkinter, PIL, mss, numpy';
   const candidates = [];
@@ -167,6 +184,17 @@ async function report() {
   console.log(`  python  : ${py.ok ? `${py.python}  ✓ tkinter/Pillow/mss/numpy` : '✗ 没找到能 import tkinter/Pillow/mss/numpy 的解释器'}`);
   if (!py.ok) console.log('            → pip install Pillow mss numpy（装进 DSH 用来跑悬浮窗的那个 Python）');
   console.log(`  ffmpeg  : ${ff.ok ? `${ff.ffmpeg}  ✓` : '✗ 没找到（DSH 桌面版自带，检查 DSH_HOME/tools/ffmpeg/bin）'}`);
+  /**
+   * 两条血条依赖都是**可选**：没有也能装、能采，只是能力降级。
+   * 单列出来的理由是它们都装在 DSH 的 runtime python 里，**DSH 一升级就没了** ——
+   * 2026-11-16 用户原话：「每次升级都得重新搞依赖」。这里报一次，比事后猜「为什么血条不对」便宜。
+   */
+  if (py.ok) {
+    const wgc = probeModules(py.python, WGC_PROBE);
+    const ocr = probeModules(py.python, OCR_PROBE);
+    console.log(`  血条窗口抓: ${wgc ? '✓ windows-capture' : '✗ 没装（pip install windows-capture）—— 被遮挡时读不到'}`);
+    console.log(`  血条数字  : ${ocr ? '✓ winrt（OCR 读 当前/最大）' : '✗ 没装（pip install winrt-runtime winrt-Windows.Media.Ocr …）—— 只有比例'}`);
+  }
 
   /**
    * **版本对账。**
