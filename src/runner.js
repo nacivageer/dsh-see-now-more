@@ -888,8 +888,17 @@ export function createRunner({
      * **放在 running 的早退之后**：已经在看时再调 start 不该把别人的缓冲清掉。
      */
     stopLiftCapture({ clear: true, why: '开始看画面' });
-    // 血条那一路只在黑听时读：看画面时再抓一条窄带没有意义，白烧 CPU
-    stopBloodbarCapture({ why: '开始看画面' });
+    /**
+     * 血条那一路：**gdigrab 抓屏幕时停，WGC 按窗口抓时不停**。
+     *
+     * 停的理由只对屏幕抓成立：两路同时吃屏幕是白烧 CPU（这棒的原则是黑听才付这笔钱）。
+     * 但 WGC 抓的是窗口表面，跟屏幕采集不冲突 —— 而且「看着画面打、同时要残血读数」
+     * 恰恰是它唯一的用法。2026-11-16 实测踩到：一 `watch`，血条读数就冻在 53 秒前。
+     */
+    if (!bloodbar?.window) stopBloodbarCapture({ why: '开始看画面' });
+    // 按窗口抓的那条要在看画面时**补起**：用户可能直接 watch（没先进仅监听），
+    // 而「打的时候要残血读数」正是它该活着的时候。
+    if (bloodbar?.window && bloodbarOn && !bloodbarRun) startBloodbarCapture();
     // **窗被用户关掉之后，这里必须复位**：`windowState` 缓存着 `{ok:true}`，
     // `windowOpened` 也还是 true —— 不复位的话下一次 watch 会（a）不再开窗，
     // （b）循环立刻又把"窗没了"判成用户关窗，落第二条挂断说明。
