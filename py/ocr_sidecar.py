@@ -31,7 +31,7 @@ import sys
 import time
 
 import numpy
-from PIL import Image
+from PIL import Image, ImageFilter
 
 # 数字对：允许空格、全角斜杠、千分位逗号 —— OCR 的原文长这样：「2798 / 17638」
 _PAIR = re.compile(r"(\d[\d,]*)\s*[/\uFF0F|]\s*(\d[\d,]*)")
@@ -57,16 +57,22 @@ def parse_hp(text: str):
     return None, None
 
 
-def _to_bgra(arr_bgra: numpy.ndarray, scale: int, canvas_h: int, pad: int = 60) -> numpy.ndarray:
-    """BGRA 帧 → 放大的 RGB → 贴到黑底画布 → 再回到 BGRA（给 SoftwareBitmap）。
+def _to_bgra(rgb: numpy.ndarray, scale: int, canvas_h: int, pad: int = 60,
+             sharp: tuple[float, int] | None = None) -> numpy.ndarray:
+    """**RGB**（不是 BGRA）→ 放大的画布 → BGRA（给 SoftwareBitmap）。
 
     **左右也要留白**（2026-11-16 真机踩到）：画布宽度原来正好等于条宽，数字紧贴
     crop 边界时 OCR 会吃掉首尾字符（`2798/17638` 读成 `98/1763`，于是被当成 6% 报出去）。
     上下留白是给行检测的，左右留白是给首尾字符的 —— 两者都别省。
+
+    `sharp`：放大后做一次 UnsharpMask（`(radius, percent)`）。10px 高的字放大到 40px
+    时边缘是软的，锐化能把"4"和"7"这种挤在一起的笔画分开 —— 实测能把 36% 那帧的
+    `4177/16100` 救回来。
     """
-    rgb = numpy.ascontiguousarray(arr_bgra[:, :, [2, 1, 0]])
     im = Image.fromarray(rgb, "RGB")
     big = im.resize((im.width * scale, im.height * scale), Image.LANCZOS)
+    if sharp:
+        big = big.filter(ImageFilter.UnsharpMask(radius=sharp[0], percent=sharp[1], threshold=2))
     ch = max(canvas_h, big.height + 40)
     canvas = Image.new("RGB", (big.width + pad * 2, ch), (0, 0, 0))
     canvas.paste(big, (pad, (ch - big.height) // 2))
@@ -76,6 +82,22 @@ def _to_bgra(arr_bgra: numpy.ndarray, scale: int, canvas_h: int, pad: int = 60) 
         numpy.full(out.shape[:2], 255, dtype=numpy.uint8),
     ])
     return numpy.ascontiguousarray(bgra, dtype=numpy.uint8)
+
+
+def candidates(arr_bgra: numpy.ndarray):
+    """同一帧的几种极性，按**先便宜后贵**的顺序给。
+
+    为什么需要：血条数字的极性会随血量翻转（2026-11-16 实测）——
+    数字压在暗底上时是**白字**（原图就认得出）；压在亮条上时是**深色描边字**（要反色）；
+    挤在一起时锐化能分开笔画。用一种极性必然丢掉另一种。
+
+    `plain` 命中率最高（低血那段），只有它没认出数字时才轮到后面的。
+    每多试一种约多 15–80ms，1 fps 下无所谓 —— 比认错数字便宜。
+    """
+    small = numpy.ascontiguousarray(arr_bgra[:, :, [2, 1, 0]])          # BGRA→RGB
+    yield "plain", small, None
+    yield "sharp", small, (2, 150)                                       # 笔画挤在一起
+    yield "invert", 255 - small, None                                    # 深字压亮条
 
 
 class Ocr:
@@ -122,6 +144,29 @@ class Ocr:
             "max": mx,
             "ms": int((time.perf_counter() - t0) * 1000),
         }
+
+    async def recognize_any(
+        self, arr_bgra: numpy.ndarray, scale: int, canvas_h: int, pad: int = 60,
+    ) -> dict:
+        """同一帧试几种极性，**认出数字就停**；全都不行就把最后一次的原文交出去。
+
+        返回里带 `pre`（哪种极性认出来的）：排障时一眼能看出"这次是反色救的"
+        还是"一直没认出来"。全失败时 `cur/max` 是 None —— 调用方退回比例，不编。
+        """
+        first = None
+        t_all = time.perf_counter()
+        for name, rgb, sharp in candidates(arr_bgra):
+            try:
+                out = await self.recognize(_to_bgra(rgb, scale, canvas_h, pad, sharp))
+            except Exception as e:  # noqa: BLE001
+                out = {"text": "", "cur": None, "max": None, "ms": 0, "error": f"{type(e).__name__}: {e}"}
+            out["pre"] = name
+            out["total_ms"] = int((time.perf_counter() - t_all) * 1000)
+            if first is None:
+                first = out
+            if out.get("cur") and out.get("max"):
+                return out
+        return first or {"text": "", "cur": None, "max": None, "ms": 0, "pre": None}
 
 
 def _read_exact(stream, n: int) -> bytes | None:
@@ -176,8 +221,7 @@ def main() -> int:
             return 0
         arr = numpy.frombuffer(raw, dtype=numpy.uint8).reshape(args.h, args.w, 4)
         try:
-            bgra = _to_bgra(arr, args.scale, args.canvas_h)
-            out = asyncio.run(ocr.recognize(bgra))
+            out = asyncio.run(ocr.recognize_any(arr, args.scale, args.canvas_h))
         except Exception as e:  # noqa: BLE001
             out = {"error": f"{type(e).__name__}: {e}"}
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")

@@ -17,6 +17,7 @@ import { resolveOcrPython, startOcr } from '../src/ocr.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(HERE, 'fixtures', 'bloodbar-2798x17638.bgra');
+const FIXTURE_SHARP = join(HERE, 'fixtures', 'bloodbar-4177x16100.bgra');
 const W = 421;
 const H = 16;
 
@@ -34,6 +35,23 @@ test('ocr：sidecar 真跑一帧，认出血条数字', { skip }, async () => {
     assert.equal(out.max, 17638);
     assert.match(out.text, /2798/);
     assert.ok(out.ms >= 0);
+  } finally {
+    o.stop();
+    await o.done.catch(() => {});
+  }
+});
+
+test('ocr：plain 认不出的帧，靠锐化那一路救回来（36% 那帧）', { skip }, async () => {
+  const frame = readFileSync(FIXTURE_SHARP);
+  assert.equal(frame.length, W * H * 4, 'fixture 必须是 421×16 的 BGRA');
+
+  const o = startOcr({ w: W, h: H, python: probe.python });
+  try {
+    const out = await o.recognize(frame);
+    // 这帧原图极性读不出，是先试 sharp 才认出来的——数字对不上就说明重试链断了
+    assert.equal(out.cur, 4177);
+    assert.equal(out.max, 16100);
+    assert.equal(out.pre, 'sharp', '这帧应该由 sharp 那一路认出（pre 会告诉你是哪路）');
   } finally {
     o.stop();
     await o.done.catch(() => {});
