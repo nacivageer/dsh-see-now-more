@@ -22,10 +22,13 @@ P1 血条读数完成并验过；P2 改为「**只报告读数，不唤**」，�
   **不调用 `wake()`，不占 `listenGap` 退避。** 要不要抬头由模型自己看情况决定。
 - **按窗口抓（WGC，2026-11-15）**：`bloodbar.json` 的 `window` 字段（标题子串）配了就改走
   `py/wgc_capture.py` + `src/capture-window.js`——**被别的窗口挡住、失去焦点也能读**。
-  实测同一块 421×16：屏幕抓 `ratio=0`、窗口抓 `ratio=1`（DSH 窗口压在上面时）。
   `see_now({action:"bloodbar", window:"云·鸣潮"})` 开，`window:"off"` 回抓屏幕，都是热更新。
   依赖 `pip install windows-capture`（已装进 `dsh-runtimes` 那个 python）。
   边界：**最小化**两边都拿不到；**D3D 独占全屏** WGC 抓不到（但那时游戏必然前台全屏，走 ddagrab）。
+  **实机验证（2026-11-15 23:5x，云·鸣潮在跑、满血 15897/15899）**：用一个置顶黑窗盖住血条那块，
+  `readBloodbarWindowOnce` 仍读到 `ratio=1`，同一块 `readBloodbarOnce`（gdigrab）读到 `ratio=0 / visible=false`；
+  常驻 sidecar 进程 `wgc_capture.py --fps 1 --title 云·鸣潮 --region 2261,1525,421,16` 在场，
+  `status` 显示「窗口「云·鸣潮」（被遮挡也读）· 最近 100%」。
 - **验收记录**：框紧（332×16）连读 5 次 **91.87%** 完全一致，屏幕数字 17223/18980 = **90.75%**，
   差 1.1 点；2026-11-15 12:15 战斗中掉到 **64%** 落一条
   `{"level":"glance","trigger":"bloodbar","spoke":false}`，满血 100% 不记，30 秒冷却无重复。
