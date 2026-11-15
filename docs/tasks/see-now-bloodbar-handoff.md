@@ -25,10 +25,10 @@ P1 血条读数完成并验过；P2 改为「**只报告读数，不唤**」，�
   `see_now({action:"bloodbar", window:"云·鸣潮"})` 开，`window:"off"` 回抓屏幕，都是热更新。
   依赖 `pip install windows-capture`（已装进 `dsh-runtimes` 那个 python）。
   边界：**最小化**两边都拿不到；**D3D 独占全屏** WGC 抓不到（但那时游戏必然前台全屏，走 ddagrab）。
-  **实机验证（2026-11-15 23:5x，云·鸣潮在跑、满血 15897/15899）**：用一个置顶黑窗盖住血条那块，
-  `readBloodbarWindowOnce` 仍读到 `ratio=1`，同一块 `readBloodbarOnce`（gdigrab）读到 `ratio=0 / visible=false`；
-  常驻 sidecar 进程 `wgc_capture.py --fps 1 --title 云·鸣潮 --region 2261,1525,421,16` 在场，
-  `status` 显示「窗口「云·鸣潮」（被遮挡也读）· 最近 100%」。
+  **实机验证（2026-11-16 00:0x，三人队打到阵亡一人）**：同场读到满血 100%（屏幕 15897/15899）→
+  60 秒窗口最低 **13%** → 回满，报告行自动带 `上次低血 00:06:20`；`watch` 不再冻结血条
+  （间隔 19 秒两次读数都新鲜）；置顶黑窗盖住时窗口抓 `ratio=1`、屏幕抓 `ratio=0`。
+  未验：读数与屏幕数字的精确对照、仅监听下的 glance 记录（`active` 下 `maybeGlanceBloodbar()` 不跑）。
 - **验收记录**：框紧（332×16）连读 5 次 **91.87%** 完全一致，屏幕数字 17223/18980 = **90.75%**，
   差 1.1 点；2026-11-15 12:15 战斗中掉到 **64%** 落一条
   `{"level":"glance","trigger":"bloodbar","spoke":false}`，满血 100% 不记，30 秒冷却无重复。
