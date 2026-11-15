@@ -7,8 +7,10 @@
  * 之后只算框内**亮色像素**占多少 —— 横条血条的填充比例就是这个数。换游戏、
  * 换 UI 缩放，重新框一次就行，坐标永远不进代码。
  *
- * 代价也写在这里：环形血条、纯数字血量、分段方块血条**不覆盖**；彩色（高饱和）
- * 血条也不认，只认低饱和、高亮度的白/浅色条。
+ * 代价也写在这里：环形血条、纯数字血量、分段方块血条**不覆盖**。
+ * `band` 模式现在按「左端填充色 + 条背景」认条（2026-11-16 重写，见下面 `BAND_*` 注释），
+ * 所以暗红/低饱和以外的填充也能读 —— 但条背景是高饱和色的 HUD 还没验过，
+ * 换游戏要先拿真值帧回归（`test/fixtures/ratio-samples/` 就是这套回归）。
  *
  * ## 两个东西
  *
@@ -62,6 +64,67 @@ export const DEFAULT_STRONG_FILL = 0.9;
  */
 export const DEFAULT_GAP_RATIO = 0.5;
 export const DEFAULT_GAP_COLS = 6;
+
+/**
+ * **band 模式的条带定位（2026-11-16 重写）**：不再找「最亮的一行」。
+ *
+ * 旧做法在低血时必错：条变暗红、白字数字比条更亮，最亮行落在数字上，
+ * 数字列被当成填充（真机 4.3% 读成 11%、4% 读成 25%）。新做法用**横向对比**：
+ * 条带行是「左端亮（填充）、右端暗（未填充背景）」的那些行，边框/场景行没有这种对比。
+ *
+ * 左右窗口按框宽取比例，不写死像素：
+ *   - 左端取 `max(2, min(8, 2% 框宽))` 列 —— 填充总是从左端开始；
+ *   - 右端参考取 70%–85% 框宽 —— 对按「整条」框的框来说，这里通常是未填充区。
+ *
+ * 满血白条时右端也是亮的，左右对比会消失（`< 12`），这时退化成「左端足够亮」
+ * （相对最亮行 80%），照样能定出条带。两者都不看绝对亮度阈值。
+ */
+export const BAND_EDGE_FRAC = 0.02;
+export const BAND_RIGHT_START = 0.70;
+export const BAND_RIGHT_END = 0.85;
+export const BAND_CONTRAST_MIN = 6;
+export const BAND_CONTRAST_SHARE = 0.35;
+export const BAND_LEFT_FALLBACK_TRIGGER = 12;
+export const BAND_LEFT_FALLBACK_SHARE = 0.8;
+
+/**
+ * 填充段（band 模式）：**按左端填充色找连续列**。
+ *
+ * 1. 先用「与左端填充色的最大通道差 ≤ 30」粗分一遍，拿到填充大概到哪结束；
+ * 2. 在这之后找一个「平坦段」（相邻列中位色差 ≤ 8、至少 4 列）当**未填充背景色**；
+ * 3. 再用「离填充色比离背景色更近」精分一遍，得到填充端点。
+ *
+ * 为什么不能只按「连续」扫：白条上的数字/中央菱形/分段刻度会把连续段打断
+ * （100% 读成 23.8%）；而数字的后半截又常常是**白字压在暗底上**，跟填充同色，
+ * 允许跨 2–3 列会把它接回填充里（62% 会读成 70%）。所以判定用「列内填充分数 +
+ * 短窗口中位数」：孤立标记 2–3 列跨得过去，字块这种「一半列有白、一半列没有」
+ * 的纹理过不去。
+ */
+export const FILL_COLOR_TOL = 30;
+export const FILL_LOW_FRAC = 0.35;
+export const FILL_BREAK_COLS = 8;
+export const FILL_WINDOW_HALF = 4;
+export const FILL_SMOOTH_MIN = 0.45;
+
+/**
+ * **条宽（分母）**：框里常带着右端的 `Lv.90` / 括号装饰（真机框 421px、条只有 ~333px）。
+ * 旧代码拿框宽当分母，于是 62% 读成 49%、满血读成 79%。这里从右往左找**连续 10 列**
+ * 都接近未填充背景色的那一段，它的右端就是条尾；背景段太短就按填充端点算（≈满条）。
+ *
+ * 填充色与背景色太像时（比如满血白条正好接上白色装饰）用高饱和判定认「没有背景段」。
+ */
+export const BAR_BG_FLAT_STEP = 8;
+/** 平坦段至少这么长才算背景：数字的字块（1–3px 笔画）不会长到 8 列。 */
+export const BAR_BG_FLAT_MIN = 8;
+/**
+ * 「背景」要离填充色多远才算数。25 是量出来的：
+ *   - 白条与数字之间的白缝只差 ~5，必须排除（否则把字缝当未填充段）；
+ *   - 真机低血的暗红填充 (98,52,55) 与未填充背景 (58,57,68) 差 **40**，得认。
+ */
+export const BAR_BG_MIN_DIST = 25;
+export const BAR_BG_MAX_SAT = 0.25;
+export const BAR_BG_TOL = 14;
+export const BAR_BG_RUN = 10;
 
 /** 框选配置落盘位置（与 `region.json` 分开）。 */
 export function bloodbarFile(env = process.env) {
@@ -175,78 +238,244 @@ export function ratioFromPixels(pixels, {
   };
 
   /**
-   * **band 模式（血条用）**：先在框内找出「亮行带」，再在带内按列判填充。
+   * **band 模式（血条用）**：先横向对比定条带行，再按左端填充色量填充、按未填充背景量条宽。
    *
    * 为什么不用全框占比（2026-11-14 实测）：框高 36px 里血条只占中间 ~23px，
    * 上下是暗边，全框占比被稀释到 37%；数字又是黑的，再挖掉一块 —— 屏幕上是
    * 90.7%，读数只有 37%。行带把上下暗边剔掉，列判定让数字只影响它自己那几列。
+   *
+   * 为什么不找「最亮行」（2026-11-16 真机）：低血时条变暗红、白字数字更亮，
+   * 最亮行落在数字上，数字列成了填充 → 4.3% 读成 11%、4% 读成 25%。见上面
+   * `BAND_*` 常量那段的注释。
    */
   if (mode === 'band') {
-    const rowCount = new Array(h).fill(0);
     let brightTotal = 0;
+    for (let i = 0; i < total; i += 1) if (isBright(i)) brightTotal += 1;
+    const gone = (ratio = 0) => ({
+      ok: false, ratio, visible: false, reason: 'gone', bright: brightTotal, total,
+    });
+    /**
+     * **不再用「亮行占比」挡框里没有血条**：低血暗红条一个亮像素都没有（数字也可能是
+     * 中灰的 (117,119,132)），而 `Lv.90` 的白字又会把亮行数抬起来 —— 这条旧判据
+     * 两头都不准。下面用「条带内有颜色结构 + 找得到填充段」判断，全暗/纯色帧会卡住。
+     */
+
+    const pixel = (x, y) => {
+      const o = (y * w + x) * ch;
+      return [pixels[o], pixels[o + 1], pixels[o + 2]];
+    };
+    const medianOf = (values) => {
+      const s = [...values].sort((a, b) => a - b);
+      return s[s.length >> 1];
+    };
+    const medianColor = (colors) => [
+      medianOf(colors.map((c) => c[0])),
+      medianOf(colors.map((c) => c[1])),
+      medianOf(colors.map((c) => c[2])),
+    ];
+    const diffOf = (a, b) => Math.max(
+      Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]),
+    );
+    const satOf = (c) => {
+      const mx = Math.max(...c);
+      return mx === 0 ? 0 : (mx - Math.min(...c)) / mx;
+    };
+
+    /* ---- 1. 条带行：左端亮 / 右端暗 ---- */
+    const edgeCols = Math.max(2, Math.min(8, Math.round(w * BAND_EDGE_FRAC)));
+    const refStart = Math.min(w - 1, Math.floor(w * BAND_RIGHT_START));
+    const refEnd = Math.min(w, Math.max(refStart + 1, Math.floor(w * BAND_RIGHT_END)));
+    const rowLeft = new Array(h);
+    const rowRight = new Array(h);
     for (let y = 0; y < h; y += 1) {
-      let c = 0;
-      for (let x = 0; x < w; x += 1) if (isBright(y * w + x)) c += 1;
-      rowCount[y] = c;
-      brightTotal += c;
+      let lv = 0;
+      let rv = 0;
+      for (let x = 0; x < Math.min(edgeCols, w); x += 1) lv += Math.max(...pixel(x, y));
+      for (let x = refStart; x < refEnd; x += 1) rv += Math.max(...pixel(x, y));
+      rowLeft[y] = lv / Math.min(edgeCols, w);
+      rowRight[y] = rv / Math.max(1, refEnd - refStart);
     }
-    const maxRow = Math.max(...rowCount);
-    // 最亮的一行连框宽的 10% 都不到 → 框里没有血条（过场 / 菜单 / 框挪走了）
-    if (maxRow < Math.max(1, w * 0.1)) {
-      return { ok: false, ratio: 0, visible: false, reason: 'gone', bright: brightTotal, total };
+    let maxLeft = 0;
+    let maxContrast = 0;
+    for (let y = 0; y < h; y += 1) {
+      maxLeft = Math.max(maxLeft, rowLeft[y]);
+      maxContrast = Math.max(maxContrast, rowLeft[y] - rowRight[y]);
     }
-    const peak = rowCount.indexOf(maxRow);
-    let top = peak;
-    let bottom = peak;
     /**
-     * 行带只取**接近最亮行**的连续段（0.8），不取 0.5。
-     *
-     * 2026-11-14 实测：框里条只占中间 20 行，但条上下还有场景/边框的亮行，
-     * 用 0.5 会把整框 32 行都算进带里 —— 右侧未填充区因此每列都有 41% 亮，
-     * 被当成填充，读数 96.8% 而屏幕是 90.7%。0.8 只留条本身那十几二十行。
+     * 满血白条时右端也是亮的（左右对比趋近 0），改用「左端相对最亮行」定条带；
+     * 两种判据都不看绝对亮度，只比同一行/同一列之间的相对关系。
      */
-    while (top > 0 && rowCount[top - 1] >= maxRow * 0.8) top -= 1;
-    while (bottom < h - 1 && rowCount[bottom + 1] >= maxRow * 0.8) bottom += 1;
+    const useContrast = maxContrast >= BAND_LEFT_FALLBACK_TRIGGER;
+    const contrastFloor = Math.max(BAND_CONTRAST_MIN, maxContrast * BAND_CONTRAST_SHARE);
+    const inBand = (y) => (useContrast
+      ? rowLeft[y] - rowRight[y] >= contrastFloor
+      : rowLeft[y] >= maxLeft * BAND_LEFT_FALLBACK_SHARE);
+    let anchor = -1;
+    let anchorScore = -Infinity;
+    for (let y = 0; y < h; y += 1) {
+      if (!inBand(y)) continue;
+      const score = useContrast ? rowLeft[y] - rowRight[y] : rowLeft[y];
+      if (score > anchorScore) { anchor = y; anchorScore = score; }
+    }
+    if (anchor < 0) return gone();
+    let top = anchor;
+    let bottom = anchor;
+    while (top > 0 && inBand(top - 1)) top -= 1;
+    while (bottom < h - 1 && inBand(bottom + 1)) bottom += 1;
     const bandH = bottom - top + 1;
+
+    /* ---- 2. 列中位色：整条判定的公共底稿 ---- */
+    const colmed = new Array(w);
+    const lo = [255, 255, 255];
+    const hi = [0, 0, 0];
+    for (let x = 0; x < w; x += 1) {
+      const colors = [];
+      for (let y = top; y <= bottom; y += 1) {
+        const c = pixel(x, y);
+        colors.push(c);
+        for (let i = 0; i < 3; i += 1) { lo[i] = Math.min(lo[i], c[i]); hi[i] = Math.max(hi[i], c[i]); }
+      }
+      colmed[x] = medianColor(colors);
+    }
+    // 带内几乎一个颜色（全暗场景、纯色底）→ 不是血条，别硬报
+    if (diffOf(lo, hi) < 12) return gone();
+
+    const fillColor = medianColor(colmed.slice(0, Math.min(edgeCols, w)));
+
     /**
-     * 填充端点：**从左往右扫，遇到连续 `gapCols` 列低于 `gapRatio` 就停**。
+     * 一列的填充分数扫描：短窗口中位数 ≥ `FILL_SMOOTH_MIN` 才算「填充列」，
+     * 连续 `FILL_BREAK_COLS` 列原始分数 < `FILL_LOW_FRAC` 就收尾。
      *
-     * 不能取「最后一个强填充列」（2026-11-16 实测踩到）：血条右端常有装饰——
-     * `Lv.90` 的白字、右括号——它们的亮度足够过 `strongFill`，`right` 直接被拉到框边，
-     * **69% 读成 99.8%**。装饰和填充之间隔着几十列真正的暗槽，连续暗列才是边界。
-     *
-     * 数字区不能触发停止：白底被笔画压到 0.4–0.8，`gapRatio=0.5` 只让"确实越来越暗"
-     * 的那一段计数；`gapCols=6` 是给单个粗笔画留的余量。
+     * 短窗口是给「孤立标记」留的桥：2–3 列的中央菱形/分段刻度跨得过去；
+     * 而数字后半截那种「一半列是白字、一半列是暗底」的纹理，中位数压不到线上。
      */
-    const colRatio = new Array(w);
+    const scanFill = (frac) => {
+      const win = [];
+      let start = -1;
+      let end = -1;
+      let lows = 0;
+      for (let x = 0; x < w; x += 1) {
+        win.length = 0;
+        for (let i = Math.max(0, x - FILL_WINDOW_HALF); i <= Math.min(w - 1, x + FILL_WINDOW_HALF); i += 1) {
+          win.push(frac[i]);
+        }
+        if (frac[x] < FILL_LOW_FRAC) {
+          lows += 1;
+          if (lows >= FILL_BREAK_COLS && end >= 0) break;
+        } else {
+          lows = 0;
+        }
+        if (medianOf(win) >= FILL_SMOOTH_MIN) {
+          if (start < 0) start = x;
+          end = x;
+        }
+      }
+      return { start, end };
+    };
+
+    /* ---- 3. 粗分填充（与左端填充色的距离） ---- */
+    const roughFrac = new Float64Array(w);
     for (let x = 0; x < w; x += 1) {
       let c = 0;
-      for (let y = top; y <= bottom; y += 1) if (isBright(y * w + x)) c += 1;
-      colRatio[x] = c / bandH;
+      for (let y = top; y <= bottom; y += 1) {
+        if (diffOf(pixel(x, y), fillColor) <= FILL_COLOR_TOL) c += 1;
+      }
+      roughFrac[x] = c / bandH;
     }
-    let left = -1;
-    let right = -1;
-    let gap = 0;
-    for (let x = 0; x < w; x += 1) {
-      if (colRatio[x] >= strongFill) {
-        if (left < 0) left = x;
-        right = x;
-        gap = 0;
-      } else if (left >= 0 && colRatio[x] < gapRatio) {
-        gap += 1;
-        if (gap >= gapCols) break;
+    let rough = scanFill(roughFrac);
+
+    /**
+     * 填充右侧的「未填充背景色」：找第一段平坦的列中位色（相邻列差 ≤ 8、至少 4 列），
+     * 且颜色要和填充色明显不同（否则只是数字之间的白缝）。
+     */
+    const findBackground = (from) => {
+      let start = Math.max(0, from);
+      const accept = (a, b) => {
+        if (b - a < BAR_BG_FLAT_MIN) return null;
+        const c = medianColor(colmed.slice(a, b));
+        return diffOf(c, fillColor) > BAR_BG_MIN_DIST ? c : null;
+      };
+      for (let x = start; x < w - 1; x += 1) {
+        if (diffOf(colmed[x], colmed[x + 1]) <= BAR_BG_FLAT_STEP) continue;
+        const got = accept(start, x + 1);
+        if (got) return got;
+        start = x + 1;
+      }
+      return accept(start, w);
+    };
+
+    /* ---- 4. 细分填充 + 条宽 ---- */
+    let fillStart = rough.start;
+    let fillEnd = rough.end;
+    let barRight = -1;
+    if (fillEnd >= 0) {
+      const bg = findBackground(rough.end + 1);
+      // 填充后面直接是装饰/底板（满血白条常见）→ 没有可测的未填充段，按满条算
+      if (!bg || satOf(bg) > BAR_BG_MAX_SAT) {
+        barRight = fillEnd;
+      } else {
+        const fineFrac = new Float64Array(w);
+        for (let x = 0; x < w; x += 1) {
+          let c = 0;
+          for (let y = top; y <= bottom; y += 1) {
+            const px = pixel(x, y);
+            if (diffOf(px, fillColor) < diffOf(px, bg)) c += 1;
+          }
+          fineFrac[x] = c / bandH;
+        }
+        const fine = scanFill(fineFrac);
+        if (fine.start >= 0 && fine.end >= 0) {
+          fillStart = fine.start;
+          fillEnd = fine.end;
+        }
+        // 条尾：从右往左找连续 BAR_BG_RUN 列都接近背景色的一段
+        barRight = fillEnd;
+        for (let x = w - BAR_BG_RUN; x >= 0; x -= 1) {
+          let ok = true;
+          for (let c = x; c < x + BAR_BG_RUN; c += 1) {
+            if (diffOf(colmed[c], bg) > BAR_BG_TOL) { ok = false; break; }
+          }
+          if (ok) { barRight = x + BAR_BG_RUN - 1; break; }
+        }
       }
     }
-    if (left < 0) {
-      return { ok: false, ratio: 0, visible: false, reason: 'gone', bright: brightTotal, total };
+
+    /* ---- 5. 兜底：老亮色法（亮条时它准，只在上面认不出填充时接管） ---- */
+    if (fillStart < 0 || fillEnd < 0) {
+      const colRatio = new Array(w);
+      for (let x = 0; x < w; x += 1) {
+        let c = 0;
+        for (let y = top; y <= bottom; y += 1) if (isBright(y * w + x)) c += 1;
+        colRatio[x] = c / bandH;
+      }
+      let left = -1;
+      let right = -1;
+      let gap = 0;
+      for (let x = 0; x < w; x += 1) {
+        if (colRatio[x] >= strongFill) {
+          if (left < 0) left = x;
+          right = x;
+          gap = 0;
+        } else if (left >= 0 && colRatio[x] < gapRatio) {
+          gap += 1;
+          if (gap >= gapCols) break;
+        }
+      }
+      if (left < 0) return gone();
+      const legacyRatio = (right - left + 1) / (w - left);
+      if (legacyRatio < minVisible) return gone(legacyRatio);
+      return {
+        ok: true, ratio: legacyRatio, visible: true, below: legacyRatio < threshold,
+        bright: brightTotal, total, band: { top, bottom, left, right, legacy: true },
+      };
     }
-    const ratio = (right - left + 1) / (w - left);
-    if (ratio < minVisible) {
-      return { ok: false, ratio, visible: false, reason: 'gone', bright: brightTotal, total };
-    }
+
+    if (barRight < fillEnd) barRight = fillEnd;
+    const ratio = (fillEnd - fillStart + 1) / Math.max(1, barRight - fillStart + 1);
+    if (ratio < minVisible) return gone(ratio);
     return {
       ok: true, ratio, visible: true, below: ratio < threshold,
-      bright: brightTotal, total, band: { top, bottom, left, right },
+      bright: brightTotal, total, band: { top, bottom, left: fillStart, right: fillEnd, barRight },
     };
   }
 

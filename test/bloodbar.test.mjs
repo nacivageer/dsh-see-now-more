@@ -180,7 +180,11 @@ test('band 模式：上下暗边被剔除，只按亮行带里填了几列算', 
   assert.equal(full.ratio, 0.25, '全框占比被暗边稀释');
   assert.equal(band.ok, true);
   assert.equal(band.ratio, 0.5, '行带内左半填充');
-  assert.deepEqual(band.band, { top: 5, bottom: 14, left: 0, right: 19 });
+  assert.equal(band.band.top, 5);
+  assert.equal(band.band.bottom, 14);
+  assert.equal(band.band.left, 0);
+  assert.equal(band.band.right, 19);
+  assert.equal(band.band.barRight, 39, '条一直延伸到框边（右半边是未填充区）');
 });
 
 test('band 模式：数字在中间不影响左右端点', () => {
@@ -202,20 +206,72 @@ test('band 模式：全暗 / 彩色 → gone', () => {
   assert.equal(ratioFromRgba(red, { width: 40, height: 20, mode: 'band' }).reason, 'gone');
 });
 
-test('band 模式：右端装饰（Lv.90 白字）不能把端点拉到框边 —— 69% 要读成 69%', () => {
+test('band 模式：右端装饰（Lv.90 白字）不能把填充拉到装饰上，条宽按条体算', () => {
   // 2026-11-16 实测复现：血条右侧有 Lv.90 的白字/括号，亮度足够过 strongFill，
-  // 「取最后一个强填充列」会让 69% 读成 99.8%。填充和装饰之间是真正的暗槽。
+  // 「取最后一个强填充列」会让填充一路吃到装饰上。填充和装饰之间是真正的暗槽。
+  //
+  // 分母也在 2026-11-16 改成「条自己的宽度」：框里带了 Lv.90 时框宽不是条宽
+  // （真机框 421px、条 ~333px）。这里条体是 0–381，装饰 382+ 在条外。
   const W = 421;
   const H = 16;
   const f = frame(W, H, (x) => {
-    if (x < 290) return [240, 240, 240];   // 填充 69%
+    if (x < 290) return [240, 240, 240];   // 填充
     if (x >= 382) return [235, 235, 235];  // 右端装饰：Lv.90 白字
     return [45, 45, 45];                   // 暗槽
   });
   const band = ratioFromRgba(f, { width: W, height: H, mode: 'band' });
   assert.equal(band.ok, true);
-  assert.ok(Math.abs(band.ratio - 290 / 421) < 0.01, `应约 0.689，实得 ${band.ratio}`);
-  assert.equal(band.band.right, 289);
+  assert.equal(band.band.right, 289, '装饰不能被当填充');
+  assert.equal(band.band.barRight, 381, '条尾在装饰之前');
+  assert.ok(Math.abs(band.ratio - 290 / 382) < 0.01, `应约 0.759，实得 ${band.ratio}`);
+});
+
+test('band 模式：暗红填充（低血）+ 白字数字 → 数字不能把读数带高', () => {
+  // 2026-11-16 根因的合成版：条是暗红（低饱和判据不认），白字数字压在暗底上，
+  // 「最亮行」会落在数字上；现在条带按左右横向对比定，填充按左端颜色量。
+  const W = 421;
+  const H = 16;
+  const f = frame(W, H, (x, y) => {
+    if (x >= 337) return [40, 50, 105];                 // 条外：Lv.90 底板（高饱和）
+    if (x < 34) return [100, 48, 52];                   // 暗红填充：约 10%
+    if (x >= 110 && x < 240 && (x % 10) < 5) return [225, 225, 225]; // 白字笔画
+    return [60, 60, 70];                                // 未填充背景
+  });
+  const band = ratioFromRgba(f, { width: W, height: H, mode: 'band' });
+  assert.equal(band.ok, true);
+  assert.ok(Math.abs(band.ratio - 34 / 337) < 0.02, `应约 ${(34 / 337 * 100).toFixed(1)}%，实得 ${(band.ratio * 100).toFixed(1)}%`);
+  assert.equal(band.band.right, 33, '填充到 33 列为止，没被白字拉长');
+});
+
+test('band 模式：真机低血参数（4.3% 暗红条 + 中灰数字）→ 个位数，不是 11%', () => {
+  // 2026-11-16 真机的平均色：暗红填充 (98,52,55)、未填充背景 (58,57,68)、
+  // 数字白字 (117,119,132)。这一帧一个「亮像素」都没有，旧亮色口径两头都不认。
+  const W = 421;
+  const H = 16;
+  const BAR = 333;
+  const f = frame(W, H, (x) => {
+    if (x >= BAR) return [38, 50, 105];                 // 条外 Lv.90 底板
+    if (x < 14) return [98, 52, 55];                    // 暗红填充：4.2%
+    if (x >= 100 && x < 230 && (x % 10) < 5) return [117, 119, 132]; // 中灰数字
+    return [58, 57, 68];                                // 未填充背景
+  });
+  const r = ratioFromRgba(f, { width: W, height: H, mode: 'band' });
+  assert.equal(r.ok, true);
+  const got = r.ratio * 100;
+  assert.ok(Math.abs(got - 4.3) <= 1.5, `真值 4.3%，实得 ${got.toFixed(1)}%`);
+});
+
+test('band 模式：白条中央的菱形标记不截断填充（100% 不能被读成半条）', () => {
+  const W = 421;
+  const H = 16;
+  const f = frame(W, H, (x) => {
+    if (x >= 337) return [40, 50, 105];   // 条外底板
+    if (x >= 204 && x < 208) return [70, 70, 70]; // 中央菱形标记（4 列）
+    return [240, 240, 240];               // 满血白条
+  });
+  const band = ratioFromRgba(f, { width: W, height: H, mode: 'band' });
+  assert.equal(band.ok, true);
+  assert.ok(band.ratio > 0.98, `满血应读成 ~100%，实得 ${(band.ratio * 100).toFixed(1)}%`);
 });
 
 test('band 模式：数字区的暗列不连续，不会提前判「填充结束」', () => {
