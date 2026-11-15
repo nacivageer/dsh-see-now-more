@@ -359,15 +359,14 @@ export function bloodbarBrief({
   const clock = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour12: false });
 
   /**
-   * 一条读数「以哪个数为准」：**OCR 的 `当前/最大` 优先，比例是兜底**。
+   * 一条读数「以哪个数为准」：**条的比例**。
    *
-   * 为什么不是反过来：比例是像素统计，暗红条、白字压条、装饰抢端点都会偏
-   * （2026-11-16 同帧实测：屏幕 4.3%，比例法 11%）。数字是画在条上的原文，
-   * 读出来就是真值。读不出数字时才退回比例 —— 那时它就是唯一读数。
+   * 2026-11-16 定（用户拍板）：**不拿数字当主读数**。理由在需求本身——
+   * 换一个游戏，HUD 上不一定印数字（环形条、纯色条、分段条都没有），
+   * 而「框内填充占多少」是跨游戏通用的。数字只能当**附注**：
+   * 它读对时能佐证，读错时不该带偏主读数（真机见过 `2494/17638` 认成 `9/17638`）。
    */
-  const value = (p) => (Number.isFinite(p?.cur) && Number.isFinite(p?.max) && p.max > 0
-    ? p.cur / p.max
-    : p.ratio);
+  const value = (p) => p.ratio;
   const hp = Number.isFinite(last.cur) && Number.isFinite(last.max) && last.max > 0
     ? `${last.cur}/${last.max}`
     : null;
@@ -388,7 +387,7 @@ export function bloodbarBrief({
   if (lastBelowAt) tail.push(`上次低血 ${clock(lastBelowAt)}`);
 
   const age = Math.max(0, now - last.at);
-  const text = `血条 ${pct(shown)}${hp ? `（${hp}）` : ''}`
+  const text = `血条 ${pct(shown)}${hp ? `（条上数字 ${hp}）` : ''}`
     + `（${below ? `低于阈值 ${pct(threshold)}` : `阈值 ${pct(threshold)}`}）`
     + (age > staleMs ? ` · ${Math.round(age / 1000)} 秒前的读数` : '')
     + (tail.length ? ` · ${tail.join('，')}` : '');
@@ -437,6 +436,6 @@ export function bloodbarLine(cfg, reading = null, { lastBelowAt = 0, ocr = null 
   if (!reading) return `${head}· 未采（调 \`read:true\` 读一次）${low}${ocrNote}`;
   if (reading.ok === false) return `${head}· 现在框里没有血条（${reading.reason}）${low}${ocrNote}`;
   const hp = Number.isFinite(reading.cur) && Number.isFinite(reading.max) && reading.max > 0
-    ? `（${reading.cur}/${reading.max}）` : '';
+    ? `（条上数字 ${reading.cur}/${reading.max}）` : '';
   return `${head}· 最近 ${pct(reading.ratio)}${hp}${reading.below ? '（低于阈值）' : ''}${low}${ocrNote}`;
 }

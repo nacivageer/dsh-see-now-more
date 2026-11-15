@@ -1688,20 +1688,18 @@ async function registerAll(ctx) {
               meta: { ok: false, reason: reading.reason, ratio: reading.ratio, region: cfg.region },
             };
           }
-          // 数字优先：条上的 `当前/最大` 是真值，比例只是像素统计（暗红条会读偏）
+          // 比例为主、数字附注（2026-11-16 用户拍板：别的游戏不一定印数字）
           const hp = Number.isFinite(reading.cur) && Number.isFinite(reading.max) && reading.max > 0
             ? { cur: reading.cur, max: reading.max } : null;
-          const shown = hp ? hp.cur / hp.max : reading.ratio;
-          const pct = Math.round(shown * 100);
+          const pct = Math.round(reading.ratio * 100);
           const ocrWhy = reading.ocr && reading.ocr.ok === false ? ` · 数字没读出（${reading.ocr.why}）` : '';
           return {
-            text: `血条读数：**${pct}%**${hp ? `（${hp.cur}/${hp.max}）` : ''}`
+            text: `血条读数：**${pct}%**${hp ? `（条上数字 ${hp.cur}/${hp.max}）` : ''}`
               + `（阈值 ${Math.round(cfg.threshold * 100)}%`
-              + `${shown < cfg.threshold ? '，已低于阈值' : '，没到阈值'}）${ocrWhy}\n`
-              + `框 ${bloodbarText(cfg.region)} · 亮色 ${reading.bright}/${reading.total} 像素`
-              + ` · 比例法 ${Math.round(reading.ratio * 100)}% · 用时 ${got.ms}ms`,
+              + `${reading.ratio < cfg.threshold ? '，已低于阈值' : '，没到阈值'}）${ocrWhy}\n`
+              + `框 ${bloodbarText(cfg.region)} · 亮色 ${reading.bright}/${reading.total} 像素 · 用时 ${got.ms}ms`,
             meta: {
-              ok: true, ratio: reading.ratio, below: shown < cfg.threshold,
+              ok: true, ratio: reading.ratio, below: reading.ratio < cfg.threshold,
               ...(hp ? { cur: hp.cur, max: hp.max } : {}),
               region: cfg.region, ms: got.ms,
             },

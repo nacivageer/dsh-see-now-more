@@ -68,10 +68,10 @@ test('ocr：帧不够长直接拒，不许拿半帧去认', { skip }, async () =
   }
 });
 
-test('ocr 数字进简报：同一帧的比例与数字不会错位', () => {
+test('ocr 数字进简报：比例是主读数，数字只在括号里附注', () => {
   const now = 1_000_000;
   const reading = { ok: true, ratio: 0.15, at: now, cur: 2798, max: 17638 };
   const brief = bloodbarBrief({ track: pushTrack([], reading), threshold: 0.3, now });
-  assert.match(brief.text, /2798\/17638/);
-  assert.equal(brief.ratio, 2798 / 17638);
+  assert.match(brief.text, /条上数字 2798\/17638/);
+  assert.equal(brief.ratio, 0.15, '主读数必须是比例（别的游戏不一定印数字）');
 });
