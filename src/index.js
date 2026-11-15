@@ -1856,7 +1856,7 @@ async function registerAll(ctx) {
             // 血条（P1c）：框在哪、阈值、最近一次读数；没在采时明说
             + `\n${bloodbarLine(loadBloodbar(), s.bloodbar?.reading ?? null, {
               lastBelowAt: s.bloodbar?.lastBelowAt,
-              ocr: s.bloodbar?.ocr && s.bloodbar.ocr.ok === false ? false : null,
+              ocr: s.bloodbar?.ocr && s.bloodbar.ocr.available === false ? false : null,
             })}`
             // 声音单独一行：听不到声音时第一个要看的就是这里
             + `\n声音：${voice.speakers > 0

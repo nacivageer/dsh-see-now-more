@@ -57,14 +57,19 @@ def parse_hp(text: str):
     return None, None
 
 
-def _to_bgra(arr_bgra: numpy.ndarray, scale: int, canvas_h: int) -> numpy.ndarray:
-    """BGRA 帧 → 放大的 RGB → 贴到黑底画布 → 再回到 BGRA（给 SoftwareBitmap）。"""
+def _to_bgra(arr_bgra: numpy.ndarray, scale: int, canvas_h: int, pad: int = 60) -> numpy.ndarray:
+    """BGRA 帧 → 放大的 RGB → 贴到黑底画布 → 再回到 BGRA（给 SoftwareBitmap）。
+
+    **左右也要留白**（2026-11-16 真机踩到）：画布宽度原来正好等于条宽，数字紧贴
+    crop 边界时 OCR 会吃掉首尾字符（`2798/17638` 读成 `98/1763`，于是被当成 6% 报出去）。
+    上下留白是给行检测的，左右留白是给首尾字符的 —— 两者都别省。
+    """
     rgb = numpy.ascontiguousarray(arr_bgra[:, :, [2, 1, 0]])
     im = Image.fromarray(rgb, "RGB")
     big = im.resize((im.width * scale, im.height * scale), Image.LANCZOS)
     ch = max(canvas_h, big.height + 40)
-    canvas = Image.new("RGB", (big.width, ch), (0, 0, 0))
-    canvas.paste(big, (0, (ch - big.height) // 2))
+    canvas = Image.new("RGB", (big.width + pad * 2, ch), (0, 0, 0))
+    canvas.paste(big, (pad, (ch - big.height) // 2))
     out = numpy.asarray(canvas)
     bgra = numpy.dstack([
         out[:, :, 2], out[:, :, 1], out[:, :, 0],

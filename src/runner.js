@@ -632,14 +632,21 @@ export function createRunner({
       /** 最近一次低于阈值的时刻（0 = 从没低过）。 */
       lastBelowAt: bloodbarLastBelowAt || null,
       /**
-       * 数字识别那一路的状态。`ok:false` 时 `why` 就是给人看的：
-       * 最常见的不是"算法崩了"，是 **DSH 升级后 winrt 没了**（和 windows-capture 同坑）。
+       * 数字识别那一路的状态。
+       *
+       * `available` 是**依赖能不能用**（探针，缓存），`ok` 是**这一路此刻在不在跑**。
+       * 两个不能混：没进仅监听时 sidecar 还没起，那是"未启动"，不是"缺 winrt"——
+       * 2026-11-16 重启后第一次 `status` 就误报了一次「OCR 不可用」，用户会照着去重装。
        */
-      ocr: {
-        ok: Boolean(bloodbarOcr),
-        ready: Boolean(bloodbarOcr && bloodbarOcr.ready),
-        why: bloodbarOcrWhy,
-      },
+      ocr: (() => {
+        const probe = resolveOcrPython();
+        return {
+          ok: Boolean(bloodbarOcr),
+          available: probe.ok,
+          ready: Boolean(bloodbarOcr && bloodbarOcr.ready),
+          why: bloodbarOcrWhy ?? (probe.ok ? null : probe.reason),
+        };
+      })(),
       /** 一行简报（与 runner.bloodbarNote() 同一个东西，省得调用方再算一遍）。 */
       brief: bloodbarNote(),
       error: bloodbarError,
