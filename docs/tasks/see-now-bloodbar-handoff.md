@@ -41,6 +41,16 @@
 **方向**：优先 OCR 读框内数字（Windows.Media.Ocr，框只有 421×16，1 fps 跑得动），
 它解决的是「读数准」本身，还能防「条被特效遮住」。色差法次选——暗红与暗紫灰的距离只有 42，阈值难定。
 
+**OCR 已离线验通（2026-11-16 00:4x）**，接线的形状照这个来：
+
+- 引擎：`Windows.Media.Ocr`，从 **Python `winrt`** 调（venv 实测 **40–43ms/帧**）；
+  PowerShell 也能调（55–75ms + 进程启动），但 Python 直接接进 sidecar 更省事。
+- 预处理的关键**不是反色，是画布高度**：16px 的条直接放大 2/4/6/8× 全是 0 行；
+  **4× Lanczos 放大后贴进 ≥240px 高的黑底画布**就稳定读出（3× 会丢一位，6× 带噪声）。
+- 同帧对照：OCR `2798/17638` = **15.86%**，同帧像素法 **14.87–15.14%**，差 **0.7–1.0 点**。
+- 依赖（**未装进 DSH runtime python**）：`winrt-runtime` +
+  `winrt-Windows.{Media.Ocr,Graphics.Imaging,Storage,Globalization,Foundation,Foundation.Collections}`。
+
 ## 待办（按优先级）
 
 1. **低血读数**（上面那条）。
