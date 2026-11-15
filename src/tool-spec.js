@@ -97,7 +97,8 @@ export function seeNowToolSpec() {
           + '传 `read:true` 抓一次算比例。**进仅监听后会自动每秒读**，但它只是**读数不是触发器**：'
           + '低血不会叫醒你，只会把「此刻 x%、30 秒前多少、上次低血几点」写在你本来就收到的唤醒文案、'
           + '`watch` 结果和 `status` 里——要不要 `watch` 看一眼，你自己判断（理由：三人队切人、奶妈、'
-          + '免死会让低血只出现一小会，按阈值唤就是反复白瞥）。',
+          + '免死会让低血只出现一小会，按阈值唤就是反复白瞥）。'
+          + '传 `window:"<标题子串>"` 改成**按窗口抓**（被遮挡也读得到），`window:"off"` 回到抓屏幕。',
       },
       task: {
         type: 'string',
@@ -119,6 +120,20 @@ export function seeNowToolSpec() {
           + '带上区域后：强制 gdigrab（ddagrab 没有偏移参数）、按区域比例出图（竖屏出竖屏）、'
           + '每帧长边 = 档位长边、一张默认 2 帧最多 4 帧。token 会比全屏贵（帧不再被缩小）：'
           + 'low 档 2 帧约 345 token、4 帧约 872（普通全屏 4 帧是 233）；要省钱就降 `quality`。',
+      },
+      threshold: {
+        type: 'number',
+        description: 'With action:"bloodbar": 低于这个比例算「低血」（0–1，默认 0.3）。'
+          + '它只决定报告里「低于阈值 xx%」那半句，**不触发任何叫醒**。',
+      },
+      window: {
+        type: 'string',
+        description: 'With action:"bloodbar": 让它**按窗口抓**（Windows Graphics Capture），'
+          + '填窗口标题的子串，例如 "云·鸣潮"。配了之后这个窗口被别的窗口挡住、失去焦点也照样读得到'
+          + '（`ddagrab`/`gdigrab` 抓的是屏幕像素，被挡住就只剩挡住它的东西）。'
+          + '传 `window:"off"` 回到抓屏幕。'
+          + '限制：窗口**最小化**时拿不到帧；D3D 独占全屏也抓不到（那时游戏一定在前台全屏，用抓起屏幕的方式）。'
+          + '要 `windows-capture`（pip），没装时 `status` 会报「按窗口抓起不来」。',
       },
       since: {
         type: 'number',

@@ -232,9 +232,17 @@ export function captureArgs({
   onFrame, onStderr = null, onFirst = null,
   /** 原始帧通道数：默认 RGB24（3）；gdigrab 的 region 路径用 BGRA（4）。 */
   channels = 3, pixFmt = 'rgb24',
+  /**
+   * 整条命令（`[可执行文件, ...参数]`）。给了就**完全跳过 `captureArgs`** ——
+   * 按窗口抓（WGC）走的是 Python sidecar，不是 ffmpeg，但读帧/背压/收尾这段逻辑一模一样。
+   */
+  argv = null,
 } = {}) {
-  const args = captureArgs({ source, width, height, fps, ffmpegPath, engine, pixFmt }).slice(1);
-  const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const full = Array.isArray(argv) && argv.length
+    ? argv
+    : [ffmpegPath, ...captureArgs({ source, width, height, fps, ffmpegPath, engine, pixFmt }).slice(1)];
+  const [cmd, ...args] = full;
+  const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   const need = width * height * channels;
   /**
    * 拼帧缓冲：**一帧只分配一次、只拷贝一次**。
@@ -311,7 +319,7 @@ export function captureArgs({
        * 同一个文件**从头再放一遍**（社区实报：24 秒解 1955 帧、刷几十张图、
        * 反复叫醒、关窗也停不干净）。`scripts/sim.mjs` 也因此在最后一步抛异常。
        */
-      if (code === 0 && source?.kind === 'file') {
+      if (code === 0 && (source?.kind === 'file' || source?.kind === 'window')) {
         resolve({ frames: n, ms: Date.now() - t0, code, ended: true });
         return;
       }

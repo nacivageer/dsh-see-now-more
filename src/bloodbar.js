@@ -61,7 +61,11 @@ export function bloodbarFile(env = process.env) {
 /**
  * 读框选配置；没有 / 坏了都返回默认（`region: null` 表示还没框）。
  *
- * @returns {{region: {x:number,y:number,w:number,h:number}|null, threshold: number, at: number|null}}
+ * `window` 是**可选的窗口标题子串**：配了就走 WGC 按窗口抓（被遮挡也能读），
+ * 不配就走 gdigrab 抓屏幕。两种配置共用同一个 region（屏幕物理像素）。
+ *
+ * @returns {{region: {x:number,y:number,w:number,h:number}|null, threshold: number,
+ *            window: string|null, at: number|null}}
  */
 export function loadBloodbar(env = process.env) {
   try {
@@ -71,25 +75,35 @@ export function loadBloodbar(env = process.env) {
       ? { x, y, w, h }
       : null;
     const t = Number(raw?.threshold);
+    const win = typeof raw?.window === 'string' && raw.window.trim() ? raw.window.trim() : null;
     return {
       region,
       threshold: Number.isFinite(t) && t > 0 && t < 1 ? t : DEFAULT_THRESHOLD,
+      window: win,
       at: Number(raw?.at) || null,
     };
   } catch {
-    return { region: null, threshold: DEFAULT_THRESHOLD, at: null };
+    return { region: null, threshold: DEFAULT_THRESHOLD, window: null, at: null };
   }
 }
 
-/** 存框选（保留原阈值；传了就用新值）。 */
-export function saveBloodbar({ region, threshold }, env = process.env) {
+/**
+ * 存框选（保留原阈值与窗口；传了就用新值）。
+ *
+ * `window` 三种写法：不传 = 保持原样；`null` / 空串 = 取消（回到抓屏幕）；字符串 = 按这个窗口抓。
+ */
+export function saveBloodbar({ region, threshold, window: win } = {}, env = process.env) {
   const prev = loadBloodbar(env);
   const path = bloodbarFile(env);
   mkdirSync(dirname(path), { recursive: true });
   const t = Number(threshold);
+  const nextWin = win === undefined
+    ? prev.window
+    : (typeof win === 'string' && win.trim() ? win.trim() : null);
   writeFileSync(path, JSON.stringify({
     region,
     threshold: Number.isFinite(t) && t > 0 && t < 1 ? t : prev.threshold,
+    window: nextWin,
     at: Date.now(),
   }, null, 2), 'utf8');
   return path;
@@ -346,7 +360,8 @@ export function bloodbarBrief({
 export function bloodbarLine(cfg, reading = null, { lastBelowAt = 0 } = {}) {
   if (!cfg || !cfg.region) return '血条：没框（调 `see_now({action:"bloodbar"})` 框一条）';
   const pct = (n) => `${Math.round(n * 100)}%`;
-  const head = `血条：框 ${bloodbarText(cfg.region)}（阈值 ${pct(cfg.threshold)}）`;
+  const head = `血条：框 ${bloodbarText(cfg.region)}（阈值 ${pct(cfg.threshold)}）`
+    + `${cfg.window ? ` · 窗口「${cfg.window}」（被遮挡也读）` : ''}`;
   const low = lastBelowAt
     ? ` · 上次低血 ${new Date(lastBelowAt).toLocaleTimeString('zh-CN', { hour12: false })}`
     : '';

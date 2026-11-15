@@ -16,7 +16,7 @@ import {
   shouldGlance, DEFAULT_THRESHOLD, DEFAULT_GLANCE_COOLDOWN_MS,
   pushTrack, bloodbarBrief,
 } from '../src/bloodbar.js';
-import { readBloodbarOnce } from '../src/bloodbar-capture.js';
+import { readBloodbarOnce, readBloodbarWindowOnce } from '../src/bloodbar-capture.js';
 
 /** 造一帧 RGBA：`paint(x, y)` 返回 `[r,g,b,a?]`。 */
 function frame(width, height, paint) {
@@ -89,12 +89,15 @@ test('尺寸/像素对不上 → bad-frame，不越界读', () => {
 test('框选配置：存 / 读 / 清（临时 DSH_HOME）', () => {
   const env = { DSH_HOME: mkdtempSync(join(tmpdir(), 'dsh-bloodbar-')) };
   try {
-    assert.deepEqual(loadBloodbar(env), { region: null, threshold: DEFAULT_THRESHOLD, at: null });
+    assert.deepEqual(loadBloodbar(env), {
+      region: null, threshold: DEFAULT_THRESHOLD, window: null, at: null,
+    });
 
     saveBloodbar({ region: { x: 1, y: 2, w: 30, h: 6 } }, env);
     const got = loadBloodbar(env);
     assert.deepEqual(got.region, { x: 1, y: 2, w: 30, h: 6 });
     assert.equal(got.threshold, DEFAULT_THRESHOLD);
+    assert.equal(got.window, null);
     assert.ok(got.at > 0);
 
     saveBloodbar({ region: { x: 5, y: 6, w: 20, h: 4 }, threshold: 0.4 }, env);
@@ -102,9 +105,20 @@ test('框选配置：存 / 读 / 清（临时 DSH_HOME）', () => {
     assert.deepEqual(got2.region, { x: 5, y: 6, w: 20, h: 4 });
     assert.equal(got2.threshold, 0.4);
 
-    // 再存但不传阈值 → 保留原阈值
+    // 再存但不传阈值 / 窗口 → 两者都保留原值
     saveBloodbar({ region: { x: 7, y: 8, w: 10, h: 2 } }, env);
     assert.equal(loadBloodbar(env).threshold, 0.4);
+    assert.equal(loadBloodbar(env).window, null);
+
+    // 配窗口 → 按窗口抓；再传 null → 回到抓屏幕
+    saveBloodbar({ region: { x: 7, y: 8, w: 10, h: 2 }, window: ' 云·鸣潮 ' }, env);
+    assert.equal(loadBloodbar(env).window, '云·鸣潮');
+    saveBloodbar({ region: { x: 7, y: 8, w: 10, h: 2 }, window: null }, env);
+    assert.equal(loadBloodbar(env).window, null);
+    // 空串也算取消
+    saveBloodbar({ region: { x: 7, y: 8, w: 10, h: 2 }, window: 'x' }, env);
+    saveBloodbar({ region: { x: 7, y: 8, w: 10, h: 2 }, window: '   ' }, env);
+    assert.equal(loadBloodbar(env).window, null);
 
     assert.equal(clearBloodbar(env), true);
     assert.equal(loadBloodbar(env).region, null);
@@ -191,6 +205,21 @@ test('band 模式：全暗 / 彩色 → gone', () => {
 test('readBloodbarOnce：没框直接拒，不启动 ffmpeg', async () => {
   assert.equal((await readBloodbarOnce({})).reason, 'no-region');
   assert.equal((await readBloodbarOnce({ region: { x: 0, y: 0, w: 0, h: 0 } })).reason, 'no-region');
+});
+
+test('readBloodbarWindowOnce：没窗口 / 没框直接拒，不起 sidecar', async () => {
+  assert.equal((await readBloodbarWindowOnce({ region: { x: 0, y: 0, w: 4, h: 2 } })).reason, 'no-window');
+  assert.equal((await readBloodbarWindowOnce({ window: '云·鸣潮' })).reason, 'no-region');
+  assert.equal(
+    (await readBloodbarWindowOnce({ window: '云·鸣潮', region: { x: 0, y: 0, w: 0, h: 2 } })).reason,
+    'no-region',
+  );
+});
+
+test('bloodbarLine：配了窗口要说出来（被遮挡也读）', () => {
+  const cfg = { region: { x: 1, y: 2, w: 3, h: 4 }, threshold: 0.3, window: '云·鸣潮' };
+  const line = bloodbarLine(cfg, { ok: true, ratio: 0.64, below: false });
+  assert.match(line, /窗口「云·鸣潮」（被遮挡也读）/);
 });
 
 test('shouldGlance：够低 + 出冷却才记；不可见/满血/冷却中都不记', () => {

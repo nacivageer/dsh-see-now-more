@@ -9,6 +9,7 @@
  */
 
 import { spawnFrames } from './capture.js';
+import { spawnWindowFrames } from './capture-window.js';
 import { ratioFromRgba } from './bloodbar.js';
 
 /** 等第一帧的上限：gdigrab 起进程 + 首帧一般 1–2 秒，给 8 秒足够。 */
@@ -65,6 +66,65 @@ export async function readBloodbarOnce({
     };
   }
 
+  return {
+    ok: true,
+    reading: ratioFromRgba(buf, { width: w, height: h, threshold, mode: 'band' }),
+    ms: Date.now() - t0,
+  };
+}
+
+/**
+ * 按**窗口**读一次（WGC）。形状与 `readBloodbarOnce` 一致，调用方不用分支。
+ *
+ * 为什么单次读也要单独一条：`read:true` 的价值就是「现在到底多少」，
+ * 而窗口被挡住时 gdigrab 给的是遮挡物 —— 那种读数比没有更糟。
+ *
+ * @param {{window: string, region: {x:number,y:number,w:number,h:number}, threshold?: number,
+ *          timeoutMs?: number}} o
+ */
+export async function readBloodbarWindowOnce({
+  window: title, region, threshold, timeoutMs = READ_TIMEOUT_MS,
+} = {}) {
+  if (!region || !(Number(region.w) > 0) || !(Number(region.h) > 0)) {
+    return { ok: false, reason: 'no-region' };
+  }
+  if (!title) return { ok: false, reason: 'no-window' };
+  const w = Number(region.w);
+  const h = Number(region.h);
+  let buf = null;
+  let failure = null;
+
+  let run;
+  try {
+    run = spawnWindowFrames({
+      source: { kind: 'window', title: String(title) },
+      region: { x: Number(region.x), y: Number(region.y), w, h },
+      fps: 2,
+      onFrame: ({ buf: frame }) => { if (!buf) buf = Buffer.from(frame); },
+      onStderr: (d) => {
+        const line = String(d).trim();
+        if (line && !failure) failure = line.slice(-300);
+      },
+    });
+  } catch (e) {
+    return { ok: false, reason: 'spawn-failed', detail: String(e?.message ?? e) };
+  }
+  run.done.catch((e) => { failure = failure ?? String(e?.message ?? e); });
+
+  const t0 = Date.now();
+  while (!buf && Date.now() - t0 < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  try { run.stop(); } catch { /* 已经退了 */ }
+  try { await run.done; } catch { /* 上面已经记过 */ }
+
+  if (!buf) {
+    return {
+      ok: false,
+      reason: 'no-frame',
+      detail: failure ? String(failure).slice(0, 300) : null,
+    };
+  }
   return {
     ok: true,
     reading: ratioFromRgba(buf, { width: w, height: h, threshold, mode: 'band' }),

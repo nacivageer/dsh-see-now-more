@@ -18,6 +18,7 @@
  */
 
 import { spawnFrames, pickScreenEngine, screenEngineWarning } from './capture.js';
+import { resolveWgcPython, spawnWindowFrames } from './capture-window.js';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -427,6 +428,10 @@ export function createRunner({
   let bloodbarTrack = [];
   /** 最近一次低于阈值的时刻（不随轨迹滑走，供 status 回答「上次低血什么时候」）。 */
   let bloodbarLastBelowAt = 0;
+  /** 这一路用的是哪个引擎：`screen`（gdigrab）/ `wgc`（按窗口抓）。 */
+  let bloodbarEngine = null;
+  /** sidecar/ffmpeg 最后一行 stderr（诊断用，别往上下文里塞整段）。 */
+  let bloodbarEngineNote = null;
   let bloodbarError = null;
   let bloodbarRetry = null;
   let bloodbarRetries = 0;
@@ -451,9 +456,13 @@ export function createRunner({
   /**
    * 起血条读数那一路（默认 1 fps，只算比例、不出图、不进上下文）。
    *
+   * 两条引擎，配置决定：
+   *   - **没配 `window`** → `gdigrab` 抓屏幕。经典路，窗口必须可见、没被挡。
+   *   - **配了 `window`** → WGC 按窗口抓（`capture-window.js`）。窗口被别的窗口挡住、
+   *     失焦都还能读到 —— 云·鸣潮那种「浏览器窗口被 GUI 压住」的场景只有这条能走。
+   *
    * 和留底同一条约束：**起不来不嚎**，失败只记 `status().bloodbar.error`，
-   * 听声音与抬头照旧。帧格式用 BGRA（gdigrab 原生、零转换），
-   * 亮色判定只看 max/min，BGR 顺序不影响。
+   * 听声音与报告照旧。帧格式统一 BGRA，亮色判定只看 max/min，BGR 顺序不影响。
    */
   function startBloodbarCapture() {
     if (!bloodbarOn) return { ok: false, reason: 'no-region' };
@@ -462,49 +471,64 @@ export function createRunner({
     const region = bloodbar.region;
     const threshold = Number(bloodbar.threshold) > 0 ? Number(bloodbar.threshold) : 0.3;
     const fps = Number(bloodbar.fps) > 0 ? Number(bloodbar.fps) : 1;
+    const windowTitle = typeof bloodbar.window === 'string' && bloodbar.window.trim()
+      ? bloodbar.window.trim() : null;
+    const engine = windowTitle ? 'wgc' : 'screen';
+    const onFrame = (f) => {
+      try {
+        const reading = {
+          ...ratioFromRgba(f.buf, { width: region.w, height: region.h, threshold, mode: 'band' }),
+          at: Date.now(),
+        };
+        bloodbarReading = reading;
+        // 只在真正读到数时进轨迹：`gone`（过场/菜单/框挪走）不是一个"血量"
+        bloodbarTrack = pushTrack(bloodbarTrack, reading);
+        if (reading.ok === true && reading.below === true) bloodbarLastBelowAt = reading.at;
+      } catch (e) {
+        bloodbarError = `血条：算比例失败（${e?.message ?? e}）`;
+      }
+    };
+    const onStderr = (d) => {
+      const line = String(d).trim();
+      if (line) bloodbarEngineNote = line.slice(-300);
+    };
     try {
-      const run = spawnCapture({
-        source: { kind: 'screen', region: { ...region } },
-        width: region.w,
-        height: region.h,
-        fps,
-        ffmpegPath,
-        engine: 'gdigrab',
-        channels: 4,
-        pixFmt: 'bgra',
-        onFrame: (f) => {
-          try {
-            const reading = {
-              ...ratioFromRgba(f.buf, { width: region.w, height: region.h, threshold, mode: 'band' }),
-              at: Date.now(),
-            };
-            bloodbarReading = reading;
-            // 只在真正读到数时进轨迹：`gone`（过场/菜单/框挪走）不是一个"血量"
-            bloodbarTrack = pushTrack(bloodbarTrack, reading);
-            if (reading.ok === true && reading.below === true) bloodbarLastBelowAt = reading.at;
-          } catch (e) {
-            bloodbarError = `血条：算比例失败（${e?.message ?? e}）`;
-          }
-        },
-      });
+      const run = windowTitle
+        ? spawnWindowFrames({
+          source: { kind: 'window', title: windowTitle },
+          region, fps, onFrame, onStderr,
+        })
+        : spawnCapture({
+          source: { kind: 'screen', region: { ...region } },
+          width: region.w,
+          height: region.h,
+          fps,
+          ffmpegPath,
+          engine: 'gdigrab',
+          channels: 4,
+          pixFmt: 'bgra',
+          onFrame,
+        });
       bloodbarRun = run;
+      bloodbarEngine = engine;
       bloodbarError = null;
       bloodbarRetries = 0;
-      log(`血条：开始读（${region.w}×${region.h}，${fps} fps）`);
+      log(`血条：开始读（${region.w}×${region.h}，${fps} fps，${engine === 'wgc' ? `按窗口「${windowTitle}」` : '按屏幕'}）`);
       run.done.then(() => {
         if (bloodbarRun !== run) return;      // 我们自己停的，不是故障
         bloodbarRun = null;
-        scheduleBloodbarRetry('ffmpeg 退出');
+        scheduleBloodbarRetry(engine === 'wgc' ? '窗口关了' : 'ffmpeg 退出');
       }).catch((e) => {
         if (bloodbarRun !== run) return;
         bloodbarRun = null;
         bloodbarError = `血条采集：${e?.message ?? e}`;
         log(bloodbarError);
-        scheduleBloodbarRetry('采集失败');
+        scheduleBloodbarRetry(engine === 'wgc' ? 'WGC 采集失败' : '采集失败');
       });
-      return { ok: true };
+      return { ok: true, engine };
     } catch (e) {
       bloodbarError = `血条采集：${e?.message ?? e}`;
+      bloodbarEngine = engine;
       log(bloodbarError);
       scheduleBloodbarRetry('起不来');
       return { ok: false, reason: 'spawn-failed' };
@@ -527,7 +551,12 @@ export function createRunner({
       enabled: bloodbarOn,
       region: bloodbar?.region ?? null,
       threshold: Number(bloodbar?.threshold) > 0 ? Number(bloodbar.threshold) : 0.3,
+      /** 框定的是哪个窗口（空 = 整屏/gdigrab）。 */
+      window: bloodbar?.window ?? null,
       capturing: Boolean(bloodbarRun),
+      /** `screen` = gdigrab 抓屏幕；`wgc` = 按窗口抓（被遮挡也能读）。 */
+      engine: bloodbarEngine,
+      engineNote: bloodbarEngineNote,
       reading: bloodbarReading,
       /** 最近一次低于阈值的时刻（0 = 从没低过）。 */
       lastBelowAt: bloodbarLastBelowAt || null,
@@ -567,6 +596,8 @@ export function createRunner({
     // 重框 = 换了对象（别的游戏、别的 HUD），旧轨迹与新读数不可比
     bloodbarTrack = [];
     bloodbarLastBelowAt = 0;
+    bloodbarEngine = null;
+    bloodbarEngineNote = null;
     if (bloodbarRun) stopBloodbarCapture({ why: '配置变了' });
     // **停完要接着起**：用户重框一次不该让读数停到下次重启（2026-11-15 实测踩到）
     if (wasOn && bloodbarOn) startBloodbarCapture();

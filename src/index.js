@@ -25,7 +25,7 @@ import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } 
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
-import { readBloodbarOnce } from './bloodbar-capture.js';
+import { readBloodbarOnce, readBloodbarWindowOnce } from './bloodbar-capture.js';
 import { todayCounts } from './lift/log.js';
 import { liftLine, liftGearLine } from './lift/status.js';
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
@@ -1662,14 +1662,21 @@ async function registerAll(ctx) {
               meta: { ok: false, reason: 'no-region' },
             };
           }
-          const got = await readBloodbarOnce({
-            region: cfg.region, threshold: cfg.threshold, ffmpegPath: resolveFfmpeg().path,
-          });
+          const got = cfg.window
+            ? await readBloodbarWindowOnce({
+              window: cfg.window, region: cfg.region, threshold: cfg.threshold,
+            })
+            : await readBloodbarOnce({
+              region: cfg.region, threshold: cfg.threshold, ffmpegPath: resolveFfmpeg().path,
+            });
           if (!got.ok) {
             const why = {
               'no-region': '没框过血条',
-              'spawn-failed': 'ffmpeg 起不来',
-              'no-frame': '这一下没抓到帧（ffmpeg 没出画面？）',
+              'no-window': '没配窗口',
+              'spawn-failed': cfg.window ? `按窗口抓起不来（${got.detail ?? '没装 windows-capture？'}）` : 'ffmpeg 起不来',
+              'no-frame': cfg.window
+                ? `这一下没抓到帧 —— 窗口最小化了？或者标题不对（${got.detail ?? ''}）`
+                : '这一下没抓到帧（ffmpeg 没出画面？）',
               'capture-failed': `抓帧失败：${got.detail ?? ''}`,
             }[got.reason] ?? got.reason;
             return { text: `血条读数失败：${why}`, meta: { ok: false, reason: got.reason } };
@@ -1693,13 +1700,19 @@ async function registerAll(ctx) {
           };
         }
 
-        // 直接给坐标 / 只改阈值：不弹框、支持热更新（2026-11-15 加的，省得每次都拖）
+        // 直接给坐标 / 阈值 / 窗口：不弹框、支持热更新（2026-11-15 加的，省得每次都拖）
         const direct = String(args.region ?? '').trim();
         const hasCoord = /^\d+,\d+,\d+,\d+$/.test(direct);
         const wantThreshold = args.threshold !== undefined
           && Number.isFinite(Number(args.threshold))
           && Number(args.threshold) > 0 && Number(args.threshold) < 1;
-        if (hasCoord || wantThreshold) {
+        /**
+         * `window` 三种写法：不写 = 不动；`"off"` = 回到抓屏幕；字符串 = 按这个窗口抓。
+         * 按窗口抓走 WGC，**被别的窗口挡住也读得到**（云·鸣潮那种浏览器窗口被 GUI 压住的场景）。
+         */
+        const windowArg = typeof args.window === 'string' ? args.window.trim() : undefined;
+        const hasWindow = windowArg !== undefined;
+        if (hasCoord || wantThreshold || hasWindow) {
           const prev = loadBloodbar();
           const region = hasCoord
             ? (() => { const [x, y, w, h] = direct.split(',').map(Number); return { x, y, w, h }; })()
@@ -1707,13 +1720,18 @@ async function registerAll(ctx) {
           if (!region) {
             return { text: '还没框过血条，给不出坐标就先调 `see_now({action:"bloodbar"})` 框一次。', meta: { ok: false, reason: 'no-region' } };
           }
-          saveBloodbar({ region, threshold: wantThreshold ? Number(args.threshold) : prev.threshold });
+          saveBloodbar({
+            region,
+            threshold: wantThreshold ? Number(args.threshold) : prev.threshold,
+            window: hasWindow ? (/^(off|none|clear|screen)$/i.test(windowArg) ? null : windowArg) : undefined,
+          });
           try { runner.setBloodbar?.(loadBloodbar()); } catch { /* 下次 listen 生效 */ }
           const now = loadBloodbar();
           return {
             text: `血条配置已更新：框 ${bloodbarText(now.region)} · 阈值 ${Math.round(now.threshold * 100)}%`
+              + ` · ${now.window ? `按窗口「${now.window}」抓（被遮挡也读）` : '按屏幕抓（窗口必须可见）'}`
               + '（已热更新，不用重启）',
-            meta: { ok: true, region: now.region, threshold: now.threshold },
+            meta: { ok: true, region: now.region, threshold: now.threshold, window: now.window },
           };
         }
 

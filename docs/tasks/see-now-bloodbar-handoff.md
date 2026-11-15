@@ -20,6 +20,12 @@ P1 血条读数完成并验过；P2 改为「**只报告读数，不唤**」，�
   接在三处：① 音频 / lift 唤醒文案末尾（`loop.js` 的 `bloodbarTail()`）；
   ② `watch` / `peek` 的结果（`sheetText()` 的 `bloodbar` 字段）；③ `status` 的血条行（加「上次低血」）。
   **不调用 `wake()`，不占 `listenGap` 退避。** 要不要抬头由模型自己看情况决定。
+- **按窗口抓（WGC，2026-11-15）**：`bloodbar.json` 的 `window` 字段（标题子串）配了就改走
+  `py/wgc_capture.py` + `src/capture-window.js`——**被别的窗口挡住、失去焦点也能读**。
+  实测同一块 421×16：屏幕抓 `ratio=0`、窗口抓 `ratio=1`（DSH 窗口压在上面时）。
+  `see_now({action:"bloodbar", window:"云·鸣潮"})` 开，`window:"off"` 回抓屏幕，都是热更新。
+  依赖 `pip install windows-capture`（已装进 `dsh-runtimes` 那个 python）。
+  边界：**最小化**两边都拿不到；**D3D 独占全屏** WGC 抓不到（但那时游戏必然前台全屏，走 ddagrab）。
 - **验收记录**：框紧（332×16）连读 5 次 **91.87%** 完全一致，屏幕数字 17223/18980 = **90.75%**，
   差 1.1 点；2026-11-15 12:15 战斗中掉到 **64%** 落一条
   `{"level":"glance","trigger":"bloodbar","spoke":false}`，满血 100% 不记，30 秒冷却无重复。
@@ -49,6 +55,11 @@ P1 血条读数完成并验过；P2 改为「**只报告读数，不唤**」，�
 
 - **`file:` 安装是拷贝，不是软链**：改了 `src/` 不跑 `node scripts/install-dev.mjs` 就不生效；
   而 `--check` 只比版本号、不比内容，版本没升时它会报「一致」却在跑旧代码。改完就装。
+- **`windows_capture/__init__.py` 顶层 `import cv2`**（只为了 `save_as_image`）：没装 opencv 时裸
+  `import windows_capture` 必挂。sidecar 塞一个 `sys.modules['cv2']` stub 绕过去；`resolveWgcPython()`
+  的探针也必须带同样的 stub，否则会出现「探针说不支持、sidecar 其实能跑」的假阴性。
+- **`draw_border=False` 在 Win10 上不支持**：会抛 `Toggling the capture border is not supported
+  by the Graphics Capture API on this platform` —— 别传这个参数（`cursor_capture` 同理不是必需的）。
 - `pick_region.py` 的 `MIN_SIDE` 原为 24：血条只有 10–20px 高，**松手永远不确认**
   （用户连取消两次就是它），已降到 8。
 - `capture.js` 的 `isDda()`：带 region 的屏幕源会被误判成 ddagrab → 给 gdigrab 的帧挂
