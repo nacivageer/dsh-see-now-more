@@ -53,6 +53,16 @@ export const BAND_ROW_RATIO = 0.8;
  */
 export const DEFAULT_STRONG_FILL = 0.9;
 
+/**
+ * band 模式的「填充结束」判据：连续 `GAP_COLS` 列低于 `GAP_RATIO` 就算到头。
+ *
+ * 2026-11-16 实测：血条右端有 `Lv.90` 白字/括号，亮度足够过 `strongFill`，
+ * 取「最后一个强填充列」会把 69% 读成 99.8%。装饰与填充之间隔着几十列暗槽，
+ * 所以按「连续暗」判，而不是按「最右的亮」。
+ */
+export const DEFAULT_GAP_RATIO = 0.5;
+export const DEFAULT_GAP_COLS = 6;
+
 /** 框选配置落盘位置（与 `region.json` 分开）。 */
 export function bloodbarFile(env = process.env) {
   return join(chatDir(env), 'bloodbar.json');
@@ -136,6 +146,9 @@ export function ratioFromPixels(pixels, {
   mode = 'full',
   colFill = DEFAULT_COL_FILL,
   strongFill = DEFAULT_STRONG_FILL,
+  /** band 端点扫描：低于这个列亮比例算「暗列」，连续 `gapCols` 列就判定填充结束。 */
+  gapRatio = DEFAULT_GAP_RATIO,
+  gapCols = DEFAULT_GAP_COLS,
 } = {}) {
   const w = Number(width);
   const h = Number(height);
@@ -196,14 +209,14 @@ export function ratioFromPixels(pixels, {
     while (bottom < h - 1 && rowCount[bottom + 1] >= maxRow * 0.8) bottom += 1;
     const bandH = bottom - top + 1;
     /**
-     * 每列的亮比例，然后**从左往右扫填充**：遇到连续 `darkGap` 列不亮就停。
+     * 填充端点：**从左往右扫，遇到连续 `gapCols` 列低于 `gapRatio` 就停**。
      *
-     * 两种数法都试过，都栽在数字上：
-     *   - 数「有多少列被填充」：数字黑笔画把每列压到 <50%，整段被判空档（75% vs 90.7%）。
-     *   - 取「最右的亮列」：条右端的装饰括号是浅色的，right 直接跑到框边（100%）。
+     * 不能取「最后一个强填充列」（2026-11-16 实测踩到）：血条右端常有装饰——
+     * `Lv.90` 的白字、右括号——它们的亮度足够过 `strongFill`，`right` 直接被拉到框边，
+     * **69% 读成 99.8%**。装饰和填充之间隔着几十列真正的暗槽，连续暗列才是边界。
      *
-     * 现在：数字列有白底（亮比例 0.3–0.5，>= 0.2）不会触发停止；装饰括号前隔着
-     * 几十列真正的暗区，连续 4 列就停。分母用 `w - left`，假定框框住了整条。
+     * 数字区不能触发停止：白底被笔画压到 0.4–0.8，`gapRatio=0.5` 只让"确实越来越暗"
+     * 的那一段计数；`gapCols=6` 是给单个粗笔画留的余量。
      */
     const colRatio = new Array(w);
     for (let x = 0; x < w; x += 1) {
@@ -213,10 +226,15 @@ export function ratioFromPixels(pixels, {
     }
     let left = -1;
     let right = -1;
+    let gap = 0;
     for (let x = 0; x < w; x += 1) {
       if (colRatio[x] >= strongFill) {
         if (left < 0) left = x;
         right = x;
+        gap = 0;
+      } else if (left >= 0 && colRatio[x] < gapRatio) {
+        gap += 1;
+        if (gap >= gapCols) break;
       }
     }
     if (left < 0) {

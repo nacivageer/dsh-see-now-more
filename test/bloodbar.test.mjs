@@ -202,6 +202,36 @@ test('band 模式：全暗 / 彩色 → gone', () => {
   assert.equal(ratioFromRgba(red, { width: 40, height: 20, mode: 'band' }).reason, 'gone');
 });
 
+test('band 模式：右端装饰（Lv.90 白字）不能把端点拉到框边 —— 69% 要读成 69%', () => {
+  // 2026-11-16 实测复现：血条右侧有 Lv.90 的白字/括号，亮度足够过 strongFill，
+  // 「取最后一个强填充列」会让 69% 读成 99.8%。填充和装饰之间是真正的暗槽。
+  const W = 421;
+  const H = 16;
+  const f = frame(W, H, (x) => {
+    if (x < 290) return [240, 240, 240];   // 填充 69%
+    if (x >= 382) return [235, 235, 235];  // 右端装饰：Lv.90 白字
+    return [45, 45, 45];                   // 暗槽
+  });
+  const band = ratioFromRgba(f, { width: W, height: H, mode: 'band' });
+  assert.equal(band.ok, true);
+  assert.ok(Math.abs(band.ratio - 290 / 421) < 0.01, `应约 0.689，实得 ${band.ratio}`);
+  assert.equal(band.band.right, 289);
+});
+
+test('band 模式：数字区的暗列不连续，不会提前判「填充结束」', () => {
+  const W = 421;
+  const H = 16;
+  const f = frame(W, H, (x, y) => {
+    if (x >= 290) return [45, 45, 45];
+    // 填充区里每隔 9 列来一道 2 列的深色笔画（模拟数字），不连续
+    if (x % 9 < 2 && y >= 2 && y < 14) return [80, 80, 80];
+    return [240, 240, 240];
+  });
+  const band = ratioFromRgba(f, { width: W, height: H, mode: 'band' });
+  assert.equal(band.ok, true);
+  assert.ok(Math.abs(band.ratio - 290 / 421) < 0.02, `应约 0.689，实得 ${band.ratio}`);
+});
+
 test('readBloodbarOnce：没框直接拒，不启动 ffmpeg', async () => {
   assert.equal((await readBloodbarOnce({})).reason, 'no-region');
   assert.equal((await readBloodbarOnce({ region: { x: 0, y: 0, w: 0, h: 0 } })).reason, 'no-region');
