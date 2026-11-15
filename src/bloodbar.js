@@ -396,6 +396,20 @@ export function bloodbarBrief({
 }
 
 /**
+ * 唤醒文案末尾要追加的那一行（`loop.js` 的 `bloodbarTail()` 用）。
+ *
+ * 单独抽成纯函数是为了能单测：**没有读数时必须返回空串**——
+ * 宁可少一行，也不许写「血条正常」（那是编的）。
+ *
+ * @param {{text:string}|null} note `runner.bloodbarNote()` 的返回
+ * @returns {string} `\n🩸 血条 64%…`，或 `''`
+ */
+export function bloodbarTailText(note) {
+  if (!note || typeof note.text !== 'string' || !note.text) return '';
+  return `\n🩸 ${note.text}（要不要看一眼你自己定，不用为它单独开画面）`;
+}
+
+/**
  * `status` 里的一行。
  *
  * 没框过 → 提示怎么框；框过但还没接采集 → 明说「未采」，别让人以为在跑。

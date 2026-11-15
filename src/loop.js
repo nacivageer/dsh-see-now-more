@@ -38,7 +38,7 @@ import { estimateSpeechMs, nextProactiveAt } from './pacing.js';
 import { listenGap, trajectoryText } from './listen.js';
 import { appendLift, appendLiftDebug } from './lift/log.js';
 import { createLift } from './lift/index.js';
-import { shouldGlance } from './bloodbar.js';
+import { bloodbarTailText, shouldGlance } from './bloodbar.js';
 
 /**
  * 用户插话的"同一拍"判定（毫秒）。
@@ -442,7 +442,7 @@ export function startLoop({
   function bloodbarTail() {
     let note = null;
     try { note = runner.bloodbarNote?.() ?? null; } catch { note = null; }
-    return note?.text ? `\n🩸 ${note.text}（要不要看一眼你自己定，不用为它单独开画面）` : '';
+    return bloodbarTailText(note);
   }
 
   /**

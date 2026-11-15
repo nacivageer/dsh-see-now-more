@@ -14,7 +14,7 @@ import {
   ratioFromRgba, ratioFromRgb, ratioFromPixels,
   loadBloodbar, saveBloodbar, clearBloodbar, bloodbarLine, bloodbarText,
   shouldGlance, DEFAULT_THRESHOLD, DEFAULT_GLANCE_COOLDOWN_MS,
-  pushTrack, bloodbarBrief,
+  pushTrack, bloodbarBrief, bloodbarTailText,
 } from '../src/bloodbar.js';
 import { readBloodbarOnce, readBloodbarWindowOnce } from '../src/bloodbar-capture.js';
 
@@ -382,4 +382,13 @@ test('bloodbarLine：有数字就写出来；OCR 不可用时明说（升级自�
   const broken = bloodbarLine(cfg, { ok: true, ratio: 0.15 }, { ocr: false });
   assert.match(broken, /OCR 不可用/);
   assert.doesNotMatch(bloodbarLine(cfg, { ok: true, ratio: 0.15 }), /OCR 不可用/, '不知道时不许瞎说');
+});
+
+test('bloodbarTailText：唤醒文案末尾那行——有读数才加，没读数一个字符都不加', () => {
+  assert.equal(bloodbarTailText(null), '');
+  assert.equal(bloodbarTailText({}), '');
+  assert.equal(bloodbarTailText({ text: '' }), '');
+  const line = bloodbarTailText({ text: '血条 4%（684/17638）（低于阈值 30%）' });
+  assert.match(line, /^\n🩸 血条 4%（684\/17638）/);
+  assert.match(line, /不用为它单独开画面/);
 });
