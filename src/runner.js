@@ -524,11 +524,14 @@ export function createRunner({
 
   /** 重新框选 / 改阈值之后热更新（正在采就按新框重开，不用重启循环）。 */
   function setBloodbar(cfg) {
+    const wasOn = Boolean(bloodbarRun) || bloodbarWanted;
     bloodbar = cfg ?? null;
     bloodbarOn = Boolean(bloodbar?.region);
     bloodbarReading = null;
     if (bloodbarRun) stopBloodbarCapture({ why: '配置变了' });
-    return { ok: true, enabled: bloodbarOn };
+    // **停完要接着起**：用户重框一次不该让读数停到下次重启（2026-11-15 实测踩到）
+    if (wasOn && bloodbarOn) startBloodbarCapture();
+    return { ok: true, enabled: bloodbarOn, capturing: Boolean(bloodbarRun) };
   }
 
   /**

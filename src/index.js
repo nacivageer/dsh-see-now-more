@@ -1684,6 +1684,30 @@ async function registerAll(ctx) {
           };
         }
 
+        // 直接给坐标 / 只改阈值：不弹框、支持热更新（2026-11-15 加的，省得每次都拖）
+        const direct = String(args.region ?? '').trim();
+        const hasCoord = /^\d+,\d+,\d+,\d+$/.test(direct);
+        const wantThreshold = args.threshold !== undefined
+          && Number.isFinite(Number(args.threshold))
+          && Number(args.threshold) > 0 && Number(args.threshold) < 1;
+        if (hasCoord || wantThreshold) {
+          const prev = loadBloodbar();
+          const region = hasCoord
+            ? (() => { const [x, y, w, h] = direct.split(',').map(Number); return { x, y, w, h }; })()
+            : prev.region;
+          if (!region) {
+            return { text: '还没框过血条，给不出坐标就先调 `see_now({action:"bloodbar"})` 框一次。', meta: { ok: false, reason: 'no-region' } };
+          }
+          saveBloodbar({ region, threshold: wantThreshold ? Number(args.threshold) : prev.threshold });
+          try { runner.setBloodbar?.(loadBloodbar()); } catch { /* 下次 listen 生效 */ }
+          const now = loadBloodbar();
+          return {
+            text: `血条配置已更新：框 ${bloodbarText(now.region)} · 阈值 ${Math.round(now.threshold * 100)}%`
+              + '（已热更新，不用重启）',
+            meta: { ok: true, region: now.region, threshold: now.threshold },
+          };
+        }
+
         const r = await pickRegion({
           log,
           // pickRegion 的回调形状是 (region, env)，配置这边收 { region, threshold }
