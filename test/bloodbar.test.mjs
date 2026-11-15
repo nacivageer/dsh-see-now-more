@@ -14,6 +14,7 @@ import {
   ratioFromRgba, ratioFromRgb, ratioFromPixels,
   loadBloodbar, saveBloodbar, clearBloodbar, bloodbarLine, bloodbarText,
   shouldGlance, DEFAULT_THRESHOLD, DEFAULT_GLANCE_COOLDOWN_MS,
+  pushTrack, bloodbarBrief,
 } from '../src/bloodbar.js';
 import { readBloodbarOnce } from '../src/bloodbar-capture.js';
 
@@ -203,4 +204,72 @@ test('shouldGlance：够低 + 出冷却才记；不可见/满血/冷却中都不
   assert.equal(shouldGlance({ reading: { ok: true, below: false, ratio: 0.8 }, now: 1_000_000 }), false);
   assert.equal(shouldGlance({ reading: { ok: false, reason: 'gone', ratio: 0 }, now: 1_000_000 }), false);
   assert.equal(shouldGlance({ reading: null, now: 1_000_000 }), false);
+});
+
+/* ---------------------------------------------- P2：读数简报（只报告，不唤） */
+
+test('pushTrack：只收真读数，不去改入参，过期滑走', () => {
+  const t0 = [{ at: 1_000, ratio: 0.5 }];
+  const t1 = pushTrack(t0, { ok: true, ratio: 0.4, at: 1_200 });
+  assert.equal(t0.length, 1, '入参不能被改');
+  assert.equal(t1.length, 2);
+  assert.deepEqual(t1[1], { at: 1_200, ratio: 0.4 });
+
+  // 框里没有血条（gone）不是「0 血」，不能进轨迹
+  assert.equal(pushTrack(t0, { ok: false, reason: 'gone', at: 2_000 }).length, 1);
+  assert.equal(pushTrack(t0, { ok: true, ratio: 0.4 }).length, 1, '没有 at 的读数不收');
+  assert.equal(pushTrack([], { ok: false, at: 1 }).length, 0);
+
+  // 3 分钟窗口：新的一条来了，老的全滑走
+  const t2 = pushTrack(t1, { ok: true, ratio: 0.3, at: 1_200 + 180_001 }, { keepMs: 180_000 });
+  assert.deepEqual(t2, [{ at: 181_201, ratio: 0.3 }]);
+});
+
+test('bloodbarBrief：没读数就返回 null —— 不编「血条正常」', () => {
+  assert.equal(bloodbarBrief({ track: [] }), null);
+  assert.equal(bloodbarBrief({}), null);
+  assert.equal(bloodbarBrief({ track: [{ at: NaN, ratio: 0.5 }] }), null);
+});
+
+test('bloodbarBrief：正常血条 → 带阈值，不标「低于」', () => {
+  const now = 1_000_000;
+  const b = bloodbarBrief({ track: [{ at: now - 40_000, ratio: 0.9 }, { at: now, ratio: 0.92 }], threshold: 0.3, now });
+  assert.equal(b.below, false);
+  assert.equal(b.ratio, 0.92);
+  assert.match(b.text, /^血条 92%（阈值 30%）/);
+});
+
+test('bloodbarBrief：低血 → 标出「低于阈值」，并给 30 秒前与近 60 秒区间', () => {
+  const now = 1_000_000;
+  const track = [
+    { at: now - 70_000, ratio: 0.95 },
+    { at: now - 60_000, ratio: 0.8 },
+    { at: now - 30_000, ratio: 0.7 },
+    { at: now, ratio: 0.64 },
+  ];
+  const b = bloodbarBrief({ track, threshold: 0.7, now, lastBelowAt: now });
+  assert.equal(b.below, true);
+  assert.match(b.text, /^血条 64%（低于阈值 70%）/);
+  assert.match(b.text, /30 秒前 70%/);
+  assert.match(b.text, /近 60 秒 64%–80%/);
+  assert.match(b.text, /上次低血 \d{2}:\d{2}:\d{2}/);
+});
+
+test('bloodbarBrief：读数旧了要说清楚 —— 免得把十分钟前的 64% 当成现在', () => {
+  const now = 1_000_000;
+  const b = bloodbarBrief({ track: [{ at: now - 42_000, ratio: 0.64 }], now });
+  assert.match(b.text, /42 秒前的读数/);
+  // 新鲜的读数不加这句
+  const fresh = bloodbarBrief({ track: [{ at: now - 2_000, ratio: 0.64 }], now });
+  assert.doesNotMatch(fresh.text, /秒前的读数/);
+});
+
+test('bloodbarLine：带上「上次低血」时刻', () => {
+  const cfg = { region: { x: 1, y: 2, w: 3, h: 4 }, threshold: 0.3 };
+  const at = new Date(2026, 10, 15, 12, 28, 31).getTime();
+  const line = bloodbarLine(cfg, { ok: true, ratio: 0.64, below: true }, { lastBelowAt: at });
+  assert.match(line, /最近 64%（低于阈值）/);
+  assert.match(line, /上次低血 12:28:31/);
+  // 没传 → 不出现（旧行为不变）
+  assert.doesNotMatch(bloodbarLine(cfg, { ok: true, ratio: 0.64, below: false }), /上次低血/);
 });

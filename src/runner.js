@@ -32,7 +32,7 @@ import {
   LIFT_WIDTH, LIFT_WINDOW_SEC,
 } from './lift/buffer.js';
 import { frameFile, pruneOld } from './lift/log.js';
-import { ratioFromRgba } from './bloodbar.js';
+import { bloodbarBrief, pushTrack, ratioFromRgba } from './bloodbar.js';
 import { encodePng } from './png.js';
 
 /**
@@ -420,6 +420,13 @@ export function createRunner({
   let bloodbarRun = null;
   /** 最近一次读数（`ratioFromRgba` 的结果 + `at`）。 */
   let bloodbarReading = null;
+  /**
+   * 最近 3 分钟的读数轨迹（P2：只报告、不唤）。
+   * 留着是为了在唤醒文案里写「30 秒前多少、近 60 秒最低多少」——单值看不出在掉还是在回。
+   */
+  let bloodbarTrack = [];
+  /** 最近一次低于阈值的时刻（不随轨迹滑走，供 status 回答「上次低血什么时候」）。 */
+  let bloodbarLastBelowAt = 0;
   let bloodbarError = null;
   let bloodbarRetry = null;
   let bloodbarRetries = 0;
@@ -467,10 +474,14 @@ export function createRunner({
         pixFmt: 'bgra',
         onFrame: (f) => {
           try {
-            bloodbarReading = {
+            const reading = {
               ...ratioFromRgba(f.buf, { width: region.w, height: region.h, threshold, mode: 'band' }),
               at: Date.now(),
             };
+            bloodbarReading = reading;
+            // 只在真正读到数时进轨迹：`gone`（过场/菜单/框挪走）不是一个"血量"
+            bloodbarTrack = pushTrack(bloodbarTrack, reading);
+            if (reading.ok === true && reading.below === true) bloodbarLastBelowAt = reading.at;
           } catch (e) {
             bloodbarError = `血条：算比例失败（${e?.message ?? e}）`;
           }
@@ -518,8 +529,33 @@ export function createRunner({
       threshold: Number(bloodbar?.threshold) > 0 ? Number(bloodbar.threshold) : 0.3,
       capturing: Boolean(bloodbarRun),
       reading: bloodbarReading,
+      /** 最近一次低于阈值的时刻（0 = 从没低过）。 */
+      lastBelowAt: bloodbarLastBelowAt || null,
+      /** 一行简报（与 runner.bloodbarNote() 同一个东西，省得调用方再算一遍）。 */
+      brief: bloodbarNote(),
       error: bloodbarError,
     };
+  }
+
+  /**
+   * 血条简报（P2：**只报告读数，不触发唤醒**）。
+   *
+   * 给唤醒文案与工具结果用。返回 `null` = 没有可报告的读数（没框 / 没在采 / 框里没有血条）——
+   * 这时别说「血条正常」，那是编的。
+   *
+   * @returns {{text:string, below:boolean, ratio:number, at:number}|null}
+   */
+  function bloodbarNote() {
+    try {
+      return bloodbarBrief({
+        track: bloodbarTrack,
+        threshold: Number(bloodbar?.threshold) > 0 ? Number(bloodbar.threshold) : 0.3,
+        now: Date.now(),
+        lastBelowAt: bloodbarLastBelowAt,
+      });
+    } catch {
+      return null;
+    }
   }
 
   /** 重新框选 / 改阈值之后热更新（正在采就按新框重开，不用重启循环）。 */
@@ -528,6 +564,9 @@ export function createRunner({
     bloodbar = cfg ?? null;
     bloodbarOn = Boolean(bloodbar?.region);
     bloodbarReading = null;
+    // 重框 = 换了对象（别的游戏、别的 HUD），旧轨迹与新读数不可比
+    bloodbarTrack = [];
+    bloodbarLastBelowAt = 0;
     if (bloodbarRun) stopBloodbarCapture({ why: '配置变了' });
     // **停完要接着起**：用户重框一次不该让读数停到下次重启（2026-11-15 实测踩到）
     if (wasOn && bloodbarOn) startBloodbarCapture();
@@ -1107,6 +1146,11 @@ export function createRunner({
     lift: () => liftStatus(),
     /** 血条读数账本（P1c）：`{enabled, region, threshold, capturing, reading, error}` */
     bloodbar: () => bloodbarStatus(),
+    /**
+     * 血条简报（P2）：`{text, below, ratio, at}` 或 `null`。
+     * 唤醒文案与 `watch` 结果都拼这一行 —— **只报告，不唤**。
+     */
+    bloodbarNote: () => bloodbarNote(),
     /** 重新框选 / 改阈值后热更新（不重启循环） */
     setBloodbar,
     stop() { teardown('手动'); return { stopped: true }; },

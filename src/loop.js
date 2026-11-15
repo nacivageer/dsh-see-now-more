@@ -417,7 +417,8 @@ export function startLoop({
       record: (rec) => appendLift(rec),
       debug: (text) => appendLiftDebug(text),
       glance: (text) => { try { appendSpoken('meta', text, { speak: false }); } catch { /* 窗不在也能记账 */ } },
-      wake: (text) => wake(text),
+      // 唤醒文案末尾带一行血条读数：**只报告，不唤**（P2 的取舍，见 bloodbarTail）
+      wake: (text) => wake(`${text}${bloodbarTail()}`),
       hint: () => lastSaidHint(),
       log,
     },
@@ -427,6 +428,22 @@ export function startLoop({
       noteNoAnswer: () => { unansweredListenWakes = Math.max(0, unansweredListenWakes - 1); },
     },
   });
+
+  /**
+   * 血条读数的一句话（P2：**只报告，不唤**）。
+   *
+   * 2026-11-15 定：血条不是触发器。低血不叫醒模型，只在**本来就发生的唤醒**里
+   * 把事实写出来（此刻 x%、30 秒前多少、近 60 秒区间、上次低血什么时候），
+   * 要不要 `watch` 看一眼由模型自己决定。理由：鸣潮三人队，切人/奶妈/免死
+   * 都会让「某个角色掉到 30%」只出现一小会 —— 按阈值唤只会反复白瞥。
+   *
+   * 没有读数（没框 / 没在采 / 框里没有血条）时返回空串，**不写「血条正常」**。
+   */
+  function bloodbarTail() {
+    let note = null;
+    try { note = runner.bloodbarNote?.() ?? null; } catch { note = null; }
+    return note?.text ? `\n🩸 ${note.text}（要不要看一眼你自己定，不用为它单独开画面）` : '';
+  }
 
   /**
    * 血条低了就记一条「瞥」（P1c）。
@@ -503,7 +520,8 @@ export function startLoop({
     const text = `[仅监听] ${clock} · 最近 ${Math.round(traj.spanSec)} 秒：${trajectoryText(traj)}${tempo}。\n`
       + '值得看就 `see_now({action:"watch"})` 看 2–3 张；不值得就什么都别做，我继续听。'
       + '（这条要是来得太晚 —— 你现在看到时声音早停了、或者 `status` 显示根本没在听 —— 就当没听见，别为它开画面。）'
-      + lastSaidHint();
+      + lastSaidHint()
+      + bloodbarTail();
     const ok = await wake(text);
     if (!ok) unansweredListenWakes = Math.max(0, unansweredListenWakes - 1);
   }

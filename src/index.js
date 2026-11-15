@@ -365,7 +365,9 @@ function areaText(frac) {
 }
 
 /** 一张图 → 模型看得懂的清单。数字都是「这张图里第几格」，不是抽象指标。 */
-export function sheetText(sheet, { waited = 0, partial = false, userText = null, say = null, looping = false } = {}) {
+export function sheetText(sheet, {
+  waited = 0, partial = false, userText = null, say = null, looping = false, bloodbar = null,
+} = {}) {
   const { frames, from, to, why } = sheet;
   // 单帧时首尾相等，写成区间会变成"过去 24.1–24.1 秒"，读起来像出错了
   const span = frames.length === 1
@@ -420,7 +422,10 @@ export function sheetText(sheet, { waited = 0, partial = false, userText = null,
       + '你现在只要做一件事 —— 值得说就用 `say` 说一句，不值得说就别出声。'
       + '用户关掉悬浮窗我就停。'
     : '';
-  return `${head}\n${lines.join('\n')}${linesText(sheet)}${soundText(sheet.sound)}${ask}${lastSaidNote()}${loopNote}\n（${whyText}；想看下一段就再调一次 \`see_now({action:"watch"})\`。）${replyReminder({ answered: Boolean(say) })}`;
+  // 血条读数（P2）：**只报告，不唤**。看图这一刻顺带把「此刻多少血」说出来，
+  // 判断交给模型（`bloodbarNote()` 在没框 / 没采时返回 null，那时不写这一行）。
+  const bloodNote = bloodbar ? `\n🩸 ${bloodbar}` : '';
+  return `${head}\n${lines.join('\n')}${linesText(sheet)}${soundText(sheet.sound)}${bloodNote}${ask}${lastSaidNote()}${loopNote}\n（${whyText}；想看下一段就再调一次 \`see_now({action:"watch"})\`。）${replyReminder({ answered: Boolean(say) })}`;
 }
 
 /**
@@ -1415,6 +1420,7 @@ async function registerAll(ctx) {
           say: said,
           looping: Boolean(lp) && !lp.stopped(),
           loopWakes: lp ? lp.state().wakes : 0,
+          bloodbar: runner.bloodbarNote?.()?.text ?? null,
         });
         /**
          * **字幕带每张都要说一次**：图的形状变了（一条长条，不是整屏），
@@ -1464,7 +1470,10 @@ async function registerAll(ctx) {
             meta: { ok: false, reason: 'no-sheet', loop: lp?.state() ?? null },
           };
         }
-        return await attachAndReturn(ctx, s, { looping: Boolean(lp) && !lp.stopped() });
+        return await attachAndReturn(ctx, s, {
+          looping: Boolean(lp) && !lp.stopped(),
+          bloodbar: runner.bloodbarNote?.()?.text ?? null,
+        });
       }
 
       if (action === 'start') {
@@ -1819,7 +1828,7 @@ async function registerAll(ctx) {
             // 区域：只看一小块时，模型得知道自己看到的不是整屏
             + `\n区域：${regionText(s.lastSource?.region ?? loadRegion()) ?? '整屏'}`
             // 血条（P1c）：框在哪、阈值、最近一次读数；没在采时明说
-            + `\n${bloodbarLine(loadBloodbar(), s.bloodbar?.reading ?? null)}`
+            + `\n${bloodbarLine(loadBloodbar(), s.bloodbar?.reading ?? null, { lastBelowAt: s.bloodbar?.lastBelowAt })}`
             // 声音单独一行：听不到声音时第一个要看的就是这里
             + `\n声音：${voice.speakers > 0
               ? `已接上 ${voice.adapters.join(', ') || '适配器'}（${voice.speakers} 个会出声的订阅者）`

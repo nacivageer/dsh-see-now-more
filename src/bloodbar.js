@@ -267,6 +267,73 @@ export function shouldGlance({ reading, now, lastGlanceAt = 0, cooldownMs = DEFA
   return now - lastGlanceAt >= cooldownMs;
 }
 
+/** 读数轨迹保留多久：3 分钟（1 fps 采集最多 180 条）。 */
+export const DEFAULT_TRACK_MS = 180_000;
+
+/**
+ * 往轨迹里塞一条读数（纯函数：返回新数组，不改入参）。
+ *
+ * 为什么只留比例和时刻：这是给「简报」用的，不是给复盘用的。
+ * 复盘要整帧去 `lift/` 找；这里只要「刚才多少、现在多少」。
+ *
+ * @param {Array<{at:number, ratio:number}>} track
+ * @param {{ok?:boolean, ratio?:number, at?:number}|null} reading
+ * @param {{keepMs?:number}} [o]
+ * @returns {Array<{at:number, ratio:number}>} 新数组（入参不动）
+ */
+export function pushTrack(track, reading, { keepMs = DEFAULT_TRACK_MS } = {}) {
+  const pts = Array.isArray(track) ? track : [];
+  if (!reading || reading.ok !== true || !Number.isFinite(reading.ratio)) return pts;
+  const at = Number(reading.at);
+  if (!Number.isFinite(at) || at <= 0) return pts;
+  const next = pts.filter((p) => Number.isFinite(p?.at) && at - p.at <= keepMs);
+  next.push({ at, ratio: reading.ratio });
+  return next;
+}
+
+/**
+ * 一行「血条现状」，用于**唤醒文案与工具结果**（P2 起：只报告读数，不触发唤醒）。
+ *
+ * 只摆事实：此刻多少、30 秒前多少、近 60 秒区间、上次低于阈值是什么时候。
+ * **判断留给模型**——它决定要不要 `see_now({action:"watch"})` 去看一眼。
+ *
+ * 为什么带「多久之前的读数」：血条那一路只在仅监听时采，开始看画面就停了。
+ * 不写清楚，模型会把十分钟前的 64% 当成现在的 64%。
+ *
+ * @param {{track?: Array<{at:number, ratio:number}>, threshold?: number, now?: number,
+ *          lastBelowAt?: number, staleMs?: number}} [o]
+ * @returns {{text:string, below:boolean, ratio:number, at:number}|null} 没读数 → null（不报告）
+ */
+export function bloodbarBrief({
+  track = [], threshold = DEFAULT_THRESHOLD, now = Date.now(),
+  lastBelowAt = 0, staleMs = 15_000,
+} = {}) {
+  const pts = (Array.isArray(track) ? track : [])
+    .filter((p) => Number.isFinite(p?.at) && Number.isFinite(p?.ratio));
+  const last = pts[pts.length - 1];
+  if (!last) return null;
+  const pct = (n) => `${Math.round(n * 100)}%`;
+  const clock = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour12: false });
+  const below = last.ratio < threshold;
+
+  const tail = [];
+  const before = [...pts].reverse().find((p) => last.at - p.at >= 30_000);
+  if (before) tail.push(`30 秒前 ${pct(before.ratio)}`);
+  const recent = pts.filter((p) => last.at - p.at <= 60_000);
+  if (recent.length > 2) {
+    const lo = Math.min(...recent.map((p) => p.ratio));
+    const hi = Math.max(...recent.map((p) => p.ratio));
+    tail.push(lo === hi ? `近 60 秒都是 ${pct(lo)}` : `近 60 秒 ${pct(lo)}–${pct(hi)}`);
+  }
+  if (lastBelowAt) tail.push(`上次低血 ${clock(lastBelowAt)}`);
+
+  const age = Math.max(0, now - last.at);
+  const text = `血条 ${pct(last.ratio)}（${below ? `低于阈值 ${pct(threshold)}` : `阈值 ${pct(threshold)}`}）`
+    + (age > staleMs ? ` · ${Math.round(age / 1000)} 秒前的读数` : '')
+    + (tail.length ? ` · ${tail.join('，')}` : '');
+  return { text, below, ratio: last.ratio, at: last.at };
+}
+
 /**
  * `status` 里的一行。
  *
@@ -274,12 +341,16 @@ export function shouldGlance({ reading, now, lastGlanceAt = 0, cooldownMs = DEFA
  *
  * @param {{region: object|null, threshold: number}} cfg
  * @param {{ratio:number, below:boolean}|null} reading
+ * @param {{lastBelowAt?: number}} [o] 最近一次低于阈值的时刻（毫秒；0 = 从没低过）
  */
-export function bloodbarLine(cfg, reading = null) {
+export function bloodbarLine(cfg, reading = null, { lastBelowAt = 0 } = {}) {
   if (!cfg || !cfg.region) return '血条：没框（调 `see_now({action:"bloodbar"})` 框一条）';
   const pct = (n) => `${Math.round(n * 100)}%`;
   const head = `血条：框 ${bloodbarText(cfg.region)}（阈值 ${pct(cfg.threshold)}）`;
-  if (!reading) return `${head}· 未采（调 \`read:true\` 读一次）`;
-  if (reading.ok === false) return `${head}· 现在框里没有血条（${reading.reason}）`;
-  return `${head}· 最近 ${pct(reading.ratio)}${reading.below ? '（低于阈值）' : ''}`;
+  const low = lastBelowAt
+    ? ` · 上次低血 ${new Date(lastBelowAt).toLocaleTimeString('zh-CN', { hour12: false })}`
+    : '';
+  if (!reading) return `${head}· 未采（调 \`read:true\` 读一次）${low}`;
+  if (reading.ok === false) return `${head}· 现在框里没有血条（${reading.reason}）${low}`;
+  return `${head}· 最近 ${pct(reading.ratio)}${reading.below ? '（低于阈值）' : ''}${low}`;
 }
