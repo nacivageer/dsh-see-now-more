@@ -16,7 +16,7 @@ import { appendSpoken, appendChat, lastSaidNote, lastSaidText, chatDir, chatWatc
 import { createTitleSync } from './titles.js';
 import { ensureConfiguredVoice, detachAdapters, attachedAdapters, configuredVoiceAdapter, lastVoiceError } from './voice.js';
 import { speechSubscribers, onSpeech } from './speech.js';
-import { describeAcoustic, describeEvents, markSpeaking, soundText } from './listen.js';
+import { describeAcoustic, describeCoverage, describeEvents, markSpeaking, soundText } from './listen.js';
 import { startLoop, HANGUP_NOTE } from './loop.js';
 import { wakeWithRetry, deliveryMode } from './timer.js';
 import { readTuning, tuningPath } from './tuning.js';
@@ -349,7 +349,7 @@ function listenLine(l) {
   const lag = l.lastLineLagMs != null ? `，上一句开口→可读 ${(l.lastLineLagMs / 1000).toFixed(1)}s` : '';
   const part = l.partials ? `，临时字幕 ${l.partials} 次` : '';
   // 声学指纹是 A 层唯一的可观测出口：它和台词是两条线，纯音乐时这里还有数。
-  return `在听（${l.backend}，累计 ${l.total} 句${last}${lag}${part}）${describeAcoustic(l.acoustic)}${describeEvents(l.audioEvents)}`;
+  return `在听（${l.backend}，累计 ${l.total} 句${last}${lag}${part}）${describeAcoustic(l.acoustic)}${describeCoverage(l.coverage)}${describeEvents(l.audioEvents)}`;
 }
 
 /**

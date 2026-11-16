@@ -1,4 +1,4 @@
-/**
+﻿/**
  * coverage.test.mjs — 覆盖率账的纯逻辑（P0）。
  *
  * 合成帧就能覆盖：全人声有字 / 人声无字 / 没测到 / 非人声里落字 / 短段不算。
@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeCoverage, kindOf, mergeIntervals, SPEECH_MID } from '../scripts/coverage.mjs';
+import { computeCoverage, kindOf, mergeIntervals, SPEECH_MID } from '../src/coverage.js';
 
 /** 造一帧声学数据：db + 三频带占比（lo, mid, hi 落在 [4],[5],[6]） */
 function frame({ db = -30, mid = 0.8 } = {}) {
@@ -114,3 +114,4 @@ test('时间窗外的转写行被裁掉', () => {
   const res = computeCoverage(a, [{ t0: t0 - 5_000, t1: t0 + 2_000, text: '跨窗' }], { from: t0, to: t0 + 10_000 });
   assert.equal(res.text.coveredSec, 2);   // 只算窗内那 2 秒
 });
+

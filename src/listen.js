@@ -39,6 +39,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { computeCoverage } from './coverage.js';
 import { createSpeakerTracker, resolveSpeaker } from './speaker.js';
 import { applyTerms, loadTermRules } from './terms.js';
 import { writeTranscript } from './transcript.js';
@@ -710,6 +711,18 @@ export function trajectoryText(traj) {
 }
 
 /**
+ * 覆盖率账 → status 尾巴。**算不出来就什么都不加**（不编 0%）。
+ *
+ * 只报三个数：覆盖率、人声秒数、像说话没字的段数。
+ * 「落在非人声 X 秒」不进 status 行（太长），要诊断跑 `node scripts/coverage.mjs`。
+ */
+export function describeCoverage(c) {
+  if (!c || c.coverage == null) return '';
+  const noText = c.speechButNoText?.spans ? `，像说话没字 ${c.speechButNoText.spans} 段` : '';
+  return `；覆盖 ${c.coverage}%（人声 ${Math.round(c.audio.speechSec)}s）${noText}`;
+}
+
+/**
  * 声学事件 → status 尾巴。**一次都没有就什么都不加** —— 0 次不该占一行。
  *
  * 结尾必须写「只记录，未接唤醒」：不然看到"起节拍 3 次"会以为它已经会主动看你了。
@@ -1074,6 +1087,17 @@ export function createListener({
     // status 里要看得见 A 层活没活着 —— 用户问"它听见什么"时，先看这一行。
     // 自节流到 2 秒一次，反复调 status 也只是一次 stat + read。
     pollAcoustic();
+    /**
+     * 覆盖率账：人声时间里有多少被字盖住。
+     *
+     * 只在**有原始声学帧**时算 —— `state().acoustic` 是摘过的（只有格数），
+     * 这里要用 `acoustic` 那个原始对象。算不出来就是 null，status 不加这半句，
+     * 不编一个 0%。
+     */
+    let coverage = null;
+    try {
+      if (acoustic && buffer.size) coverage = computeCoverage(acoustic, buffer.all);
+    } catch { coverage = null; }
     return {
       enabled,
       reason,
@@ -1111,6 +1135,8 @@ export function createListener({
        * 现在看的是误报率，不是效果。跑几天再决定阈值。
        */
       audioEvents: events.state(),
+      /** 覆盖率账（人声时长里被字盖住的比例）；没有声学帧或没台词时为 null */
+      coverage,
     };
   }
 
