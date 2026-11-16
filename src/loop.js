@@ -841,6 +841,35 @@ export function startLoop({
     pinned: () => pinned,
     /** 现在有没有可投递的会话 —— relay 靠它决定"这一拍要不要接管" */
     hasTarget: () => Boolean(resolveTarget()),
+    /**
+     * **用户在会话里说话 = 人在**（上游 0.2.4 / issue #69）。
+     *
+     * 循环原来只盯悬浮窗那条 `chat.jsonl`：用户切回 DSH 主聊天窗聊十几分钟，它一个字都
+     * 看不见，照样按「连续 N 次叫醒没人理」收工 —— 采集停了、人还在，agent 却被反复空叫醒。
+     *
+     * 判据（`human.js` 的 `isHumanMessage`）由调用方给：**只认人发的**，
+     * 插件自己投的 `kind: 'see-now'` 提词不能算，否则 `wakesSinceUser` 永远归零。
+     *
+     * 只续**本循环的投递目标**那个会话：别的会话里的对话不该给这条命续命。
+     * 目标还没定（`resolveTarget()` 为 null）时也照收 —— 宁可多陪一会儿，不要在
+     * "刚开循环还没绑定会话"的那几秒里把用户的发言全丢掉。
+     *
+     * @param {string|null} [sid] 事件发生所在会话
+     * @returns {boolean} 这次有没有真的记上（false = 不是本循环的会话）
+     */
+    noteUserSpoke(sid = null) {
+      const to = resolveTarget();
+      if (to && sid && sid !== to) return false;
+      // 只在"本来已经背了 N 次空叫醒"时写一行：否则用户每说一句就是一行日志，
+      // 而这条线的证据正好是"计数被清零了没有"，安静的时候不需要出声。
+      if (wakesSinceUser > 0) {
+        log(`用户在会话 ${targetLabel(sid)} 说话 —— 续命，${wakesSinceUser} 次空叫醒清零`);
+      }
+      lastUserAt = Date.now();
+      lastUserSpokeAt = lastUserAt;
+      wakesSinceUser = 0;
+      return true;
+    },
     state: () => ({
       stopped: stopReason !== null,
       // 'active' 在正常看；'listen' = 只剩耳朵（采集停了，但窗里打字仍然收得到）

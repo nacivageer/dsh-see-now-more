@@ -2,6 +2,44 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.11] - 2026-11-16
+
+### Fixed — 隐藏之后窗口还在全速抓屏（`window.py` 本地补丁）
+
+上游 0.2.4 的社区实报：**状态位早就是「关」，窗口还在全速抓屏，4 秒吃掉 5 秒的 CPU**。
+用户眼里的「关」是三件事 —— 指示灯灭、预览停、CPU 落回 0；只做第一件的后果是后两件安静地开着。
+
+我们这边同病：`window.py` 的 `_work()` 循环只有 `_pause` / `_collapsed` 两个闸，
+而 `hide` 协议动作（和配置里 `hidden: true`）只是 `withdraw()` 窗口 —— 玻璃仍然是 `live` 模式，
+`mss` 照样每帧抓整屏 + 模糊 + 合成，屏幕上什么都没有。
+
+补丁：`_plain` 与 `mss` 两个分支都加第三道闸 `self._hidden`，隐藏期间按 0.2 秒一拍睡过去
+（`mss` 句柄留着，恢复显示时下一拍立刻接着抓，不用拆线程、不用重建上下文）。
+
+> **这是手改的生成文件**：`examples/floating-chat/window.py` 由 `scripts/sync-window.mjs`
+> 从上游 `dsh-watch-together` 生成，文件头写着「请勿手改」。下次同步会覆盖掉这段，
+> 届时要么跟着上游走（他们 0.2.4 的修法是隐藏时 `_stop_worker()`、恢复时 `_start_worker()`），
+> 要么把这两处闸再补回来。上游那份已经拆成 `glass_*.py` 多文件（1920 行），
+> 我们这份还是单体版（9900+ 行）——**不能直接换文件**，只能手工搬改动。
+
+### Fixed — 用户在主窗口说话，不算「人在」（上游 #69）
+
+常驻循环只盯悬浮窗那条 `chat.jsonl`：用户切回 DSH 主聊天窗跟 agent 聊十几分钟，
+它一个字都看不见，照样按「连续 N 次叫醒没人理」收工 —— 采集停了、人还在看，
+agent 却被反复空叫醒。
+
+- 新增 `src/human.js` 的 `isHumanMessage(event)`：只认 `user/message` 且
+  `source.kind` 是 `user` / `action-cards`。**`see-now` 明确排除** —— 那是本插件自己的
+  叫醒 / 提词（`timer.js` 的 `userMessage()`），把它当成人说话会让
+  `wakesSinceUser` 永远归零、兜底线等于没写（比不修更糟）。
+- `loop.js` 新增 `noteUserSpoke(sid)`：把 `lastUserAt` / `lastUserSpokeAt` 一起刷新、
+  `wakesSinceUser` 归零；**只续循环自己的投递目标**（别的会话里的对话不给这条命续命）。
+- `index.js` 的 `session/event` 钩子里调用；`let loop` 的声明**挪到钩子之前** ——
+  钩子注册完就可能被触发，晚声明会撞 TDZ。
+
+`test/human-message.test.mjs` 5 条：两种人类 kind 认、`see-now` 不认（反向也认得出）、
+其它 kind 与缺 `source` 一律不认、类型不对不认、字段在顶层也认、缺形状不抛。
+
 ## [0.1.1-more.10] - 2026-11-16
 
 ### Changed — 排布默认一格都不裁（`stretch: 0`），并把它做成配置

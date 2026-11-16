@@ -21,6 +21,7 @@ import { startLoop, HANGUP_NOTE } from './loop.js';
 import { wakeWithRetry, deliveryMode } from './timer.js';
 import { readTuning, tuningPath } from './tuning.js';
 import { shouldIdleStop } from './idle.js';
+import { isHumanMessage } from './human.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
@@ -776,6 +777,13 @@ async function registerAll(ctx) {
       appendChat('assistant', text.length > 3000 ? `${text.slice(0, 3000)}…` : text);
     } catch { /* 记录失败绝不能影响会话本身 */ }
   };
+  /**
+   * 正在跑的常驻循环（同一时刻只有一个）。
+   *
+   * **声明必须放在 `session/event` 钩子之前**：钩子体里要用它判断「用户是不是在跟
+   * 这个循环绑定的会话说话」（#69），而钩子注册完就可能被立刻触发 —— 晚声明会撞 TDZ。
+   */
+  let loop = null;
   if (typeof ctx.on === 'function') {
     try {
       const off = ctx.on('session/event', (session, event) => {
@@ -795,6 +803,20 @@ async function registerAll(ctx) {
           lastSessionId = id;
         }
         mirrorAssistantText(event);
+        /**
+         * **用户在这个会话里说话 = 人在**（上游 0.2.4 / issue #69）。
+         *
+         * 循环原来只盯悬浮窗那条 `chat.jsonl`：用户切回 DSH 主聊天窗聊十几分钟，
+         * 它一个字都看不见，照样按「连续 N 次叫醒没人理」收工 —— 采集停了、人还在看，
+         * agent 却被反复空叫醒。
+         *
+         * 判据只认人发的（`human.js`）：插件自己的叫醒带的是 `kind: 'see-now'`，
+         * 把它当成"人说话了"会让那条兜底线永远不触发 —— 比不修更糟。
+         * 只续本循环的投递目标（`loop.noteUserSpoke` 自己再判一次会话）。
+         */
+        try {
+          if (isHumanMessage(event)) loop?.noteUserSpoke?.(id ?? null);
+        } catch { /* 计数失败绝不能影响会话本身 */ }
       });
       if (typeof off === 'function') disposers.push(off);
     } catch (e) {
@@ -803,8 +825,6 @@ async function registerAll(ctx) {
     }
   }
 
-  /** 正在跑的常驻循环（同一时刻只有一个） */
-  let loop = null;
   const stopLoop = (reason = '手动') => {
     if (!loop) return;
     const wasStopped = loop.stopped();

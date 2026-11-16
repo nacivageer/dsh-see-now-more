@@ -8114,6 +8114,11 @@ class LiveGlass:
             # 其余时间这个线程在睡觉 —— 拖动时窗口本身跟着鼠标走就是满帧。
             while not self._stop.is_set():
                 try:
+                    # 隐藏（withdraw）之后没有任何人看得见这层玻璃，继续算就是纯烧 CPU。
+                    # 睡长一点：恢复显示时下一拍立刻接着抓，不必拆线程。
+                    if self._hidden:
+                        time.sleep(0.2)
+                        continue
                     if self._pause.is_set() or self._collapsed:
                         time.sleep(0.05)
                         continue
@@ -8151,6 +8156,12 @@ class LiveGlass:
         idle = 0
         with mss.mss() as sct:
             while not self._stop.is_set():
+                # 隐藏之后窗口已经 withdraw，抓到的帧没人看得见 —— 上游 0.2.4 的社区实报是
+                # 「状态位早就是关，窗口还在全速抓屏，4 秒吃掉 5 秒 CPU」。这里按 0.2 秒
+                # 一拍睡过去：mss 句柄留着（恢复显示不用重新建），抓屏/模糊/合成一次都不做。
+                if self._hidden:
+                    time.sleep(0.2)
+                    continue
                 if self._pause.is_set() or self._collapsed:
                     time.sleep(0.03)
                     continue
