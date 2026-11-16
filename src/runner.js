@@ -224,6 +224,14 @@ export function createRunner({
    */
   bloodbar = null,
   /**
+   * 排布的宽高比容差（`see-now.json` 的 `packStretch`，默认 0 = 一格都不裁）。
+   *
+   * 和 `scoreNormalize` 同一个理由必须一路带进 `createPipeline`：`scripts/sim.mjs`
+   * 走的是管线本身，把开关拦在 runner 这层，离线就没法做 A/B。调用方显式传
+   * `opts.stretch` 时以调用方为准（目前只有测试这么干）。
+   */
+  packStretch = 0,
+  /**
    * 采集函数（默认 `capture.js` 的 `spawnFrames`）。**只为测试**：留底那一路和 `start()`
    * 都从这里起，测试可以塞一个假采集，不必真的开屏 —— 否则每个生命周期用例都要跑 ffmpeg。
    */
@@ -1025,6 +1033,7 @@ export function createRunner({
       // 这里只是把它按时间窗取出来画成柱子，**不额外解码一次音频**。
       audio: { levels: (a, b) => listener.levelsBetween(a, b) },
       scoreNormalize: opts.scoreNormalize ?? scoreNormalize,
+      stretch: opts.stretch ?? packStretch,
     });
     // 记下"这次建管线用的调用方参数"（不含 oneShot）——watch 靠它发现"模式变了"。
     runOpts = { ...opts };

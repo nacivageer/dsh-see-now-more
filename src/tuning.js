@@ -57,6 +57,15 @@ export const TUNING_DEFAULTS = Object.freeze({
    * 所以留着不影响日常屏幕，只在暗场/宽银幕上起作用。
    */
   scoreNormalize: true,
+  /**
+   * 排布的宽高比容差（`pack.js` 的 `stretch`）。**默认 0 = 一格都不裁**。
+   *
+   * 老默认 0.3 拿画面换张数：一行里格宽不齐时把整行拉成等高带，最宽格上下各裁 23%、
+   * 最窄格左右各裁 23%。本机实测快场景 8.66 → 7.72 帧/张（-11%），静态场景一秒不差
+   * （全 1 档时任何 stretch 都是 4.00 帧/张）。**方向不定、图上不留痕**，所以默认取 0；
+   * 觉得自己不需要边缘、只想要密度时写 0.2 / 0.3。论证与曲线见 `pack.js` 注释。
+   */
+  packStretch: 0,
 });
 
 /**
@@ -319,6 +328,20 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     else warnings.push('scoreNormalize 只能是 true / false，已用默认 true');
   }
 
+  /**
+   * 排布容差：0（默认，一格不裁）～ 0.3（老默认，最多裁 23%）。
+   * 写成 1 / 30 这种（把百分比当小数）是很自然的手滑，必须报出来而不是悄悄生效。
+   */
+  let packStretch = TUNING_DEFAULTS.packStretch;
+  if (raw.packStretch !== undefined) {
+    const n = Number(raw.packStretch);
+    if (Number.isFinite(n) && n >= 0 && n <= 0.3) packStretch = n;
+    else {
+      warnings.push('packStretch 必须是 0–0.3 之间的小数（0 = 一格都不裁，0.3 = 老行为），'
+        + `已用默认 ${TUNING_DEFAULTS.packStretch}`);
+    }
+  }
+
   return {
     maxAutonomousWakes,
     idleStopMin,
@@ -330,6 +353,7 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     mode,
     idleCaptureMin,
     scoreNormalize,
+    packStretch,
     listen: listenCfg.listen,
     lift: liftCfg.lift,
     path,

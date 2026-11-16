@@ -673,6 +673,8 @@ async function registerAll(ctx) {
     mode: tuning.mode,
     // 亮度归一 + 黑边补偿（see-now.json 的 scoreNormalize，默认开）
     scoreNormalize: tuning.scoreNormalize,
+    // 排布容差（see-now.json 的 packStretch）：默认 0 = 一格都不裁，调高才换密排
+    packStretch: tuning.packStretch,
     // 黑听抬头（see-now.json 的 lift 段）：enabled 决定仅监听时要不要留底
     lift: tuning.lift,
     // 血条读数（P1c）：框过才有；没框时不采（startBloodbarCapture 会直接拒）

@@ -21,7 +21,7 @@ import { createPipeline, DEFAULTS } from '../src/pipeline.js';
 
 const NUM = new Set(['width', 'height', 'fps', 'cutAbs', 'cutSpike', 'cutMinGap',
   'integralSeconds', 'markMinGap', 'silentFloorSec', 'dtFrames', 'smoothFrames', 'dupMin', 'queueDepth',
-  'maxWaitSec', 'flushGain', 'maxFrames', 'binCost', 'maxSec',
+  'maxWaitSec', 'flushGain', 'maxFrames', 'binCost', 'maxSec', 'stretch',
   'markBoost', 'floorBoost',
   /**
    * `--scoreNormalize=0` 就是靠这一项变成数字 0 的。

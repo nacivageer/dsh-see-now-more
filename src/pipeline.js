@@ -395,6 +395,17 @@ export const DEFAULTS = Object.freeze({
    * （实测：25 秒素材出 9 张，每张 1 帧）。给到 1000，DP 就只会往一个箱子里压。
    */
   binCost: 1000,
+  /**
+   * 排布的宽高比容差（`pack.js` 的 `stretch`）。**默认 0 = 一格都不裁**。
+   *
+   * 老默认是 0.3：一行里格宽不齐时把整行拉成一条等高带，最宽格压扁（上下各裁 23%）、
+   * 最窄格拉高（左右各裁 23%），换来箱数 -9~-12%。裁的方向和多少由档位组合决定、
+   * 图上不留痕，所以宁可少装几帧也不悄悄丢边缘。
+   *
+   * 来源：`~/.dsh/see-now.json` 的 `packStretch`（runner 传进来）；越界在 tuning 那层夹。
+   * 论证与实测表见 `pack.js` 的 `DEFAULT_STRETCH` 注释。
+   */
+  stretch: 0,
   /** 出图队列深度。0 = 不丢（离线跑用），线上是 1：宁可丢老画面，不给模型看十几秒前的事。 */
   queueDepth: 1,
   /** 只发一帧就截断。刚开/刚换清晰度时用：让模型马上拿到"现在是什么"，不用等攒满一张。 */
@@ -568,7 +579,7 @@ export function createPipeline(opts = {}) {
    * 实测帧密场景还是 4 帧/张、token/分一点没省。
    */
   function plan() {
-    return solve(seqOf(frames), { binCost: o.binCost });
+    return solve(seqOf(frames), { binCost: o.binCost, stretch: o.stretch });
   }
 
   function checkFlush(t) {
@@ -605,7 +616,7 @@ export function createPipeline(opts = {}) {
     // "4 个 1 档装得进一张"刚好咬住（见 `splitOneBin` 的注释）。这里换成显式规则：
     // 不依赖那两个数字，改加成参数也不会静默交出一张糊图。
     if (p.bins > 1) {
-      const segs = splitOneBin(seqOf(frames), { binCost: o.binCost });
+      const segs = splitOneBin(seqOf(frames), { binCost: o.binCost, stretch: o.stretch });
       const keep = segs[0].length;
       const carry = frames.slice(keep);
       if (carry.length === 0) { flush(t, 'full'); return; }   // 兜底：不该发生
@@ -870,7 +881,7 @@ export function createPipeline(opts = {}) {
     // 清空了 sheets 却交不出图（插话时用户什么都看不到）。
     if (regionAspect) return flushRegion(batch, t, why);
     const seq = seqOf(batch);
-    const p = solve(seq, { binCost: o.binCost });
+    const p = solve(seq, { binCost: o.binCost, stretch: o.stretch });
     if (!p.cells.length) return;
     /**
      * **一张图只画一个箱子**。`solve` 允许跨箱（DP 里封箱是要付 `binCost` 的），
@@ -1146,7 +1157,7 @@ export function createPipeline(opts = {}) {
       let guard = 0;
       while (frames.length && guard < 64) {
         guard += 1;
-        const segs = splitOneBin(seqOf(frames), { binCost: o.binCost });
+        const segs = splitOneBin(seqOf(frames), { binCost: o.binCost, stretch: o.stretch });
         if (segs.length <= 1) { flush(lastBound, 'end'); break; }
         const keep = segs[0].length;
         const carry = frames.slice(keep);
