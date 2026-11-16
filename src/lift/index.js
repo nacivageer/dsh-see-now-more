@@ -260,7 +260,9 @@ export function createLift({ config = {}, now = () => Date.now(), senses = {}, s
 
     // 瞥 / 看都要那一刻的帧；取不到就明说「没了」，绝不拿现在顶
     const png = senses.framePng?.(t0) ?? { ok: false, reason: 'no-frame' };
-    const frameNote = png.ok ? '' : `（帧没取到：${png.reason}）`;
+    const frameNote = png.ok
+      ? (png.degraded === 'archive-low-res' ? '（30 秒缓冲已滑走，用的是 10 分钟低清留底）' : '')
+      : `（帧没取到：${png.reason}）`;
 
     if (decision.level === 'glance') {
       record({

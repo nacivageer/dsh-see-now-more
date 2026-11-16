@@ -24,7 +24,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createPipeline } from './pipeline.js';
 import { cellSize } from './layout.js';
-import { chatWatcherShared, enterChatWait, markDelivered, markRelaySeen } from './chat.js';
+import { chatWatcherShared, dshHome, enterChatWait, markDelivered, markRelaySeen } from './chat.js';
 import { noteInterjected } from './interject.js';
 import { openWindow, pidStamp, windowAlive, setWindowHidden } from './window.js';
 import { createListener } from './listen.js';
@@ -33,6 +33,7 @@ import {
   LIFT_WIDTH, LIFT_WINDOW_SEC,
 } from './lift/buffer.js';
 import { frameFile, pruneOld } from './lift/log.js';
+import { createLiftArchive } from './lift/archive.js';
 import { bloodbarBrief, pushTrack, ratioFromRgba } from './bloodbar.js';
 import { resolveOcrPython, startOcr } from './ocr.js';
 import { encodePng } from './png.js';
@@ -297,6 +298,15 @@ export function createRunner({
   }));
 
   /**
+   * 10 分钟低清留底（1 帧/5 秒，长边 480）：30 秒缓冲滑走之后的回退。
+   * 懒建 + 只在仅监听时写；`clear` 由 `stopLiftCapture({clear:true})` 调。
+   */
+  let liftArcInst = null;
+  const liftArchive = () => (liftArcInst ??= createLiftArchive({
+    root: join(dshHome(process.env), 'see-now', 'lift', 'archive'),
+  }));
+
+  /**
    * 留底抓什么。
    *
    * 屏幕源沿用上一次的 region（框过一块的人，瞥到的也该是那一块）；`obs` / `camera`
@@ -375,7 +385,10 @@ export function createRunner({
              * 别改成 `i / fps`：那会假设 ffmpeg 严格按 2 秒节拍吐帧，实测 ddagrab
              * 在显示器休眠/全屏切换后会有几百毫秒的漂移，按它算反而对不上台词。
              */
-            buf.push({ buf: f.buf, width: w, height: h, at: Date.now(), i: f.i ?? null });
+            const at = Date.now();
+            buf.push({ buf: f.buf, width: w, height: h, at, i: f.i ?? null });
+            // 10 分钟低清环（5 秒节流在 archive 里；写失败只记最后一次原因，不影响留底）
+            liftArchive().push({ buf: f.buf, width: w, height: h, at });
           } catch (e) {
             // 一帧坏了不能让整条留底停摆（与 `start()` 里 push 兜底同一个口径）
             liftError = `留底：收帧失败（${e?.message ?? e}）`;
@@ -386,8 +399,7 @@ export function createRunner({
       liftRun = run;
       liftSrc = src;
       liftStartedAt = Date.now();
-      liftError = null;
-      liftRetries = 0;
+      liftError = null;      liftRetries = 0;
       const where = src.region ? `region ${src.region.w}×${src.region.h}` : '整屏';
       log(`留底：开始（${w}×${h}，采 ${LIFT_CAPTURE_FPS}fps → 留 ${LIFT_FPS}fps，${where}）`);
       run.done.then((r) => {
@@ -424,6 +436,8 @@ export function createRunner({
     liftFrames = 0;
     liftStartedAt = 0;
     if (clear && liftBuf) liftBuf.clear();
+    // 低清环也一起清：上一场的帧不许冒充现在（没建过就别为一个 clear 建一份）
+    if (clear && liftArcInst) liftArcInst.clear();
     if (was && why) log(`留底：停（${why}）`);
     return { ok: true };
   }
@@ -713,13 +727,21 @@ export function createRunner({
    * 这是**缓冲不落盘**之外的另一件事：缓冲是 16 MB 内存里的滚动窗口，这是用户要看的那一张。
    *
    * @param {number} t0 epoch ms（台词 `t0`）
-   * @returns {{ok:true, path:string, at:number, deltaMs:number, size:[number,number]}
+   * @returns {{ok:true, path:string, at:number, deltaMs:number, size:[number,number],
+   *            degraded?:'archive-low-res'}
    *          |{ok:false, reason:string}}
    */
   function framePng(t0, opts) {
     if (!liftOn) return { ok: false, reason: 'disabled' };
     const got = liftBuffer().pickAt(t0, opts);
-    if (!got.ok) return got;
+    if (!got.ok) {
+      // 30 秒缓冲滑走了：退到 10 分钟低清环（路径已经是落盘的 PNG，不需要再编码）。
+      // **容差用 archive 自己的 2.5 秒**，别把 30 秒缓冲的 1.5 秒精确容差套过来 ——
+      // 低清环是 5 秒一帧，2.5 秒内没有帧是正常的。
+      const arc = liftArchive().findAt(t0);
+      if (arc.ok) return { ...arc, size: [arc.width, arc.height] };
+      return got;
+    }
     const { frame } = got;
     try {
       const path = frameFile(frame.at);
@@ -781,6 +803,8 @@ export function createRunner({
       size: [st.width, st.height],
       framesSeen: liftFrames,
       sinceSec: liftStartedAt ? Math.round((Date.now() - liftStartedAt) / 1000) : 0,
+      /** 10 分钟低清环：没建过就是 null（没进过仅监听） */
+      archive: liftArcInst ? liftArcInst.stats() : null,
       error: liftError,
     };
   }

@@ -1812,7 +1812,7 @@ async function registerAll(ctx) {
         if (!got.ok) {
           const why = {
             empty: '缓冲里还没有帧（刚进仅监听？等十来秒）',
-            'too-old': '那一刻比 30 秒缓冲还早，画面已经滑走了',
+            'too-old': '那一刻比 10 分钟低清留底还早，画面已经滑走了',
             'too-new': '那个时间戳比最新一帧还晚（采集断了，或者这不是这台机器的钟）',
             far: '离最近的一帧太远',
             disabled: '留底关着',
@@ -1826,11 +1826,15 @@ async function registerAll(ctx) {
         }
         const png = readFileSync(got.path);
         const clock = new Date(got.at).toLocaleTimeString('zh-CN', { hour12: false });
+        const low = got.degraded === 'archive-low-res'
+          ? '\n这是 10 分钟低清留底（长边 480）—— 30 秒精确缓冲已经滑走，能看内容、细看不清。'
+          : '';
         return attachPng(
           ctx,
           png,
           `「那一刻」的画面：${clock}（与台词差 ${got.deltaMs} ms）。\n`
-            + '这是台词说出口前后的那一帧，**不是"现在"**。要看现在用 `see_now({action:"watch"})`。',
+            + '这是台词说出口前后的那一帧，**不是"现在"**。要看现在用 `see_now({action:"watch"})`。'
+            + low,
           { ok: true, since, frameAt: got.at, deltaMs: got.deltaMs, path: got.path },
         );
       }

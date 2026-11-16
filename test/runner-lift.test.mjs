@@ -172,6 +172,32 @@ test('framePng：按 t0 取出那一刻的帧并落成 PNG（瞥要用它）', a
   assert.equal(runner.framePng(t0).reason, 'empty');
 });
 
+test('framePng：30 秒缓冲滑走之后回退到 10 分钟低清留底，并明确标 degraded', async () => {
+  const cap = fakeCapture();
+  const runner = mk(cap);
+  const realNow = Date.now;
+  let fake = realNow();
+  Date.now = () => fake;
+  try {
+    await runner.listenOnly({ audio: false, region: null });
+    cap.calls[0].push(4, 120);          // 第 1 帧进缓冲，同时进低清环
+    const t0 = fake;
+    fake += 31_000;                     // 超过 30 秒缓冲
+    cap.calls[0].push(4, 121);          // 新帧进来：缓冲淘汰旧帧，低清环保留
+
+    const png = runner.framePng(t0);
+    assert.equal(png.ok, true, JSON.stringify(png));
+    assert.equal(png.degraded, 'archive-low-res');
+    assert.ok(png.deltaMs <= 2500, `低清回退偏差 ${png.deltaMs}ms 超过容差`);
+    assert.equal(Math.max(...png.size), 480);
+    assert.ok(existsSync(png.path), `低清 PNG 没落盘：${png.path}`);
+    assert.ok(png.path.includes('archive'), png.path);
+  } finally {
+    runner.stop();
+    Date.now = realNow;
+  }
+});
+
 test('still：两帧内容一样是静、不一样是动；帧不够时判不了', async () => {
   const cap = fakeCapture();
   const runner = mk(cap);
