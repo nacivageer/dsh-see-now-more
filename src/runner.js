@@ -36,6 +36,10 @@ import { frameFile, pruneOld } from './lift/log.js';
 import { bloodbarBrief, pushTrack, ratioFromRgba } from './bloodbar.js';
 import { resolveOcrPython, startOcr } from './ocr.js';
 import { encodePng } from './png.js';
+import {
+  audioCapability, bloodbarCapability, liftCapability, ocrCapability, visionCapability,
+  windowCapability,
+} from './capability.js';
 
 /**
  * 四档清晰度。数字是画布像素（**不含**底部音轨条），实际 token 见 src/tokens.js。
@@ -1649,6 +1653,10 @@ export function createRunner({
     },
 
     status() {
+      const listen = listener.state();
+      const lift = liftStatus();
+      const bloodbar = bloodbarStatus();
+      const win = { ok: windowState?.ok ?? null, reason: windowState?.reason ?? null, script: windowState?.from ?? null };
       return {
         running,
         source,
@@ -1676,16 +1684,29 @@ export function createRunner({
         windowOpened,
         // 开窗结果与失败原因：**"它在看但我什么都看不到"时第一个要看的就是 reason**
         // （没有带 tkinter 的 python 是最常见的一种，那时窗根本不会出现）
-        window: { ok: windowState?.ok ?? null, reason: windowState?.reason ?? null, script: windowState?.from ?? null },
+        window: win,
         // 有没有待领的说明（挂断那条）—— status 里看得见，才不会"明明写了没人读"
         notePending: Boolean(pendingNote),
         // 听声音的状态。"它好像没听见台词"时第一个要看的就是它：
         // enabled=false 的 reason 会直接说是缺服务、缺 Python、还是抓不到回环设备
-        listen: listener.state(),
+        listen,
         // 黑听留底：帧数 / 内存 / 最后一帧多久以前（采集断了但帧还在时，status 必须看得出来）
-        lift: liftStatus(),
+        lift,
         // 血条读数（P1c）：框在哪、阈值、最近一次比例、采集活着没
-        bloodbar: bloodbarStatus(),
+        bloodbar,
+        /**
+         * 能力状态（固定枚举，下游评估 §1 #4）：每个能力一个词 + 一句原因，
+         * 不再让调用方从 `enabled/ok/available/ready/why` 里猜「现在能不能用、为什么」。
+         * 具体映射在 `src/capability.js`（纯函数，单测过）。
+         */
+        capabilities: {
+          vision: visionCapability({ running, frames, lastError }),
+          audio: audioCapability(listen),
+          lift: liftCapability(lift),
+          bloodbar: bloodbarCapability(bloodbar),
+          ocr: ocrCapability(bloodbar.ocr, { bloodbarEnabled: bloodbarOn }),
+          window: windowCapability(win),
+        },
       };
     },
   };

@@ -36,6 +36,20 @@
 验收：临时 profile 上跑过首次安装 / 二次安装（备份）/ stale / foreign 拒绝 / broken /
 残留目录 / 重装修复；`install-state` 单测覆盖五态与 `expectedName`。
 
+### Added — `state().capabilities`：六个固定状态 + status 一行（下游评估 §1 #4）
+
+以前每个能力自己发明词：`enabled` / `ok` / `available` / `ready` / `why` / `stale` / 没在采……
+单看某个字段要猜「现在能不能用、为什么」。现在归成一套：
+
+- 新 `src/capability.js`：`ready / degraded / disabled / unavailable / pending / skipped`，
+  按能力从已有字段映射（视觉 / 听觉 / 留底 / 血条 / 数字识别 / 悬浮窗）；纯函数 + 单测。
+- `runner.status().capabilities` 每个能力只报一个词 + 一句原因。
+- `see_now status` 加一行：
+  `能力：视觉 ready · 听觉 ready · 留底 disabled · 血条 disabled · 数字 skipped · 窗 ready`；
+  ready 不带原因，非 ready 的原因截到 40 字。
+- 血条没框时数字识别是 `skipped` 而不是 `unavailable` —— 这不是「依赖坏了」，
+  不该让人去重装一个本来没问题的包（2026-11-16 误报过一次）。
+
 ## [0.1.1-more.13] - 2026-11-17
 
 ### Added — 覆盖率账按分钟落盘；第一次能算出「漏抬 / 误抬」

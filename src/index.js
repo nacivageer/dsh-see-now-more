@@ -20,6 +20,7 @@ import { describeAcoustic, describeCoverage, describeEvents, markSpeaking, sound
 import { startLoop, HANGUP_NOTE } from './loop.js';
 import { wakeWithRetry, deliveryMode } from './timer.js';
 import { readTuning, tuningPath } from './tuning.js';
+import { capabilityLine } from './capability.js';
 import { shouldIdleStop } from './idle.js';
 import { isHumanMessage } from './human.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } from './window.js';
@@ -1838,6 +1839,8 @@ async function registerAll(ctx) {
         const s = runner.status();
         const voice = voiceState();
         const lp = loop?.state() ?? null;
+        // 能力状态（固定枚举）：一行看全「现在能不能用」；非 ready 带原因
+        const capText = capabilityLine(s.capabilities);
         // 关掉留底时这里是 null，status 一行都不多（验收第 4 条）
         const liftText = liftLine(s.lift);
         return {
@@ -1875,6 +1878,8 @@ async function registerAll(ctx) {
               + '（写回 see-now.json 的 mode，重开 DSH 沿用）'
             // 区域：只看一小块时，模型得知道自己看到的不是整屏
             + `\n区域：${regionText(s.lastSource?.region ?? loadRegion()) ?? '整屏'}`
+            // 能力状态：固定枚举，一行看全「现在能不能用」；非 ready 带原因
+            + (capText ? `\n能力：${capText}` : '')
             // 血条（P1c）：框在哪、阈值、最近一次读数；没在采时明说
             + `\n${bloodbarLine(loadBloodbar(), s.bloodbar?.reading ?? null, {
               lastBelowAt: s.bloodbar?.lastBelowAt,
