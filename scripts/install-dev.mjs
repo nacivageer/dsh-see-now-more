@@ -14,12 +14,14 @@
  * 解析链才是 profiles/desktop/node_modules → profiles/node_modules。
  */
 
-import { cp, readFile, writeFile, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rename, writeFile, rm } from 'node:fs/promises';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+
+import { classifyInstall, describeInstall } from './install-state.mjs';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh');
@@ -28,6 +30,14 @@ const PROFILE_DIR = join(DSH_HOME, 'profiles', PROFILE);
 const MODULES = join(PROFILE_DIR, 'node_modules');
 const PKG_NAME = 'dsh-see-now-more';
 const LEGACY_NAME = 'dsh-see-now';
+/** 包外备份（不在 node_modules 里）：profile 重装/清目录不会带走它。 */
+const BACKUP_ROOT = join(DSH_HOME, 'backups', PKG_NAME);
+/** 安装标记：记版本/时间/来源/备份，`--check` 不必只靠猜。 */
+const MARKER = join(PROFILE_DIR, '.see-now-more-install.json');
+const KEEP_BACKUPS = 3;
+/** 一次安装的临时目录（stage）与旧副本暂存（trash）。 */
+const stageOf = (stamp) => join(MODULES, `${PKG_NAME}.staging-${stamp}`);
+const trashOf = (stamp) => join(MODULES, `${PKG_NAME}.trash-${stamp}`);
 
 // `.tmp` 要跳过（调试产物、被占用的文件会让 cp 中途失败）；
 // `debug` 是开发期的调试窗，**不进插件**（也故意不写进 package.json 的 files）。
@@ -43,6 +53,125 @@ if (!existsSync(PROFILE_DIR)) {
 }
 const pkgPath = join(PROFILE_DIR, 'package.json');
 const readJson = async (p) => JSON.parse(await readFile(p, 'utf8'));
+
+/** 一次安装的临时后缀（带毫秒，避免和上一次的残留撞名）。 */
+const stampNow = () => new Date().toISOString().replace(/[:.]/g, '-');
+
+/** 读目标目录 + 源码版本，判五态。所有读盘失败都归一成 null，不抛。 */
+async function targetInfo() {
+  const target = join(MODULES, PKG_NAME);
+  const exists = existsSync(target);
+  const pkg = exists ? await readJson(join(target, 'package.json')).catch(() => null) : null;
+  const manifest = exists ? await readJson(join(target, 'dsh.plugin.json')).catch(() => null) : null;
+  const repoVersion = (await readJson(join(HERE, 'package.json')).catch(() => ({}))).version ?? null;
+  const entryExists = existsSync(join(target, 'src', 'index.js'));
+  const state = classifyInstall({
+    exists,
+    name: pkg?.name ?? null,
+    version: pkg?.version ?? null,
+    repoVersion,
+    entryExists,
+  });
+  return {
+    target, exists, pkg, manifest, entryExists, repoVersion,
+    version: pkg?.version ?? null, state,
+  };
+}
+
+/** 已有的包外备份（新 → 旧）。 */
+async function backupsList() {
+  try {
+    return (await readdir(BACKUP_ROOT, { withFileTypes: true }))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+
+/** 上次安装中途留下的 staging/trash。 */
+async function leftovers() {
+  try {
+    const names = await readdir(MODULES);
+    return names.filter((n) => n.startsWith(`${PKG_NAME}.staging-`) || n.startsWith(`${PKG_NAME}.trash-`));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 把当前副本整体复制到**包外**（`$DSH_HOME/backups/<pkg>/<时间戳>/`），保留最近 KEEP_BACKUPS 份。
+ *
+ * 为什么要包外：`node_modules` 是 pnpm / profile 的地盘，重装或清缓存会把它整片带走；
+ * 备份放在包外，坏装之后还能手工拿回来。每份带 `meta.json`（版本/来源/时间）。
+ */
+async function backupCurrent(info) {
+  const dir = join(BACKUP_ROOT, stampNow());
+  await mkdir(BACKUP_ROOT, { recursive: true });
+  await cp(info.target, dir, { recursive: true });
+  await writeFile(join(dir, 'meta.json'), `${JSON.stringify({
+    name: PKG_NAME, version: info.version, from: info.target, at: Date.now(),
+  }, null, 2)}\n`, 'utf8');
+  const dirs = await backupsList();
+  for (const old of dirs.slice(KEEP_BACKUPS)) {
+    await rm(join(BACKUP_ROOT, old), { recursive: true, force: true });
+  }
+  return dir;
+}
+
+/**
+ * 原子替换：先 `cp` 到 stage（target 不动）→ target 改名躲开 → stage 改名顶上去 →
+ * 删掉旧副本。中途任何一步失败都把旧副本改回来；stage 一定清掉。
+ *
+ * 和旧的「先 rm 再 cp」差在**失败时 target 还在**：cp 到一半断电只会剩一份 stage，
+ * `--check` 能看见并提示重装，而不是留下半份插件让 DSH 起不来。
+ */
+async function installAtomic() {
+  const info = await targetInfo();
+  if (info.state === 'foreign') {
+    console.error(`拒绝覆盖：${info.target} 不是本包（package.json name=${info.pkg?.name ?? '读不到'}）`);
+    console.error('先确认那个目录是什么（或改名/删掉），再跑安装。');
+    return { ok: false, state: info.state };
+  }
+
+  const stamp = stampNow();
+  const stage = stageOf(stamp);
+  const trash = trashOf(stamp);
+  const backup = info.exists ? await backupCurrent(info) : null;
+  try {
+    await rm(stage, { recursive: true, force: true });
+    await cp(HERE, stage, {
+      recursive: true,
+      filter: (s) => !SKIP.has(s.split(/[\\/]/).pop()),
+    });
+    const staged = await readJson(join(stage, 'package.json')).catch(() => null);
+    if (staged?.name !== PKG_NAME) throw new Error(`stage 里不是本包：${staged?.name ?? '读不到 package.json'}`);
+
+    let moved = false;
+    if (info.exists) {
+      await rename(info.target, trash);
+      moved = true;
+    }
+    try {
+      await rename(stage, info.target);
+    } catch (e) {
+      if (moved) {
+        try { await rename(trash, info.target); } catch { /* 留给 --check 报 broken/残留 */ }
+      }
+      throw e;
+    }
+    if (moved) await rm(trash, { recursive: true, force: true });
+    await writeFile(MARKER, `${JSON.stringify({
+      name: PKG_NAME, version: staged.version, at: Date.now(), source: HERE, backup,
+    }, null, 2)}\n`, 'utf8');
+    return { ok: true, version: staged.version, backup, state: info.state };
+  } catch (e) {
+    await rm(stage, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
+}
 
 /**
  * 悬浮窗要的解释器：tkinter + Pillow + mss + numpy。
@@ -162,11 +291,22 @@ async function editProfile({ add, name = PKG_NAME }) {
 async function report() {
   const pkg = await readJson(pkgPath);
   const bundles = pkg.dsh?.profile?.bundles ?? [];
-  const target = join(MODULES, PKG_NAME);
-  const installed = existsSync(target);
+  const info = await targetInfo();
+  const installed = info.exists;
   const registered = bundles.includes(PKG_NAME);
   console.log(`profile   : ${PROFILE_DIR}`);
   console.log(`${PKG_NAME}: ${installed ? '已安装' : '未安装'}  bundles ${registered ? '已注册' : '未注册'}`);
+  console.log(`安装状态  : ${info.state} —— ${describeInstall(info.state, {
+    version: info.version, repoVersion: info.repoVersion,
+  })}`);
+  const left = await leftovers();
+  if (left.length) {
+    console.log(`⚠ 残留     : ${left.join(', ')}（上次安装没跑完；重跑安装会清掉，别手改）`);
+  }
+  const bks = await backupsList();
+  if (bks.length) {
+    console.log(`包外备份  : ${bks[0]}（共 ${bks.length} 份，${BACKUP_ROOT}）`);
+  }
   console.log(`bundles 共 ${bundles.length} 项：${bundles.join(', ')}`);
 
   // 旧 fork / 上游都叫 dsh-see-now，和本包提供同一个 see_now 工具；两个同时在会打架。
@@ -203,24 +343,24 @@ async function report() {
    * 组合的是 profile 里那份**副本**。副本落后（或者 `dsh.plugin.json` 和 `package.json`
    * 版本不一致）时，跑的就是旧代码 —— 而"新开一个会话"不会改变任何已加载的代码。
    */
-  const repoVersion = (await readJson(join(HERE, 'package.json'))).version;
+  const repoVersion = info.repoVersion;
   let stale = null;
   if (installed) {
-    const copyVersion = await readJson(join(target, 'package.json')).then((p) => p.version).catch(() => null);
-    const copyManifest = await readJson(join(target, 'dsh.plugin.json')).then((p) => p.version).catch(() => null);
     console.log(`源码版本  : ${repoVersion}`);
-    console.log(`副本版本  : ${copyVersion ?? '读不到'}`
-      + `${copyVersion === repoVersion ? '  ✓ 一致' : '  ⚠️ 和源码不一致（跑的是旧代码）'}`);
-    if (copyManifest !== null && copyManifest !== copyVersion) {
-      console.log(`  ⚠️ 副本里 dsh.plugin.json 写的是 ${copyManifest} —— 和 package.json 不一致，插件管理器会按旧版本认它`);
+    console.log(`副本版本  : ${info.version ?? '读不到'}`
+      + `${info.state === 'current' ? '  ✓ 一致'
+        : info.state === 'stale' ? '  ⚠️ 和源码不一致（跑的是旧代码）'
+          : info.state === 'broken' ? '  ⚠️ 入口/版本读不到' : ''}`);
+    if (info.manifest && info.manifest.version !== info.version) {
+      console.log(`  ⚠️ 副本里 dsh.plugin.json 写的是 ${info.manifest.version} —— 和 package.json 不一致，插件管理器会按旧版本认它`);
     }
-    if (copyVersion !== repoVersion) stale = { copyVersion };
+    if (info.state === 'stale') stale = { copyVersion: info.version };
   }
   if (stale) {
     console.log('\n→ 跑 `node scripts/install-dev.mjs` 同步，然后**重启 DSH Desktop**。');
     console.log('  （新开一个会话不够：插件树是进程启动时组合的，已加载的代码不会换。）');
   }
-  return { installed, registered, stale };
+  return { installed, registered, stale, state: info.state };
 }
 
 if (mode === 'check') {
@@ -230,6 +370,7 @@ if (mode === 'check') {
 
 if (mode === 'remove') {
   await rm(join(MODULES, PKG_NAME), { recursive: true, force: true });
+  await rm(MARKER, { force: true });
   await editProfile({ add: false });
   console.log('已卸载 see-now。重启 DSH 生效。');
   await report();
@@ -244,11 +385,17 @@ if (mode === 'remove-legacy') {
   process.exit(0);
 }
 
-await rm(join(MODULES, PKG_NAME), { recursive: true, force: true });
-await cp(HERE, join(MODULES, PKG_NAME), {
-  recursive: true,
-  filter: (s) => !SKIP.has(s.split(/[\\/]/).pop()),
-});
+const installed = await installAtomic();
+if (!installed.ok) {
+  await report();
+  process.exit(2);
+}
 await editProfile({ add: true });
-console.log('已安装。重启 DSH 生效，然后让模型调 `see_now({ action: "watch" })`。');
+// 新副本已经就位；上一次失败留下的 staging/trash 现在没用，清掉以免 --check 一直报
+for (const name of await leftovers()) {
+  await rm(join(MODULES, name), { recursive: true, force: true }).catch(() => {});
+}
+console.log(`已安装 ${installed.version}`
+  + `${installed.backup ? `（旧副本备份：${installed.backup}）` : ''}。`
+  + '重启 DSH 生效，然后让模型调 `see_now({ action: "watch" })`。');
 await report();

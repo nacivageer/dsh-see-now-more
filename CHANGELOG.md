@@ -18,6 +18,24 @@
   窗口里没有台词时明说「只有声音/环境音」，不再留一个空行。
 - 单测补齐：首尾必在、实际跨度不等于窗口起点、只有声音没有台词、极短预算。
 
+### Changed — `install-dev` 补安全三件套（下游评估 §2）
+
+原来是「先 `rm` 整个目录、再 `cp`」：中途失败会留下半份插件；`--check` 也只有「装了/没装」，
+版本不一致、目录残缺、别人的同名包全靠人眼分辨。
+
+- **原子替换**：先 `cp` 到 `node_modules/dsh-see-now-more.staging-*`，再把旧目录改名为
+  `.trash-*`、stage 改名为正式目录；失败把旧目录改回来、stage 清掉。中途失败不再毁掉
+  正在跑的那份。
+- **包外备份**：替换前把旧副本整体复制到 `$DSH_HOME/backups/dsh-see-now-more/<时间戳>/`
+  （带 `meta.json`，保留最近 3 份）——`node_modules` 被清也不会带走它。
+- **五态检测**（新 `scripts/install-state.mjs`，纯函数 + 单测）：`absent / foreign / broken /
+  stale / current`；`--check` 直接打印状态，遇到 `foreign` 拒绝覆盖（exit 2），残留的
+  staging/trash 会列出来，重跑安装时清掉。
+- 已查：本机 profile 副本不是 pnpm store 硬链接（整目录 `cp`），「写穿 store」不适用。
+
+验收：临时 profile 上跑过首次安装 / 二次安装（备份）/ stale / foreign 拒绝 / broken /
+残留目录 / 重装修复；`install-state` 单测覆盖五态与 `expectedName`。
+
 ## [0.1.1-more.13] - 2026-11-17
 
 ### Added — 覆盖率账按分钟落盘；第一次能算出「漏抬 / 误抬」
