@@ -143,6 +143,24 @@ $env:PYTHONIOENCODING="utf-8"
 - `live-subs.py`：`--min-w`（字幕行最小宽度占比）。
 - `~/.dsh/asr.json`：`model` 与 `manage.start` 切到 sense-voice；备份 `asr.json.bak-20261117-sensevoice`。
 
+### 回滚（今天这两处怎么撤）
+
+`H:\asr-local` 没有版本线、动手前原文件也没留，所以「撤回去」要用两份**重建版**：
+
+```powershell
+Copy-Item H:\asr-local\server-sherpa.py.bak-20261117-pre-sensevoice H:\asr-local\server-sherpa.py
+Copy-Item H:\asr-local\live-subs.py.bak-20261117-pre-sensevoice H:\asr-local\live-subs.py
+Copy-Item C:\Users\Administrator\.dsh\asr.json.bak-20261117-sensevoice C:\Users\Administrator\.dsh\asr.json
+```
+
+- 两份 `-pre-sensevoice` 是按「撤掉今天五处改动」重建的等价版本，**不是逐字节原件**：
+  撤掉 `--engine`/`--language` 分支、`--model-name` 按引擎取默认、`>25s` 切块、标点去净、
+  `live-subs` 的 `--min-w`；11-05 那轮的声纹 / VAD / 标点一行没动。
+- 已验：`--check` 用 paraformer 模型加载通过；`live-subs` 回退版用 WGC 跑通（短字幕按 0.18 门槛
+  重新被挡，符合预期）。
+- **`asr.json` 必须一起撤**：它现在的 `manage.start` 带 `--engine sense-voice`，只撤代码的话
+  老版本 argparse 不认这个参数，插件拉起的服务会直接退出。撤完重启 `:8000` 那个进程。
+
 ## 日志
 
 - 2026-11-17 01:52 进行中 → 等你定；本会话把“可测性”做完（真值工具 + 逐句落盘 + 三段基线），
