@@ -48,24 +48,27 @@ test('audio：缺服务是 unavailable，没启动是 disabled，暂停/出错�
 
 test('lift：没进仅监听是 disabled，没起采是 pending，stale 是 degraded', () => {
   check(liftCapability({ enabled: false }), 'disabled');
-  check(liftCapability({ enabled: true, capturing: false }), 'pending');
-  check(liftCapability({ enabled: true, capturing: true, frames: 0 }), 'pending');
-  check(liftCapability({ enabled: true, capturing: true, frames: 15, stale: false }), 'ready');
-  check(liftCapability({ enabled: true, capturing: true, frames: 15, stale: true }), 'degraded');
-  check(liftCapability({ enabled: true, capturing: true, frames: 5, error: 'ffmpeg 退出' }), 'degraded');
+  check(liftCapability({ enabled: true, wanted: false, capturing: false }), 'disabled');
+  check(liftCapability({ enabled: true, wanted: true, capturing: false }), 'pending');
+  check(liftCapability({ enabled: true, wanted: true, capturing: true, frames: 0 }), 'pending');
+  check(liftCapability({ enabled: true, wanted: true, capturing: true, frames: 15, stale: false }), 'ready');
+  check(liftCapability({ enabled: true, wanted: true, capturing: true, frames: 15, stale: true }), 'degraded');
+  check(liftCapability({ enabled: true, wanted: true, capturing: true, frames: 5, error: 'ffmpeg 退出' }), 'degraded');
 });
 
-test('bloodbar：没框是 disabled，没读数/没起采是 pending，读不到是 degraded', () => {
+test('bloodbar：没框/没进仅监听是 disabled，没读数/没起采是 pending，读不到是 degraded', () => {
   check(bloodbarCapability({ enabled: false }), 'disabled');
-  check(bloodbarCapability({ enabled: true, capturing: false }), 'pending');
-  check(bloodbarCapability({ enabled: true, capturing: true, reading: null }), 'pending');
-  check(bloodbarCapability({ enabled: true, capturing: true, reading: { ok: false, reason: '框里没有血条' } }), 'degraded');
-  check(bloodbarCapability({ enabled: true, capturing: true, reading: { ok: true, ratio: 0.5 } }), 'ready');
-  check(bloodbarCapability({ enabled: true, capturing: true, reading: { ok: true }, error: '采集失败' }), 'degraded');
+  check(bloodbarCapability({ enabled: true, wanted: false, capturing: false }), 'disabled');
+  check(bloodbarCapability({ enabled: true, wanted: true, capturing: false }), 'pending');
+  check(bloodbarCapability({ enabled: true, wanted: true, capturing: true, reading: null }), 'pending');
+  check(bloodbarCapability({ enabled: true, wanted: true, capturing: true, reading: { ok: false, reason: '框里没有血条' } }), 'degraded');
+  check(bloodbarCapability({ enabled: true, wanted: true, capturing: true, reading: { ok: true, ratio: 0.5 } }), 'ready');
+  check(bloodbarCapability({ enabled: true, wanted: true, capturing: true, reading: { ok: true }, error: '采集失败' }), 'degraded');
 });
 
-test('ocr：血条没框是 skipped，缺 winrt 是 unavailable，sidecar 没起是 pending', () => {
+test('ocr：血条没框/没在采是 skipped，缺 winrt 是 unavailable，sidecar 没起是 pending', () => {
   check(ocrCapability({ available: false, ready: false, why: '缺 winrt' }, { bloodbarEnabled: false }), 'skipped');
+  check(ocrCapability({ available: false, ready: false, why: '缺 winrt' }, { bloodbarEnabled: true, bloodbarWanted: false }), 'skipped');
   check(ocrCapability({ available: false, ready: false, why: '缺 winrt' }, { bloodbarEnabled: true }), 'unavailable');
   check(ocrCapability({ available: true, ready: false, why: 'OCR 起不来' }, { bloodbarEnabled: true }), 'degraded');
   check(ocrCapability({ available: true, ready: false, why: null }, { bloodbarEnabled: true }), 'pending');

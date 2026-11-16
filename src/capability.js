@@ -56,9 +56,10 @@ export function audioCapability(listen = {}) {
   return capability('ready');
 }
 
-/** 黑听留底（30 秒环形缓冲）。 */
+/** 黑听留底（30 秒环形缓冲 + 10 分钟低清环）。 */
 export function liftCapability(lift = {}) {
   if (!lift.enabled) return capability('disabled', '只在仅监听时留底');
+  if (lift.wanted === false) return capability('disabled', '没在仅监听，留底不跑');
   if (lift.error) return capability('degraded', lift.error);
   if (!lift.capturing) return capability('pending', '正在起留底采集');
   if (lift.stale) return capability('degraded', '留底超过 10 秒没有新帧');
@@ -69,6 +70,7 @@ export function liftCapability(lift = {}) {
 /** 血条采集（比例那一路）。 */
 export function bloodbarCapability(bb = {}) {
   if (!bb.enabled) return capability('disabled', '没框血条');
+  if (bb.wanted === false) return capability('disabled', '没在仅监听，血条不采');
   if (bb.error) return capability('degraded', bb.error);
   if (!bb.capturing) return capability('pending', '正在起血条采集');
   if (!bb.reading) return capability('pending', '还没读到第一帧');
@@ -79,11 +81,12 @@ export function bloodbarCapability(bb = {}) {
 /**
  * 血条数字识别（Windows OCR）。
  *
- * 血条没框时它是 `skipped` —— 这不是「不可用」，只是这个模式下用不到；
+ * 血条没框、或没在仅监听时它是 `skipped` —— 这不是「不可用」，只是这个模式下用不到；
  * 混成 unavailable 会让人去重装一个本来没问题的依赖（2026-11-16 就误报过一次）。
  */
-export function ocrCapability(ocr = {}, { bloodbarEnabled = false } = {}) {
+export function ocrCapability(ocr = {}, { bloodbarEnabled = false, bloodbarWanted = true } = {}) {
   if (!bloodbarEnabled) return capability('skipped', '血条没框，用不到数字识别');
+  if (bloodbarWanted === false) return capability('skipped', '血条没在采，用不到数字识别');
   if (ocr.available === false) return capability('unavailable', ocr.why ?? '缺 winrt');
   if (ocr.why) return capability('degraded', ocr.why);
   if (!ocr.ready) return capability('pending', 'OCR sidecar 还没就绪');

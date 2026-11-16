@@ -49,14 +49,18 @@
   ready 不带原因，非 ready 的原因截到 40 字。
 - 血条没框时数字识别是 `skipped` 而不是 `unavailable` —— 这不是「依赖坏了」，
   不该让人去重装一个本来没问题的包（2026-11-16 误报过一次）。
+- **没在仅监听时**留底/血条是 `disabled`（而不是 `pending`「正在起」）：`liftStatus` /
+  `bloodbarStatus` 补 `wanted`；数字识别随之 `skipped`。2026-11-17 重启后第一次 status
+  踩到「明明没在听，却显示正在起」。
 
 ### Added — 10 分钟低清留底：跨 30 秒也能回看（下游评估 §1 #1）
 
 30 秒缓冲是裸 RGB（800×450×3 ≈ 1 MB/帧），10 分钟 ≈ 309 MB，直接加大不现实。
 另起一条**磁盘低清环**：
 
-- 新 `src/lift/archive.js`：每 5 秒留一帧、长边 480 的 PNG（10 分钟约 120 帧、几 MB），
-  按天分目录，`frames.jsonl` 当目录；PNG 与索引都 **tmp → rename**，崩溃不会留下半个索引。
+- 新 `src/lift/archive.js`：每 5 秒留一帧、长边 480 的 PNG（10 分钟约 120 帧；实测
+  480×270 约 150 KB/帧，十几 MB，看画面复杂度），按天分目录，`frames.jsonl` 当目录；
+  PNG 与索引都 **tmp → rename**，崩溃不会留下半个索引。
 - 30 秒精确缓冲不动；`framePng(t0)` 在缓冲滑走后回退到低清环，返回
   `degraded:'archive-low-res'` —— 调用方必须知道这是低清，不许假装和精确帧一样。
 - `see_now({action:"lift"})` 的文案会写「10 分钟低清留底，长边 480」；`status().lift.archive`

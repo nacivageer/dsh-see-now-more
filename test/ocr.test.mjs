@@ -5,6 +5,9 @@
  * 「帧从 Node 写进 stdin、JSON 一行回来、数字对得上」这条链，而不是某个 mock。
  * 没有 winrt 的机器上整组跳过 —— 那是环境缺依赖，不是代码坏了
  * （`status` 会写「OCR 不可用」，别把跳过当通过）。
+ *
+ * `timeoutMs: 10_000`：并发跑全量时 Python 冷启动 + sidecar 初始化偶尔超过生产默认的
+ * 3 秒；这里验的是识别链，不是延迟，所以给测试单独放宽（运行时仍用 3 秒）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,7 +31,7 @@ test('ocr：sidecar 真跑一帧，认出血条数字', { skip }, async () => {
   const frame = readFileSync(FIXTURE);
   assert.equal(frame.length, W * H * 4, 'fixture 必须是 421×16 的 BGRA');
 
-  const o = startOcr({ w: W, h: H, python: probe.python });
+  const o = startOcr({ w: W, h: H, python: probe.python, timeoutMs: 10_000 });
   try {
     const out = await o.recognize(frame);
     assert.equal(out.cur, 2798);
@@ -45,7 +48,7 @@ test('ocr：plain 认不出的帧，靠锐化那一路救回来（36% 那帧）'
   const frame = readFileSync(FIXTURE_SHARP);
   assert.equal(frame.length, W * H * 4, 'fixture 必须是 421×16 的 BGRA');
 
-  const o = startOcr({ w: W, h: H, python: probe.python });
+  const o = startOcr({ w: W, h: H, python: probe.python, timeoutMs: 10_000 });
   try {
     const out = await o.recognize(frame);
     // 这帧原图极性读不出，是先试 sharp 才认出来的——数字对不上就说明重试链断了

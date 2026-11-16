@@ -646,6 +646,8 @@ export function createRunner({
   function bloodbarStatus() {
     return {
       enabled: bloodbarOn,
+      /** 用户想不想采（仅监听 = true；开始看画面/收工 = false）。 */
+      wanted: bloodbarWanted,
       region: bloodbar?.region ?? null,
       threshold: Number(bloodbar?.threshold) > 0 ? Number(bloodbar.threshold) : 0.3,
       /** 框定的是哪个窗口（空 = 整屏/gdigrab）。 */
@@ -788,6 +790,8 @@ export function createRunner({
     return {
       enabled: true,
       level: lift?.level ?? 'glance',
+      /** 用户想不想留底（仅监听 = true；开始看画面/收工 = false）。 */
+      wanted: liftWanted,
       capturing: Boolean(liftRun),
       /** 留底那一路 ffmpeg 的 pid（测量 CPU、确认进程收干净都要它） */
       pid: liftRun?.pid ?? null,
@@ -1728,7 +1732,10 @@ export function createRunner({
           audio: audioCapability(listen),
           lift: liftCapability(lift),
           bloodbar: bloodbarCapability(bloodbar),
-          ocr: ocrCapability(bloodbar.ocr, { bloodbarEnabled: bloodbarOn }),
+          ocr: ocrCapability(bloodbar.ocr, {
+            bloodbarEnabled: bloodbarOn,
+            bloodbarWanted: bloodbar.wanted,
+          }),
           window: windowCapability(win),
         },
       };
