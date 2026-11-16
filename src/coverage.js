@@ -21,25 +21,58 @@ const HOP_DEFAULT = 0.5;          // 秒；acoustic.json 里有 hop 就用它
 export const MIN_SPAN = 1.2;      // 秒；短于此的人声段不要求有字
 export const SPEECH_MID = 0.6;    // 中频占比阈值，与 listen.js 的 audioTrajectory 同一口径
 
-/** 帧 → 每格类别（与 listen.js 的 kindOf 完全一致，别各写一套） */
+/** 一帧的中频占比（占 0–8k 全谱的比例，按三频带重新归一） */
+export function midOf(r) {
+  if (!r) return NaN;
+  const lo = r[4], midRaw = r[5], hi = r[6];
+  const sum = lo + midRaw + hi;
+  return sum > 0.05 ? midRaw / sum : midRaw;
+}
+
+/** 帧 → 每格类别（单帧，不平滑；测单帧行为用它） */
 export function kindOf(r) {
   if (!r) return 'nodata';
-  const db = r[0];
-  if (db <= -100) return 'silent';
-  const lo = r[4];
-  const midRaw = r[5];
-  const hi = r[6];
-  const sum = lo + midRaw + hi;
-  const mid = sum > 0.05 ? midRaw / sum : midRaw;
-  return mid >= SPEECH_MID ? 'speech' : 'sound';
+  if (Number(r[0]) <= -100) return 'silent';
+  return midOf(r) >= SPEECH_MID ? 'speech' : 'sound';
+}
+
+/**
+ * 帧 → 每格类别（**平滑后**，账要用这一版）。
+ *
+ * 为什么必须平滑：acoustic.json 是 ~50ms 一格，中频占比会逐帧在阈值上下跳，
+ * 一段连续人声会被切成 0.1 秒的碎片 —— 实测「人声 15s」其实由几十个 0.1s 段拼成，
+ * 覆盖率被算成 9%，而同一段音频在 listen.js 的 audioTrajectory 里是连着的。
+ *
+ * 用 ±0.5 秒的**均值**而不是中位数：中位数在「逐帧交替」这种抖动上会按奇偶翻面
+ * （21 个样本 11:10 时，中间那个值每帧都变），实测只能修好一半；均值是连续的，
+ * 而且中频占比本身是比例、取平均有意义。边界仍保持 50ms 精度。
+ */
+export function kindsOf(frames, hop) {
+  const step = Number(hop) || HOP_DEFAULT;
+  const win = Math.max(1, Math.round(0.5 / step));
+  const mids = frames.map((r) => (r ? midOf(r) : NaN));
+  const out = [];
+  for (let i = 0; i < frames.length; i += 1) {
+    const r = frames[i];
+    if (!r) { out.push('nodata'); continue; }
+    if (Number(r[0]) <= -100) { out.push('silent'); continue; }
+    let sum = 0;
+    let n = 0;
+    for (let j = Math.max(0, i - win); j <= Math.min(frames.length - 1, i + win); j += 1) {
+      if (Number.isFinite(mids[j])) { sum += mids[j]; n += 1; }
+    }
+    const avg = n ? sum / n : midOf(r);
+    out.push(avg >= SPEECH_MID ? 'speech' : 'sound');
+  }
+  return out;
 }
 
 /** 把相邻同类帧并成段：[{kind, from, to}]（ms） */
-export function spansOf(frames, base, hopMs, i0, i1) {
+export function spansOf(kinds, base, hopMs, i0, i1) {
   const out = [];
   let cur = null;
   for (let i = i0; i <= i1; i += 1) {
-    const kind = kindOf(frames[i]);
+    const kind = kinds[i] ?? 'nodata';
     const from = base + i * hopMs;
     const to = from + hopMs;
     if (cur && cur.kind === kind) cur.to = to;
@@ -80,7 +113,7 @@ export function computeCoverage(acoustic, transcriptLines, { from, to, minSpan =
   const i1 = Math.min(acoustic.frames.length - 1, Math.floor((winTo - base) / hopMs));
   if (i1 < i0) return null;
 
-  const sp = spansOf(acoustic.frames, base, hopMs, i0, i1);
+  const sp = spansOf(kindsOf(acoustic.frames, hop), base, hopMs, i0, i1);
   const dur = (k) => sp.filter((s) => s.kind === k).reduce((n, s) => n + (s.to - s.from), 0) / 1000;
   const speechSpans = sp.filter((s) => s.kind === 'speech');
 

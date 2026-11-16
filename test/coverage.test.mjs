@@ -1,4 +1,4 @@
-﻿/**
+/**
  * coverage.test.mjs — 覆盖率账的纯逻辑（P0）。
  *
  * 合成帧就能覆盖：全人声有字 / 人声无字 / 没测到 / 非人声里落字 / 短段不算。
@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeCoverage, kindOf, mergeIntervals, SPEECH_MID } from '../src/coverage.js';
+import { computeCoverage, kindOf, kindsOf, mergeIntervals, SPEECH_MID } from '../src/coverage.js';
 
 /** 造一帧声学数据：db + 三频带占比（lo, mid, hi 落在 [4],[5],[6]） */
 function frame({ db = -30, mid = 0.8 } = {}) {
@@ -99,6 +99,25 @@ test('重叠的转写行不会重复计时间', () => {
   ]);
   assert.equal(res.text.coveredSec, 10);
   assert.equal(res.coverage, 100);
+});
+
+test('单帧毛刺不该把人声切成碎片（平滑后仍是一整段）', () => {
+  // 50ms 一格，中频在阈值上下逐帧跳：真实回环音频就是这样，实测会把 15 秒人声切碎
+  const seq = Array.from({ length: 100 }, (_, i) => frame({ mid: i % 2 ? 0.5 : 0.8 }));
+  const kinds = kindsOf(seq, 0.05);
+  const speech = kinds.filter((k) => k === 'speech').length;
+  assert.ok(speech >= 95, `平滑后应几乎全是人声，实际 ${speech}/100`);
+
+  const res = computeCoverage(acoustic(seq, { hop: 0.05 }), [
+    { t0: 1_000_000, t1: 1_005_000, text: '一整段' },
+  ]);
+  assert.equal(res.speechButNoText.spans, 0);   // 不再碎成几十段
+  assert.ok(res.coverage >= 95, `覆盖率应接近 100，实际 ${res.coverage}`);
+});
+
+test('真·音乐（中频一直低）不该被平滑成人声', () => {
+  const seq = Array.from({ length: 40 }, () => frame({ mid: 0.2 }));
+  assert.ok(kindsOf(seq, 0.05).every((k) => k === 'sound'));
 });
 
 test('mergeIntervals：乱序 + 相交都并成一段', () => {
