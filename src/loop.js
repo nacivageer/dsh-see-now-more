@@ -816,7 +816,13 @@ export function startLoop({
           + '不值得说就什么都别做（沉默是允许的，别为了刷存在感而说话）。'
           + lastSaidHint();
       const ok = await wake(text);
-      if (ok) { lastKey = key; wakesSinceUser += 1; }
+      if (ok) {
+        lastKey = key;
+        wakesSinceUser += 1;
+        // 每次**成功**叫醒都留一行（含计数）：这是 #69 那条线的另一半证据 ——
+        // 「续命」行前面必须能看到 1..N 次叫醒，不然"清零"清的是什么就无从判断。
+        try { appendLiftDebug(`叫醒 #${wakesSinceUser}（本轮连续 ${wakesSinceUser} 次没人理）`); } catch { /* 记不上不挡路 */ }
+      }
     },
   });
 
@@ -859,12 +865,20 @@ export function startLoop({
      */
     noteUserSpoke(sid = null) {
       const to = resolveTarget();
-      if (to && sid && sid !== to) return false;
-      // 只在"本来已经背了 N 次空叫醒"时写一行：否则用户每说一句就是一行日志，
-      // 而这条线的证据正好是"计数被清零了没有"，安静的时候不需要出声。
+      if (to && sid && sid !== to) {
+        // 不是本循环的会话也要留痕：不然"宿主的形状对了、但绑定的是别的会话"
+        // 这件事在日志里表现为"什么都没发生"，分不清是没接上还是被过滤。
+        try { appendLiftDebug(`续命跳过 sid=${targetLabel(sid)}（本循环=${targetLabel(to)}）`); } catch { /* 记不上不挡路 */ }
+        return false;
+      }
+      // **两处都写**：`log()` 只进宿主 logger（桌面版没落盘、看不见），
+      // `appendLiftDebug` 写 `~/.dsh/see-now/lift/debug.log` —— 那才是能翻的证据。
       if (wakesSinceUser > 0) {
         log(`用户在会话 ${targetLabel(sid)} 说话 —— 续命，${wakesSinceUser} 次空叫醒清零`);
       }
+      try {
+        appendLiftDebug(`续命 sid=${targetLabel(sid)} 清零 ${wakesSinceUser} 次空叫醒`);
+      } catch { /* 记不上不挡路 */ }
       lastUserAt = Date.now();
       lastUserSpokeAt = lastUserAt;
       wakesSinceUser = 0;
@@ -885,6 +899,8 @@ export function startLoop({
       // 当前投递目标（跟着窗口绑定走，见 `resolveTarget`）
       session: resolveTarget(),
       wakes: wakeCount,
+      /** 本轮「连续叫醒没人理」的当前值（#69 的判据就是它被清零） */
+      wakesSinceUser,
       wakeFailures,
       lastWakeAt: lastWakeAt || null,
       lastWakeOk,

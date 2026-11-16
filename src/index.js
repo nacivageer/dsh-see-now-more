@@ -1865,6 +1865,8 @@ async function registerAll(ctx) {
             + (tuning.scoreNormalize ? ' · 亮度归一开（暗场/黑边已补偿）' : ' · 亮度归一关')
             // 收工线：用户改过 see-now.json 时要能看出来，否则"怎么陪我一会儿就停了"查不到
             + `\n收工线：连续 ${tuning.maxAutonomousWakes} 次叫醒没人理`
+            // 本轮当前值：#69 那条线唯一的实时读数（用户在主窗说话 → 这里回到 0）
+            + `（本轮已 ${Number(lp?.wakesSinceUser ?? 0)} 次）`
             + ` · ${tuning.idleStopMin > 0 ? `没开窗时 ${tuning.idleStopMin} 分钟没说话` : '空闲线已关闭'}`
             + ` · 空档阈值 ${tuning.missedGapSec} 秒`
             + `${tuning.path && tuning.maxAutonomousWakes === 8 && tuning.idleStopMin === 3 && tuning.missedGapSec === 60 ? '（默认）' : `（${tuning.path}）`}`
