@@ -271,6 +271,27 @@ export function startLoop({
     } catch { /* 写不进不影响投递 */ }
     return target;
   };
+  /**
+   * 目标会话**此刻正跑着一轮**吗。
+   *
+   * 跑着的话，任何叫醒都只能以"排队消息"的形式等这一轮结束 —— 等模型看见它，
+   * 内容已经是几分钟前的了，模型还得为它回一整轮（用户侧看到的就是
+   * "一堆过期唤醒，每条都要回一句『太晚了，不看』"）。2026-11-16 实测：
+   * 23:07 / 23:08 / 23:13 三条仅监听唤醒分别在 23:13–23:17 才弹进来。
+   *
+   * 所以这种时候**不叫**，改落一条待领说明（`runner.note`），
+   * 让模型下一次工具结果顺手带走 —— 既不排队，也不丢信息。
+   */
+  const targetBusy = () => {
+    const to = resolveTarget();
+    if (!to) return false;
+    try { return Boolean(turnRunning(to)); } catch { return false; }
+  };
+  /** 把"本来想叫醒"的一句话落成待领说明，等下一次工具结果带走。 */
+  const parkAsNote = (text) => {
+    try { runner.note?.(text); } catch { /* 记不进就算了 */ }
+    log(`[listen] 目标会话正忙，改记待领说明（${String(text).slice(0, 70)}）`);
+  };
   /** 上一张已经叫过的图（`#序号` 或 `p脉冲`），同一张永不重复叫 */
   let lastKey = null;
   /** pending 0→1 的脉冲计数：拿不到出图序号时靠它认"新的一张" */
@@ -504,6 +525,28 @@ export function startLoop({
      * 两道门槛：轨迹至少 8 秒；当前状态至少稳定 3 秒（一声鼓点不算"状态"）。
      */
     if (traj.spanSec < 8 || seg.sec < 3) return;
+    /**
+     * **没有新台词就不叫**（2026-11-16 用户要求：「这种意义不大的唤醒还不如省掉算了」）。
+     *
+     * 以前只要声音形状变了（人声突出 → 有声 → 起节拍）就叫一轮，而那种唤醒里
+     * 除了"有声音"什么都没给 —— 模型只能抬眼看图才知道发生了什么，
+     * 等于花一轮 token 换一句"我不知道该看什么"。用户侧看到的就是一串
+     * 「最近 9 秒：有声 2s → 人声突出 7s」。
+     *
+     * 现在的口径：**只有"听见了新的话"才值得打扰**。纯音乐/音效/环境声不叫，
+     * 但照样记 `lastAudioKind`（之后从这类声音转成说话还能正常叫一次）。
+     */
+    let freshForWake = [];
+    try {
+      freshForWake = (runner.recentLines?.(now - 60_000, now) ?? [])
+        .filter((l) => l && l.partial === false && String(l.text ?? '').trim()
+          && Number(l.t0) > lastAudioWakeAt);
+    } catch { freshForWake = []; }
+    if (!freshForWake.length) {
+      lastAudioKind = seg.kind;
+      log(`[listen] 声音变了（${seg.kind}）但没听见新台词，不叫醒`);
+      return;
+    }
     lastAudioKind = seg.kind;
     lastAudioWakeAt = now;
     unansweredListenWakes += 1;
@@ -517,11 +560,18 @@ export function startLoop({
      * 和实时的长得一模一样 —— 没有时钟就没法判断该不该理它。
      */
     const clock = new Date(now).toLocaleTimeString('zh-CN', { hour12: false });
+    const said = freshForWake.slice(-4).map((l) => l.text.trim()).join(' / ');
     const text = `[仅监听] ${clock} · 最近 ${Math.round(traj.spanSec)} 秒：${trajectoryText(traj)}${tempo}。\n`
+      + `最近听见的台词：${said}\n`
       + '值得看就 `see_now({action:"watch"})` 看 2–3 张；不值得就什么都别做，我继续听。'
       + '（这条要是来得太晚 —— 你现在看到时声音早停了、或者 `status` 显示根本没在听 —— 就当没听见，别为它开画面。）'
       + lastSaidHint()
       + bloodbarTail();
+    if (targetBusy()) {
+      parkAsNote(`[黑听·待领] ${clock} 听见：${said}（那会儿你正跑着一轮，没叫醒）`);
+      unansweredListenWakes = Math.max(0, unansweredListenWakes - 1);
+      return;
+    }
     const ok = await wake(text);
     if (!ok) unansweredListenWakes = Math.max(0, unansweredListenWakes - 1);
   }
