@@ -23,9 +23,9 @@ export const SPEAKER_MIN_DIM = 64;
  * 按"文件长度"判断会让杂音算出的垃圾向量独立成群 —— 所以这个门槛量的必须是
  * **说话长度**（服务端 VAD 各段时间之和），不是切片长度。
  */
-export const SPEAKER_MIN_SEC = 2.0;
+export const SPEAKER_MIN_SEC = 1.2;
 /** 相邻两句间隔小于这个值，就认为"还在同一个人说话"（短句沿用上一句的号）。 */
-export const SPEAKER_CONTINUE_GAP_MS = 2000;
+export const SPEAKER_CONTINUE_GAP_MS = 8000;
 
 export function normalizeVec(vec) {
   const arr = (vec ?? []).map(Number);
@@ -60,6 +60,14 @@ export function createSpeakerTracker({
 } = {}) {
   /** @type {Array<{id:string, vec:number[], n:number}>} */
   const centroids = [];
+  /**
+   * **延迟开号**（2026-11-17 改）：新声音第一次出现时不立刻建簇，先挂在这里；
+   * 下一次又出现一个"像它、但不像任何已有簇"的向量，才真的开号。
+   *
+   * 为什么：实测一场单人独白里，偶尔一句向量漂移就开出一个 S3/S4，
+   * 而真正的换人通常不止一句。晚一句开号，比反复造人便宜得多。
+   */
+  let pending = null;
   return {
     assign(raw) {
       const vec = normalizeVec(raw);
@@ -78,15 +86,28 @@ export function createSpeakerTracker({
         c.n += 1;
         return c.id;
       }
-      if (centroids.length >= maxSpeakers) {
-        return best >= 0 ? centroids[best].id : null;
+      // 第一个说话人不必等：没有"前任"可以参考，直接开 S1
+      if (!centroids.length) {
+        centroids.push({ id: 'S1', vec, n: 1 });
+        pending = null;
+        return 'S1';
       }
-      const id = `S${centroids.length + 1}`;
-      centroids.push({ id, vec, n: 1 });
-      return id;
+      // 不像任何已有簇：先看它像不像"上一次的候选"
+      if (pending && cosine(vec, pending) >= threshold) {
+        pending = null;
+        if (centroids.length >= maxSpeakers) {
+          return best >= 0 ? centroids[best].id : null;
+        }
+        const id = `S${centroids.length + 1}`;
+        centroids.push({ id, vec, n: 1 });
+        return id;
+      }
+      pending = vec;
+      return null;                 // 第一次见：不给号，等它再出现一次
     },
     size() { return centroids.length; },
-    reset() { centroids.length = 0; },
+    /** 复位的不是"清空世界"，只是回到没有待定候选的状态。 */
+    reset() { centroids.length = 0; pending = null; },
   };
 }
 

@@ -28,10 +28,10 @@
  * "它答一句就完了"。取消/超时的处理放在 `runner.watch()` 自己的等待循环里。
  */
 
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 
 import { startTicker, wakeWithRetry, deliveryMode } from './timer.js';import { windowAlive, windowPidAlive } from './window.js';
+import { transcriptPath, transcriptRelPath } from './transcript.js';
+
 import { appendSpoken, chatWatcherShared, chatWaiterCount, dshHome, lastSaidNote, markDelivered,
          markRelaySeen } from './chat.js';
 import { noteInterjected } from './interject.js';
@@ -186,43 +186,7 @@ export function mergeSaid(lines, { maxLines = MERGE_MAX_LINES, maxChars = MERGE_
  * 按天写进 `$DSH_HOME/see-now/transcript/<YYYY-MM-DD>.jsonl`，唤醒末尾给路径。
  * 想要"听全"就按需读文件：读取只在那一刻花 token，不占每条唤醒。
  */
-export function transcriptRelPath(at = Date.now()) {
-  const d = new Date(at);
-  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    + `-${String(d.getDate()).padStart(2, '0')}`;
-  return join('see-now', 'transcript', `${ymd}.jsonl`);
-}
-
-export function transcriptPath(env = process.env, at = Date.now()) {
-  return join(dshHome(env), transcriptRelPath(at));
-}
-
-/** 一行台词 → 落盘记录（空白句不收）。 */
-export function transcriptEntry(l) {
-  const text = String(l?.text ?? '').trim();
-  if (!text) return null;
-  const spk = String(l?.spk ?? '').trim() || null;
-  return {
-    t0: Number(l?.t0) || 0,
-    t1: Number(l?.t1) || 0,
-    text,
-    ...(spk ? { spk } : {}),
-  };
-}
-
-/** 把这一批台词全部追加进当天文件；写不进去不影响唤醒。 */
-export function writeTranscript(lines, at = Date.now(), env = process.env) {
-  try {
-    const rows = (lines ?? []).map(transcriptEntry).filter(Boolean);
-    if (!rows.length) return 0;
-    const p = transcriptPath(env, at);
-    mkdirSync(dirname(p), { recursive: true });
-    appendFileSync(p, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8');
-    return rows.length;
-  } catch {
-    return 0;
-  }
-}
+export { transcriptEntry, transcriptPath, transcriptRelPath, writeTranscript } from './transcript.js';
 
 /** 连续这么多次叫不醒就停：会话没了还每 8 秒烧一次模型，是最贵的失败模式 */
 const WAKE_FAILS_MAX = 2;
@@ -720,8 +684,6 @@ export function startLoop({
     lastAudioWakeAt = now;
     lastHeardT0 = Math.max(lastHeardT0, Number(rawFresh[rawFresh.length - 1]?.t0) || 0);
     unansweredListenWakes += 1;
-    // 全文落盘：摘要里没列的句子也在这里（方案 2 的关键——省 token 但不丢内容）
-    writeTranscript(fresh, now);
     const clock = new Date(now).toLocaleTimeString('zh-CN', { hour12: false });
     const spanSec = Math.max(1, Math.round(spanMs / 1000));
     const when = spanSec >= 30 ? `这 ${spanSec} 秒里` : '刚刚';

@@ -35,10 +35,11 @@ test('同一人的多句归同一个号', () => {
   assert.equal(t.size(), 1);
 });
 
-test('明显不同的人开新号', () => {
+test('明显不同的人：第一次只挂候选，第二次才开号（延迟开号）', () => {
   const t = createSpeakerTracker();
-  t.assign(vec(1));
-  assert.equal(t.assign(vec(2)), 'S2');
+  assert.equal(t.assign(vec(1)), 'S1');
+  assert.equal(t.assign(vec(2)), null, '新声音第一次出现不该立刻开号');
+  assert.equal(t.assign(vec(2)), 'S2', '同一个人第二次出现才建成 S2');
   assert.equal(t.size(), 2);
 });
 
@@ -53,8 +54,8 @@ test('向量太短 / 为空时返回 null（不硬塞编号）', () => {
 test('超过上限后归给最像的那个，不无限开号', () => {
   const t = createSpeakerTracker({ maxSpeakers: 2 });
   t.assign(vec(1));
-  t.assign(vec(2));
-  t.assign(vec(3));
+  t.assign(vec(2)); t.assign(vec(2));
+  t.assign(vec(3)); t.assign(vec(3));
   assert.equal(t.size(), 2);
 });
 
@@ -62,12 +63,16 @@ test('默认上限是 6', () => {
   assert.equal(SPEAKER_MAX, 6);
 });
 
-test('resolveSpeaker：够长的句子用声纹（首个开 S1，第二个不同的人开 S2）', () => {
+test('resolveSpeaker：够长的句子用声纹；新声音要出现两次才开号', () => {
   const tracker = createSpeakerTracker();
   const a = resolveSpeaker({ emb: vec(1), durSec: 3, t0: 1000, last: null, tracker });
   assert.equal(a, 'S1');
-  const b = resolveSpeaker({ emb: vec(2), durSec: 3, t0: 5000, last: { t1: 4000, spk: a }, tracker });
-  assert.equal(b, 'S2');
+  // 第一次听到 B：还没开号，按"最近一句是 A"处理 → 继承 S1
+  const b1 = resolveSpeaker({ emb: vec(2), durSec: 3, t0: 5000, last: { t1: 4000, spk: a }, tracker });
+  assert.equal(b1, 'S1');
+  // 第二次听到 B：开 S2
+  const b2 = resolveSpeaker({ emb: vec(2), durSec: 3, t0: 9000, last: { t1: 8000, spk: 'S1' }, tracker });
+  assert.equal(b2, 'S2');
 });
 
 test('resolveSpeaker：短句沿用上一句的号，不自己开新号', () => {
@@ -79,7 +84,7 @@ test('resolveSpeaker：短句沿用上一句的号，不自己开新号', () => 
 
 test('resolveSpeaker：短句但离上一句太远 → 不给号（不硬猜）', () => {
   const tracker = createSpeakerTracker();
-  const spk = resolveSpeaker({ emb: vec(9), durSec: 0.8, t0: 9000, last: { t1: 1500, spk: 'S1' }, tracker });
+  const spk = resolveSpeaker({ emb: vec(9), durSec: 0.8, t0: 20000, last: { t1: 1500, spk: 'S1' }, tracker });
   assert.equal(spk, null);
 });
 

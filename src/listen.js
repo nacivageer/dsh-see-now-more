@@ -41,6 +41,7 @@ import { dirname, join } from 'node:path';
 
 import { createSpeakerTracker, resolveSpeaker } from './speaker.js';
 import { applyTerms, loadTermRules } from './terms.js';
+import { writeTranscript } from './transcript.js';
 import { fileURLToPath } from 'node:url';
 
 import { LISTEN_DEFAULTS } from './tuning.js';
@@ -1284,6 +1285,9 @@ export function createListener({
         }
         // **upsert**：同一句如果先出过快照，这里用整句结果把它盖掉
         buffer.upsert(t0, t1, text, { partial: false, spk });
+        // 逐句落盘（2026-11-17 改）：以前只在"合并唤醒"时整批写，于是读文件算 CER
+        // 会缺最近一两分钟。现在每句定稿就追加，谁读都立刻看得见。
+        writeTranscript([{ t0, t1, text, spk }], Date.now(), env);
         lastSegAt = Date.now();
         lastLineLagMs = lastSegAt - t0;
         total += 1;
