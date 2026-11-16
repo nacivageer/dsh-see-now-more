@@ -145,7 +145,16 @@ export function windowLine(r = windowReport()) {
   const hb = r.heartbeatAgeSec === null ? '没心跳'
     : r.heartbeatStale ? `心跳 ${r.heartbeatAgeSec}s 前（过期）`
       : `心跳 ${r.heartbeatAgeSec}s 前`;
-  const vis = r.hidden ? '**藏起来的（用户看不见）**' : '显示中';
+  /**
+   * **进程没了就不能说「显示中」**（2026-11-17 实见）：`hidden` 只是配置里的可见性，
+   * 进程已经退出时它没有意义。以前用户手动关窗后 status 仍写「显示中」，
+   * 看起来像"窗还开着但你看不见"，会去查显卡/置顶而不是重开窗。
+   */
+  const vis = !r.alive
+    ? '没在跑'
+    : r.heartbeatStale
+      ? '进程在但没在画（心跳过期）'
+      : r.hidden ? '**藏起来的（用户看不见）**' : '显示中';
   return `窗口：${proc} · ${hb} · ${vis}`;
 }
 
