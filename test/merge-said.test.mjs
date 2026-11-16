@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mergeSaid, mergeSpanMs, MERGE_MAX_CHARS, MERGE_MAX_LINES } from '../src/loop.js';
+import { joinFragments, mergeSaid, mergeSpanMs, MERGE_MAX_CHARS, MERGE_MAX_LINES } from '../src/loop.js';
 
 const line = (text) => ({ text });
 
@@ -66,4 +66,34 @@ test('mergeSpanMs：叫过就以叫醒时刻为基准', () => {
 test('mergeSpanMs：时钟回拨也不会给出负数', () => {
   const now = 1_800_000_000_000;
   assert.equal(mergeSpanMs(now, now + 5_000, now), 0);
+});
+
+test('joinFragments：间隔不超过 600ms 的碎片拼回一句，t1 取后', () => {
+  const r = joinFragments([
+    { t0: 0, t1: 1000, text: '机会。' },
+    { t0: 1200, t1: 2000, text: '能力量。' },
+    { t0: 5000, t1: 6000, text: '下车。' },
+  ]);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].text, '机会。能力量。');
+  assert.equal(r[0].t1, 2000);
+  assert.equal(r[1].text, '下车。');
+});
+
+test('joinFragments：间隔超过阈值就分开（不同句不能拼）', () => {
+  const r = joinFragments([
+    { t0: 0, t1: 1000, text: '第一句。' },
+    { t0: 2000, t1: 3000, text: '第二句。' },
+  ]);
+  assert.equal(r.length, 2);
+});
+
+test('joinFragments：空句直接丢掉，不影响拼接', () => {
+  const r = joinFragments([
+    { t0: 0, t1: 500, text: '甲' },
+    { t0: 600, t1: 700, text: '  ' },
+    { t0: 800, t1: 1200, text: '乙' },
+  ]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].text, '甲乙');
 });

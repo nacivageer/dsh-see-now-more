@@ -34,10 +34,13 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+
+import { createSpeakerTracker, resolveSpeaker } from './speaker.js';
+import { applyTerms, loadTermRules } from './terms.js';
 import { fileURLToPath } from 'node:url';
 
 import { LISTEN_DEFAULTS } from './tuning.js';
@@ -216,6 +219,11 @@ export function httpTranscriber(cfg, { timeoutMs = 30_000, log = () => {} } = {}
     // 严格 VAD：服务端 silero VAD 判「这段没人说话」就直接返回空，
     // 不再走「VAD 全静音也整段解码一次」的兜底 —— 否则纯 BGM 会被转成「嗯」「啦啦啦」。
     form.append('vad_only', '1');
+    /**
+     * 声纹：让服务端顺带算一个说话人向量（`spk_emb`）。
+     * 服务端不认这个字段也没关系 —— 老版本只会忽略，文本照旧；拿不到向量就退化成"没有谁"。
+     */
+    form.append('spk', '1');
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
@@ -227,7 +235,11 @@ export function httpTranscriber(cfg, { timeoutMs = 30_000, log = () => {} } = {}
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}：${(await res.text()).slice(0, 120)}`);
       const j = await res.json();
-      return String(j?.text ?? '').trim();
+      const emb = Array.isArray(j?.spk_emb) && j.spk_emb.length ? j.spk_emb.map(Number) : null;
+      // 说话长度（服务端 VAD 各段时间之和），不是文件长度：6 秒片子里只有 0.3 秒人声时，
+      // 拿文件长度当门槛会把"杂音算出来的垃圾向量"当成一个新人。
+      const speechSec = Number(j?.duration) > 0 ? Number(j.duration) : null;
+      return { text: String(j?.text ?? '').trim(), emb, speechSec };
     } catch (e) {
       log(`转写失败：${e?.message ?? e}`);
       // **必须抛**。以前这里 `return ''`，于是上层看到的只是"这段没说话"：
@@ -238,6 +250,34 @@ export function httpTranscriber(cfg, { timeoutMs = 30_000, log = () => {} } = {}
       clearTimeout(timer);
     }
   };
+}
+
+/**
+ * 转写器有两种返回值：宿主那条回字符串，本地 HTTP 回 `{text, emb}`。
+ * 统一成后者，调用方只认 `{text, emb}`。
+ */
+export function unpackTranscription(r) {
+  if (typeof r === 'string') return { text: r.trim(), emb: null, speechSec: null };
+  return {
+    text: String(r?.text ?? '').trim(),
+    emb: Array.isArray(r?.emb) ? r.emb : null,
+    speechSec: Number(r?.speechSec) > 0 ? Number(r.speechSec) : null,
+  };
+}
+
+/**
+ * 调参用：把每句的声纹向量落一行，给"阈值到底该多少"提供真实分布。
+ *
+ * 开关是**文件**而不是环境变量：`~/.dsh/see-now/emb-on` 存在才写。
+ * 理由：环境变量得重启 DSH 才设得进去，而调参本来就发生在运行中。
+ * 文件超过 400 行就裁到最近 200 行，别让调参把磁盘写满。
+ */
+function dumpEmbedding(file, rec) {
+  try {
+    appendFileSync(file, `${JSON.stringify(rec)}\n`, 'utf8');
+    const lines = readFileSync(file, 'utf8').trim().split('\n');
+    if (lines.length > 400) writeFileSync(file, `${lines.slice(-200).join('\n')}\n`, 'utf8');
+  } catch { /* 调参产物，写不进去不影响听 */ }
 }
 
 // ------------------------------------------------------------------ 本地服务
@@ -446,8 +486,8 @@ export function findListenPython({ env = process.env } = {}) {
  */
 export function createLineBuffer({ keepMs = KEEP_MS } = {}) {
   let lines = [];
-  const put = (t0, t1, t, partial) => {
-    const entry = { t0, t1, text: t, partial };
+  const put = (t0, t1, t, partial, spk = null) => {
+    const entry = { t0, t1, text: t, partial, spk };
     lines.push(entry);
     // 修剪：只留最近 keepMs。看屏幕是长期会话，两三小时不修剪就是几千条
     if (lines.length > 8) {
@@ -474,7 +514,7 @@ export function createLineBuffer({ keepMs = KEEP_MS } = {}) {
      *
      * @param {{partial?:boolean}} [o]
      */
-    upsert(t0, t1, text, { partial = false } = {}) {
+    upsert(t0, t1, text, { partial = false, spk = null } = {}) {
       const t = String(text ?? '').trim();
       if (!t) return null;
       // 从后往前找：同一句的快照和整句都在尾部，比从头扫快
@@ -485,9 +525,10 @@ export function createLineBuffer({ keepMs = KEEP_MS } = {}) {
         l.t1 = t1;
         l.text = t;
         l.partial = partial;
+        if (spk) l.spk = spk;      // 快照没有声纹时别把整句的编号抹掉
         return l;
       }
-      return put(t0, t1, t, partial);
+      return put(t0, t1, t, partial, spk);
     },
     /**
      * 取某段时间窗里的台词。**窗口按相交算**（`l.t1 >= from && l.t0 <= to`），
@@ -954,6 +995,28 @@ export function createListener({
   const pollInterval = Number.isFinite(Number(pollMs)) && Number(pollMs) > 0
     ? Number(pollMs) : cfg.pollMs;
   const buffer = createLineBuffer();
+  /** 说话人聚类：每句整句的声纹归成 S1 / S2 …（不猜名字，见 speaker.js） */
+  const speakers = createSpeakerTracker();
+  /** 上一句的结束时刻与编号：短句沿用它的号（短音频的声纹不可信，见 resolveSpeaker）。 */
+  let lastFinal = null;
+  /**
+   * 术语表（`~/.dsh/see-now/terms.json`）。**按 mtime 热读**：改表不用重启，
+   * 这对"发现一个错名就补一条"的场景是刚需。
+   */
+  let termRules = [];
+  let termStamp = 0;
+  const currentTerms = () => {
+    try {
+      const p = join(dshHome(env), 'see-now', 'terms.json');
+      const mtime = statSync(p).mtimeMs;
+      if (mtime !== termStamp) {
+        termStamp = mtime;
+        termRules = loadTermRules(p, { readFile: readFileSync });
+        log(`[listen] 术语表 ${termRules.length} 条`);
+      }
+    } catch { /* 没有术语表文件就空表 */ }
+    return termRules;
+  };
   let child = null;
   let timer = null;
   let busy = false;
@@ -1169,8 +1232,13 @@ export function createListener({
         } catch { continue; }
         const t0 = Number(name.slice(4, -4));
         let text = '';
+        let emb = null;
+        let speechSec = null;
         try {
-          text = await transcriber.transcribe(canonicalizeWav(wav));
+          const got = unpackTranscription(await transcriber.transcribe(canonicalizeWav(wav)));
+          text = applyTerms(got.text, currentTerms());
+          emb = got.emb;
+          speechSec = got.speechSec;
           fails = 0;
           lastError = null;
         } catch (e) {
@@ -1203,8 +1271,19 @@ export function createListener({
         if (isHallucination(text)) { log(`[listen] 丢弃疑似幻觉：${JSON.stringify(text)}`); continue; }
         const dur = Math.max(0.2, (wav.length - 44) / 2 / 16_000);
         const t1 = t0 + Math.round(dur * 1000);
+        // 声纹只认**够长的整句**（按"说话长度"算，不是文件长度）；短句沿用上一句的编号
+        const spk = resolveSpeaker({
+          emb, durSec: speechSec ?? dur, t0, last: lastFinal, tracker: speakers,
+        });
+        lastFinal = { t1, spk };
+        // 调参开关（文件存在才写）：把向量留底，阈值靠数据定，不靠猜
+        if (existsSync(join(dshHome(env), 'see-now', 'emb-on'))) {
+          dumpEmbedding(join(dshHome(env), 'see-now', 'emb.jsonl'), {
+            t0, durSec: Number(dur.toFixed(2)), text, spk, emb,
+          });
+        }
         // **upsert**：同一句如果先出过快照，这里用整句结果把它盖掉
-        buffer.upsert(t0, t1, text, { partial: false });
+        buffer.upsert(t0, t1, text, { partial: false, spk });
         lastSegAt = Date.now();
         lastLineLagMs = lastSegAt - t0;
         total += 1;
@@ -1236,7 +1315,8 @@ export function createListener({
           try { wav = readFileSync(path); } catch { continue; }
           let text = '';
           try {
-            text = await transcriber.transcribe(canonicalizeWav(wav));
+            const got = unpackTranscription(await transcriber.transcribe(canonicalizeWav(wav)));
+            text = applyTerms(got.text, currentTerms());
             liveErrLogged = false;
           } catch (e) {
             // 快照失败**不计入 `fails`**（它只是"提前给一版"，挂了不该把主链路暂停），

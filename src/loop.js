@@ -101,6 +101,42 @@ export const MERGE_MAX_LINES = 12;
 export const MERGE_MAX_CHARS = 600;
 
 /**
+ * 相邻两句间隔小于这个值就当成**同一句**拼回去（毫秒）。
+ *
+ * 实测量出来的：`see-now/transcript/2026-11-17.jsonl` 里 61 句平均 8.9 个字，
+ * 相邻间隔中位数 **0.2 秒**、60 个间隔里 35 个不到 0.5 秒 —— 断句器在 0.35 秒的
+ * 气口就切，于是一句话被切成「机会。能力量。」「相信。虽然你可能会。」这种半截。
+ * 参数侧已把 silence 放到 0.6 秒；这里再兜一层：**拼回去给模型看**。
+ */
+export const MERGE_JOIN_GAP_MS = 600;
+
+/**
+ * 把切碎的相邻台词拼回整句：间隔 ≤ `gapMs` 的连成一条（t0 取前、t1 取后）。
+ *
+ * @param {Array<{t0?:number,t1?:number,text?:string}>} lines 按时间正序
+ * @returns {Array<{t0:number,t1:number,text:string}>}
+ */
+export function joinFragments(lines, { gapMs = MERGE_JOIN_GAP_MS } = {}) {
+  const out = [];
+  for (const l of lines ?? []) {
+    const text = String(l?.text ?? '').trim();
+    if (!text) continue;
+    const t0 = Number(l?.t0) || 0;
+    const t1 = Number(l?.t1) || t0;
+    const spk = String(l?.spk ?? '').trim() || null;
+    const prev = out[out.length - 1];
+    // 说话人不同就不拼 —— 两个人快速接话时，拼起来会读成同一人在说
+    if (prev && prev.spk === spk && t0 - prev.t1 <= gapMs) {
+      prev.text += text;
+      prev.t1 = Math.max(prev.t1, t1);
+      continue;
+    }
+    out.push({ t0, t1, text, spk });
+  }
+  return out;
+}
+
+/**
  * 这批台词从"第一句"到"现在"过了多久（毫秒）。
  *
  * 单独抽出来是因为踩过：`lastAudioWakeAt` 的初值是 `0`（"从没叫过"），
@@ -120,16 +156,23 @@ export function mergeSpanMs(now, lastWakeAt, firstT0) {
  * @returns {{lines: string[], text: string, dropped: number}}
  */
 export function mergeSaid(lines, { maxLines = MERGE_MAX_LINES, maxChars = MERGE_MAX_CHARS } = {}) {
-  const all = (lines ?? []).map((l) => String(l?.text ?? '').trim()).filter(Boolean);
+  const all = (lines ?? [])
+    .map((l) => ({
+      text: String(l?.text ?? '').trim(),
+      spk: String(l?.spk ?? '').trim() || null,
+    }))
+    .filter((x) => x.text);
   const picked = [];
   let chars = 0;
   for (let i = all.length - 1; i >= 0; i -= 1) {
-    const t = all[i];
+    const { text: t, spk } = all[i];
+    // 有编号就带上前缀，读的人一眼知道换人了
+    const shown = spk ? `${spk}: ${t}` : t;
     if (picked.length >= maxLines) break;
     // 至少留一句：哪怕单句就超预算，也不能返回空
-    if (picked.length && chars + t.length > maxChars) break;
-    picked.push(t);
-    chars += t.length;
+    if (picked.length && chars + shown.length > maxChars) break;
+    picked.push(shown);
+    chars += shown.length;
   }
   picked.reverse();
   return { lines: picked, text: picked.join(' / '), dropped: all.length - picked.length };
@@ -158,7 +201,13 @@ export function transcriptPath(env = process.env, at = Date.now()) {
 export function transcriptEntry(l) {
   const text = String(l?.text ?? '').trim();
   if (!text) return null;
-  return { t0: Number(l?.t0) || 0, t1: Number(l?.t1) || 0, text };
+  const spk = String(l?.spk ?? '').trim() || null;
+  return {
+    t0: Number(l?.t0) || 0,
+    t1: Number(l?.t1) || 0,
+    text,
+    ...(spk ? { spk } : {}),
+  };
 }
 
 /** 把这一批台词全部追加进当天文件；写不进去不影响唤醒。 */
@@ -621,19 +670,25 @@ export function startLoop({
      * 现在的口径：**只有转出定稿台词才叫**；纯音乐/音效/环境声不叫，
      * 但照样记 `lastAudioKind`（之后从这类声音转成说话还能正常叫一次）。
      */
-    let fresh = [];
+    let rawFresh = [];
     try {
-      fresh = (runner.recentLines?.(now - 300_000, now) ?? [])
+      rawFresh = (runner.recentLines?.(now - 300_000, now) ?? [])
         .filter((l) => l && l.partial === false && String(l.text ?? '').trim()
           && Number(l.t0) > lastHeardT0);
-    } catch { fresh = []; }
-    if (!fresh.length) {
+    } catch { rawFresh = []; }
+    if (!rawFresh.length) {
       if (seg.kind !== lastAudioKind) {
         lastAudioKind = seg.kind;
         log(`[listen] 声音变了（${seg.kind}）但没听见新台词，不叫醒`);
       }
       return;
     }
+    /**
+     * 断句器切得太碎（实测：相邻间隔中位数 0.2 秒、平均一句 8.9 个字），
+     * 先按 `joinFragments` 把半截话拼回整句，再进摘要/落盘 ——
+     * 否则模型看到的是「机会。能力量。」这种读不懂的碎片。
+     */
+    const fresh = joinFragments(rawFresh);
     /**
      * **合并**（2026-11-16 用户要求「可以合并」）：有新台词也不立刻叫，
      * 等攒够 `MERGE_WINDOW_MS`，或者说话停了（静音 + 至少 2 句）再结账。
@@ -643,7 +698,7 @@ export function startLoop({
      * 后者初值是 0（"从没叫过"），直接相减会得到 1794843709 秒那种数。
      */
     const merged = mergeSaid(fresh);
-    const firstT0 = Number(fresh[0]?.t0) || now;
+    const firstT0 = Number(rawFresh[0]?.t0) || now;
     const spanMs = mergeSpanMs(now, lastAudioWakeAt, firstT0);
     const quiet = seg.kind === 'silent' || seg.kind === 'nodata';
     const dueByWindow = spanMs >= MERGE_WINDOW_MS;
@@ -663,7 +718,7 @@ export function startLoop({
     lastMergePending = 0;
     lastAudioKind = seg.kind;
     lastAudioWakeAt = now;
-    lastHeardT0 = Math.max(lastHeardT0, Number(fresh[fresh.length - 1]?.t0) || 0);
+    lastHeardT0 = Math.max(lastHeardT0, Number(rawFresh[rawFresh.length - 1]?.t0) || 0);
     unansweredListenWakes += 1;
     // 全文落盘：摘要里没列的句子也在这里（方案 2 的关键——省 token 但不丢内容）
     writeTranscript(fresh, now);
@@ -675,6 +730,7 @@ export function startLoop({
         + `全文 ${transcriptRelPath(now).replace(/\\/g, '/')}）` : '';
     const text = `[仅监听] ${clock} · ${when}听见 ${fresh.length} 句：\n`
       + `${merged.text}${dropped}\n`
+      + (fresh.some((l) => l.spk) ? '（S1/S2 是按声纹聚出来的编号，不是名字）\n' : '')
       + '值得看就 `see_now({action:"watch"})` 看 2–3 张；不值得就什么都别做，我继续听。'
       + lastSaidHint()
       + bloodbarTail();
