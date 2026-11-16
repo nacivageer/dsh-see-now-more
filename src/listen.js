@@ -40,6 +40,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { coverageOf } from './coverage.js';
+import { appendCoverage } from './coverage-ledger.js';
 import { createSpeakerTracker, resolveSpeaker } from './speaker.js';
 import { applyTerms, loadTermRules } from './terms.js';
 import { writeTranscript } from './transcript.js';
@@ -240,7 +241,12 @@ export function httpTranscriber(cfg, { timeoutMs = 30_000, log = () => {} } = {}
       const emb = Array.isArray(j?.spk_emb) && j.spk_emb.length ? j.spk_emb.map(Number) : null;
       // 说话长度（服务端 VAD 各段时间之和），不是文件长度：6 秒片子里只有 0.3 秒人声时，
       // 拿文件长度当门槛会把"杂音算出来的垃圾向量"当成一个新人。
-      const speechSec = Number(j?.duration) > 0 ? Number(j.duration) : null;
+      //
+      // **0 与「没回传」必须分开**（2026-11-17 实测踩到）：服务端 VAD 判「这段没人说话」
+      // 会回 `duration: 0`，那是"确实没有语音"；字段缺失才是"不知道"。以前两者都变成 null，
+      // 上层只好拿段长兜底 —— 于是纯 BGM 的 6 秒段被记成"语音 6 秒、像说话没字"，覆盖率被刷成 0%。
+      const speechSec = j?.duration === undefined || j?.duration === null
+        ? null : (Number.isFinite(Number(j.duration)) ? Number(j.duration) : null);
       return { text: String(j?.text ?? '').trim(), emb, speechSec };
     } catch (e) {
       log(`转写失败：${e?.message ?? e}`);
@@ -260,10 +266,14 @@ export function httpTranscriber(cfg, { timeoutMs = 30_000, log = () => {} } = {}
  */
 export function unpackTranscription(r) {
   if (typeof r === 'string') return { text: r.trim(), emb: null, speechSec: null };
+  // 同 `httpTranscriber`：0 是"没有语音"，null 是"没回传"，别合并
+  const raw = r?.speechSec;
+  const speechSec = raw === undefined || raw === null
+    ? null : (Number.isFinite(Number(raw)) ? Number(raw) : null);
   return {
     text: String(r?.text ?? '').trim(),
     emb: Array.isArray(r?.emb) ? r.emb : null,
-    speechSec: Number(r?.speechSec) > 0 ? Number(r.speechSec) : null,
+    speechSec,
   };
 }
 
@@ -1067,6 +1077,8 @@ export function createListener({
   let lastEnsureAt = 0;
   /** 快照失败只记一次日志（成功一次就复位），别每拍刷屏 */
   let liveErrLogged = false;
+  /** 覆盖率账写失败也只记一次 —— 磁盘满/权限问题不该每段刷一行 */
+  let coverageErrLogged = false;
 
   /**
    * 读声学指纹。2 秒一次就够 —— Python 侧 3 秒才重写一次，读更勤只是白扫盘。
@@ -1298,13 +1310,35 @@ export function createListener({
          * 放在「出不出字」之后、`continue` 之前 —— 没出字的段也要记，那才是「像说话没字」。
          */
         const segDur = Math.max(0.2, (wav.length - 44) / 2 / 16_000);
-        covEntries.push({
+        const entry = {
           at: Date.now(),
+          /** 这段音频**开始**的墙上时间：台账按它分分钟，跨分钟才拆得对。 */
+          t0,
           sentSec: segDur,
-          speechSec: speechSec ?? segDur,
+          /**
+           * 转写器回传的语音秒数：`0` = VAD 说这段没人说话；`null` = 没回传（不知道）。
+           * **不要在这里拿 `segDur` 兜底** —— 那会把纯 BGM 段记成「语音 6 秒却没字」，
+           * 覆盖率被刷成 0%、`像说话没字` 全是假的。兜底只留给消费端（`coverageOf` / 台账）。
+           */
+          speechSec,
           gotText: Boolean(text),
-        });
+        };
+        covEntries.push(entry);
         if (covEntries.length > 2000) covEntries.splice(0, covEntries.length - 2000);
+        /**
+         * 覆盖率账落盘（`~/.dsh/see-now/coverage/<日期>.jsonl`）。
+         *
+         * 放在 `if (!text) continue` **之前**：没出字的段才是「像说话没字」的原料。
+         * 写失败只记一次日志、绝不抛 —— 账坏了不能让听停掉。
+         */
+        appendCoverage(entry, {
+          env,
+          onError: (e) => {
+            if (coverageErrLogged) return;
+            coverageErrLogged = true;
+            log(`[listen] 覆盖率账写失败：${e?.message ?? e}`);
+          },
+        });
         // 这句已经有准的了，它的临时快照（还没转的）不必再转
         liveSeen.delete(`live-${t0}.wav`);
         if (!text) continue;

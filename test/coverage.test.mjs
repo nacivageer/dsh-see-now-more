@@ -150,6 +150,24 @@ test('coverageOf：整段没出字 → 0%，别当成 null', () => {
   assert.equal(c.emptySegs, 1);
 });
 
+test('coverageOf：VAD 回传 0 秒语音 = 没人说话（不进分母，也不算像说话没字）', () => {
+  const now = 2_000_000;
+  const c = coverageOf([
+    { at: now - 2_000, sentSec: 6, speechSec: 0, gotText: false },   // 纯 BGM 段
+    { at: now - 1_000, sentSec: 6, speechSec: 2.4, gotText: false }, // 真有人声、没出字
+  ], { now });
+  assert.equal(c.speechSec, 2.4);        // 0 秒那段不进分母
+  assert.equal(c.emptySegs, 1);          // 只数真有人声那段
+  assert.equal(c.ratio, 0);
+});
+
+test('coverageOf：speechSec 没回传（null）才退回段长', () => {
+  const now = 2_000_000;
+  const c = coverageOf([{ at: now - 1_000, sentSec: 4, gotText: false }], { now });
+  assert.equal(c.speechSec, 4);
+  assert.equal(c.emptySegs, 1);
+});
+
 test('mergeIntervals：乱序 + 相交都并成一段', () => {
   assert.deepEqual(
     mergeIntervals([{ from: 5, to: 9 }, { from: 1, to: 4 }, { from: 2, to: 6 }]),
