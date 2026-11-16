@@ -133,6 +133,11 @@ $env:PYTHONIOENCODING="utf-8"
 
 ### 代码改动（`H:\asr-local` 不是 Git 仓，只在磁盘上）
 
+- **备份**：`server-sherpa.py.bak-20261117`（28514 B，sha256 前 16 位 `4AAEC8FE8986F2D1`）、
+  `live-subs.py.bak-20261117`（10961 B，`B92E2C5656AD523A`），都是改完当天状态的副本；
+  更早还有 `server-sherpa.py.bak-20261117-pre-spk`（11-05，加声纹前）与 `server-sherpa.py.orig`
+  （11-04 上游原样，与 `vendor/dsh-video-storyboard/scripts/reference-server-sherpa.py` 同一份）。
+
 - `server-sherpa.py`：`--engine paraformer|sense-voice`、`--language`、`--model-name` 按引擎取默认；
   两种引擎共用 VAD / 标点 / 声纹与响应字段（`text`/`duration`/`segments`/`spk_emb`）。
 - `live-subs.py`：`--min-w`（字幕行最小宽度占比）。
