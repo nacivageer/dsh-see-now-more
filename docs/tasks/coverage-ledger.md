@@ -13,6 +13,7 @@
   - 假数据实跑 `--ledger`：5 分钟分段 / 合计 / 漏抬 1 分钟 / 误抬 2 分钟对得上（见「进展」）
   - 落盘 `src/coverage-ledger.js`；接线 `src/listen.js:1304`、`:1320`；读它 `scripts/coverage.mjs:93`
   - 版本 `0.1.1-more.13`，已 `install-dev`（副本 = 源码）
+  - 提交：see-now-more `f07c0a1`（2026-11-17）
 更新：2026-11-17 04:18 CST
 
 ## 进展（2026-11-17 04:07，session-f9b26b06）
