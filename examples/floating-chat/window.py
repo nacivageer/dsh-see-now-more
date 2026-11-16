@@ -1540,6 +1540,15 @@ class LiveGlass:
             c.tag_raise("focusline")
         except Exception:
             pass
+        # **这行和标题栏那颗点是同一个 `_focus_info()`**：谁画了这行，谁就把点一起刷新。
+        # 不绑在一起就会出现「点还是橙色、这行已经灰了」——
+        # 根因是 `_layout()` 也会调 `_draw_focus_line()`，它把 `_focus_label` 更新成新值，
+        # 于是 `_poll_chat` 里那句「标签变了才重画」永远判 false，标题栏再也不刷新
+        # （2026-11-16 用户实报，抓图确认点 #ffa63d / 字 #8e9db2）。
+        try:
+            self._refresh_header()
+        except Exception:
+            pass
 
     def _poll_chat(self) -> None:
         try:
@@ -1636,6 +1645,10 @@ class LiveGlass:
                 self.root.deiconify()
                 self.root.attributes("-topmost", True)
                 self.root.lift()
+                # 藏起来期间 `_draw_focus_line()` 是早退的（只记标签、不画），
+                # 重新显示时那一行和标题栏的点都得补画一次，否则重新出现的第一屏
+                # 会是"旧状态"（2026-11-16 与"点/字不同色"同一批修的）。
+                self._draw_focus_line()
         except Exception:
             self._hidden = not want
 
@@ -8032,6 +8045,13 @@ class LiveGlass:
 
     def _tick(self) -> None:
         self._beat()
+        # 隐藏时**没有画面要贴**：主循环从 `INTERVAL_MS`（4ms）放到 100ms。
+        # `_poll_chat` 是另一条独立链（250ms），读协议、读配置、检测"重新显示"都不受影响；
+        # 不放慢的话，光这一条空转就吃掉 ~13% 的一个核（2026-11-16 实测：隐藏前后
+        # pythonw 都是 1.3s CPU / 10s，抓屏停了它还在跑，等于"关"只关了一半）。
+        if self._hidden:
+            self.root.after(100, self._tick)
+            return
         # 自动清理（30 天 / 测试期 1 天）：内部 60 秒节流，没开就什么都不做
         self._maybe_cleanup()
         # 绑定会话可以热改（插件每 2 秒重读 see-now.json），标题栏这几字也要跟上，
@@ -8109,6 +8129,9 @@ class LiveGlass:
 
     def _work(self) -> None:
         """抓取 + 合成全在后台，主线程只负责显示最新一帧。"""
+        # 一行启动标记：这是"抓屏线程到底起没起、起的哪条路"唯一的现场证据
+        # （2026-11-16 排查"隐藏后还在抓屏"时加的；每进程只打一次）。
+        print(f"[work] start plain={self._plain} hidden={self._hidden}", flush=True)
         if self._plain:
             # 纯色面板：不抓屏、不模糊、不折射。只有几何/内框变了才重画一张，
             # 其余时间这个线程在睡觉 —— 拖动时窗口本身跟着鼠标走就是满帧。
@@ -8160,8 +8183,16 @@ class LiveGlass:
                 # 「状态位早就是关，窗口还在全速抓屏，4 秒吃掉 5 秒 CPU」。这里按 0.2 秒
                 # 一拍睡过去：mss 句柄留着（恢复显示不用重新建），抓屏/模糊/合成一次都不做。
                 if self._hidden:
+                    # 只在**状态翻转**时打一行：这是"关到底了没有"唯一的可观测证据，
+                    # 每帧打会把日志刷爆（这一行是 2026-11-16 排查时加的，别删）。
+                    if not getattr(self, "_work_hidden", False):
+                        self._work_hidden = True
+                        print("[work] hidden → 暂停抓屏", flush=True)
                     time.sleep(0.2)
                     continue
+                if getattr(self, "_work_hidden", False):
+                    self._work_hidden = False
+                    print("[work] visible → 恢复抓屏", flush=True)
                 if self._pause.is_set() or self._collapsed:
                     time.sleep(0.03)
                     continue
