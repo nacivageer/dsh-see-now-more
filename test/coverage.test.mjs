@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeCoverage, kindOf, kindsOf, mergeIntervals, SPEECH_MID } from '../src/coverage.js';
+import { computeCoverage, coverageOf, kindOf, kindsOf, mergeIntervals, SPEECH_MID } from '../src/coverage.js';
 
 /** 造一帧声学数据：db + 三频带占比（lo, mid, hi 落在 [4],[5],[6]） */
 function frame({ db = -30, mid = 0.8 } = {}) {
@@ -118,6 +118,36 @@ test('单帧毛刺不该把人声切成碎片（平滑后仍是一整段）', ()
 test('真·音乐（中频一直低）不该被平滑成人声', () => {
   const seq = Array.from({ length: 40 }, () => frame({ mid: 0.2 }));
   assert.ok(kindsOf(seq, 0.05).every((k) => k === 'sound'));
+});
+
+test('coverageOf：出字秒数 / 送审语音秒数（没有语音时不报覆盖率）', () => {
+  const now = 2_000_000;
+  const entries = [
+    { at: now - 30_000, sentSec: 3, speechSec: 2.6, gotText: true },
+    { at: now - 20_000, sentSec: 3, speechSec: 2.4, gotText: false },   // 送出去了没出字
+    { at: now - 10_000, sentSec: 3, speechSec: 2.0, gotText: true },
+  ];
+  const c = coverageOf(entries, { now });
+  assert.equal(c.segs, 3);
+  assert.equal(c.speechSec, 7);          // 2.6 + 2.4 + 2.0
+  assert.equal(c.textSec, 4.6);
+  assert.equal(c.ratio, 66);
+  assert.equal(c.emptySegs, 1);          // 2.4s ≥ 1.2s 且没出字
+  assert.equal(c.sentSec, 9);
+});
+
+test('coverageOf：窗口外的旧条目不算，没人说话时 ratio 为 null', () => {
+  const now = 2_000_000;
+  const old = [{ at: now - 20 * 60_000, sentSec: 5, speechSec: 5, gotText: true }];
+  assert.equal(coverageOf(old, { now }).ratio, null);          // 10 分钟窗口外
+  assert.equal(coverageOf([], { now }).ratio, null);
+});
+
+test('coverageOf：整段没出字 → 0%，别当成 null', () => {
+  const now = 2_000_000;
+  const c = coverageOf([{ at: now - 1_000, sentSec: 4, speechSec: 3.8, gotText: false }], { now });
+  assert.equal(c.ratio, 0);
+  assert.equal(c.emptySegs, 1);
 });
 
 test('mergeIntervals：乱序 + 相交都并成一段', () => {

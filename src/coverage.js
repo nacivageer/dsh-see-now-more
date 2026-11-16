@@ -96,7 +96,40 @@ export function mergeIntervals(list) {
 const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
 
 /**
- * 算一本账。
+ * 覆盖率账（**主口径**）：送进 ASR 的语音秒数 vs 出字的秒数。
+ *
+ * 为什么不拿声学指纹猜「哪段是人声」：游戏音频是 BGM + 对话混在一起，实测对话帧的
+ * 中频占比均值只有 0.27–0.44，低于「人声」门槛 0.6，于是真对话全被归成「有声」，
+ * 覆盖率被算成个位数（2026-11-17 03:45 实测）。
+ * 送出去的段就是**转写器认为的语音**，拿它当分母不需要再猜一次。
+ *
+ * @param {Array<{at:number, sentSec:number, speechSec?:number, gotText:boolean}>} entries
+ * @param {{now?:number, windowMs?:number, minSpeechSec?:number}} opts
+ */
+export function coverageOf(entries, { now = Date.now(), windowMs = 10 * 60_000, minSpeechSec = 1 } = {}) {
+  const lo = now - windowMs;
+  const win = (entries || []).filter((e) => Number(e.at) >= lo);
+  const secOf = (e) => Number(e.speechSec ?? e.sentSec) || 0;
+  const sentSec = win.reduce((n, e) => n + (Number(e.sentSec) || 0), 0);
+  const speechSec = win.reduce((n, e) => n + secOf(e), 0);
+  const textSec = win.reduce((n, e) => n + (e.gotText ? secOf(e) : 0), 0);
+  return {
+    segs: win.length,
+    windowSec: Math.round(windowMs / 1000),
+    sentSec: +sentSec.toFixed(1),
+    speechSec: +speechSec.toFixed(1),
+    textSec: +textSec.toFixed(1),
+    ratio: speechSec >= minSpeechSec ? +(100 * textSec / speechSec).toFixed(0) : null,
+    emptySegs: win.filter((e) => !e.gotText && secOf(e) >= MIN_SPAN).length,
+  };
+}
+
+/**
+ * 算一本账（**诊断口径**：按声学指纹把人声/有声/静音分开）。
+ *
+ * 注意：BGM 与人声混在一起时它会把真对话判成「有声」，所以 status 用的是
+ * `coverageOf()`；这个版本留给 `scripts/coverage.mjs` 看声音构成。
+ *
  * @param {{from:number, hop:number, frames:Array}} acoustic
  * @param {Array<{t0:number,t1:number,text:string}>} transcriptLines
  * @param {{from?:number, to?:number, minSpan?:number}} opts

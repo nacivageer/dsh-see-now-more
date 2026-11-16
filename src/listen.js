@@ -39,7 +39,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { computeCoverage } from './coverage.js';
+import { coverageOf } from './coverage.js';
 import { createSpeakerTracker, resolveSpeaker } from './speaker.js';
 import { applyTerms, loadTermRules } from './terms.js';
 import { writeTranscript } from './transcript.js';
@@ -711,15 +711,14 @@ export function trajectoryText(traj) {
 }
 
 /**
- * 覆盖率账 → status 尾巴。**算不出来就什么都不加**（不编 0%）。
+ * 覆盖率账 → status 尾巴。**算不出来就什么都不加**（没人说话时不编 0%）。
  *
- * 只报三个数：覆盖率、人声秒数、像说话没字的段数。
- * 「落在非人声 X 秒」不进 status 行（太长），要诊断跑 `node scripts/coverage.mjs`。
+ * 只报三个数：覆盖率、送审语音秒数、出字段秒数；有「送了一段却一个字都没出」的再带段数。
  */
 export function describeCoverage(c) {
-  if (!c || c.coverage == null) return '';
-  const noText = c.speechButNoText?.spans ? `，像说话没字 ${c.speechButNoText.spans} 段` : '';
-  return `；覆盖 ${c.coverage}%（人声 ${Math.round(c.audio.speechSec)}s）${noText}`;
+  if (!c || c.ratio == null) return '';
+  const empty = c.emptySegs ? `，像说话没字 ${c.emptySegs} 段` : '';
+  return `；覆盖 ${c.ratio}%（语音 ${Math.round(c.speechSec)}s / 出字 ${Math.round(c.textSec)}s）${empty}`;
 }
 
 /**
@@ -1009,6 +1008,12 @@ export function createListener({
   const pollInterval = Number.isFinite(Number(pollMs)) && Number(pollMs) > 0
     ? Number(pollMs) : cfg.pollMs;
   const buffer = createLineBuffer();
+  /**
+   * 覆盖率账的原料：每段「送进 ASR 的音频」记一条
+   * `{at, sentSec, speechSec, gotText}`。只留最近 2000 条（约十几分钟），
+   * 具体窗口由 `coverageOf()` 再筛。
+   */
+  const covEntries = [];
   /** 说话人聚类：每句整句的声纹归成 S1 / S2 …（不猜名字，见 speaker.js） */
   const speakers = createSpeakerTracker();
   /** 上一句的结束时刻与编号：短句沿用它的号（短音频的声纹不可信，见 resolveSpeaker）。 */
@@ -1088,16 +1093,13 @@ export function createListener({
     // 自节流到 2 秒一次，反复调 status 也只是一次 stat + read。
     pollAcoustic();
     /**
-     * 覆盖率账：人声时间里有多少被字盖住。
+     * 覆盖率账：**送进 ASR 的语音秒数里，有多少秒出了字**。
      *
-     * 只在**有原始声学帧**时算 —— `state().acoustic` 是摘过的（只有格数），
-     * 这里要用 `acoustic` 那个原始对象。算不出来就是 null，status 不加这半句，
-     * 不编一个 0%。
+     * 分母用转写器自己报的 `speechSec`（VAD 判定的语音），不是声学指纹猜的人声——
+     * 游戏里 BGM 和对话混在一起时，中频占比这条判据会把真对话判成「有声」
+     * （实测对话帧均值 0.27–0.44 < 0.6），覆盖率会被算成个位数。
      */
-    let coverage = null;
-    try {
-      if (acoustic && buffer.size) coverage = computeCoverage(acoustic, buffer.all);
-    } catch { coverage = null; }
+    const coverage = coverageOf(covEntries, { now: Date.now() });
     return {
       enabled,
       reason,
@@ -1291,12 +1293,24 @@ export function createListener({
         }
         // 处理完就删：目录是工作区，不是档案。留着会几小时涨到几千个文件。
         try { unlinkSync(path); } catch { /* 删不掉就下次再说 */ }
+        /**
+         * 覆盖率账：这一段多长、转写器认为其中多少秒是语音、有没有出字。
+         * 放在「出不出字」之后、`continue` 之前 —— 没出字的段也要记，那才是「像说话没字」。
+         */
+        const segDur = Math.max(0.2, (wav.length - 44) / 2 / 16_000);
+        covEntries.push({
+          at: Date.now(),
+          sentSec: segDur,
+          speechSec: speechSec ?? segDur,
+          gotText: Boolean(text),
+        });
+        if (covEntries.length > 2000) covEntries.splice(0, covEntries.length - 2000);
         // 这句已经有准的了，它的临时快照（还没转的）不必再转
         liveSeen.delete(`live-${t0}.wav`);
         if (!text) continue;
         // 文本层幻觉过滤：整句
         if (isHallucination(text)) { log(`[listen] 丢弃疑似幻觉：${JSON.stringify(text)}`); continue; }
-        const dur = Math.max(0.2, (wav.length - 44) / 2 / 16_000);
+        const dur = segDur;
         const t1 = t0 + Math.round(dur * 1000);
         // 声纹只认**够长的整句**（按"说话长度"算，不是文件长度）；短句沿用上一句的编号
         const spk = resolveSpeaker({
