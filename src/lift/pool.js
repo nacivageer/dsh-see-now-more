@@ -10,6 +10,8 @@
  *   2. **纯数据**：无 IO、无 timers、不读时钟。时间一律由 `entry.at` / `entry.wall` 给，
  *      窗口的参照点取"池里最新的那条"，不是 `Date.now()` —— 这样单测完全可重复。
  *   3. `summary()` 是唤醒文案的一部分，300 字是硬上限（按字符算，一个中文一个字）。
+ *      字数不够装下整个窗口时**按时间铺开取代表句**（首尾必留），不只会剩最后几十秒；
+ *      `summaryDetail()` 同时给「实际覆盖到哪两秒 / 窗口内共几句」，文案不许再谎报十分钟。
  *
  * 条目形状：
  *   { at, wall, kind, text?, acoustic?, src }
@@ -120,38 +122,99 @@ export function createLiftPool({ windowMs = POOL_WINDOW_MS, max = POOL_MAX } = {
    * 唤醒文案用的摘要：最近一段时间的**台词**，按时间正序，一行一句。
    *
    * - `since` 缺省 = 池子最新时间 − 10 分钟（用 `wall` 判，因为那是"这句话什么时候说的"）。
-   * - `maxChars` 是硬上限：从**最新**的一句往回装，装不下就停；只有一句都放不下时才硬截。
-   *   所以窗口内话很多时，越靠近现在的越可能留下 —— 唤醒文案要回答的是"刚才"。
+   * - 全装得下就全留；装不下时按**时间**把有台词的那一段切成若干份，每份取离中点最近的一句，
+   *   首尾（窗口里最早/最新的一句）必留，保证 300 字覆盖整段而不是只剩最近几十秒。
+   * - `maxChars` 仍是硬上限：代表句拼起来还超，就从中间往两头删；两行都放不下时
+   *   只留最新一句并硬截。
    * - 只写台词。纯声音/音乐不在摘要里凑字数（它们的价值在 `around()` 和声学字段里）。
    *
    * @param {{since?:number, maxChars?:number}} [opts]
    * @returns {string}
    */
-  function summary({ since, maxChars = SUMMARY_MAX_CHARS } = {}) {
+  function summary(opts) {
+    return summaryDetail(opts).text;
+  }
+
+  /**
+   * 同 `summary()`，但把「这段摘要到底覆盖了什么」一起交出来（唤醒文案要写实际跨度，
+   * 不能拿池子的 10 分钟冒充摘要的跨度）。
+   *
+   * @param {{since?:number, maxChars?:number}} [opts]
+   * @returns {{text:string, lines:number, chars:number, from:number|null, to:number|null,
+   *            windowFrom:number|null, windowTo:number|null, speech:number}}
+   *   `lines` = 摘要里留了几句；`speech` = 窗口内一共几句台词；
+   *   `from`/`to` = 留下的第一句/最后一句的时间（墙钟）；`windowFrom`/`windowTo` = 池子窗口。
+   */
+  function summaryDetail({ since, maxChars = SUMMARY_MAX_CHARS } = {}) {
     prune();
     const limit = Math.floor(Number(maxChars));
-    if (!Number.isFinite(limit) || limit <= 0) return '';
-    if (!entries.length) return '';
+    const empty = {
+      text: '', lines: 0, chars: 0, from: null, to: null,
+      windowFrom: null, windowTo: null, speech: 0,
+    };
+    if (!Number.isFinite(limit) || limit <= 0) return empty;
+    if (!entries.length) return empty;
 
     const from = Number.isFinite(Number(since)) ? Number(since) : newestAt - span;
     const speech = entries
       .filter((e) => e.kind === 'speech' && e.text && e.wall >= from)
       .sort((a, b) => a.wall - b.wall);
-    if (!speech.length) return '';
+    if (!speech.length) return { ...empty, windowFrom: from, windowTo: newestAt };
 
-    const kept = [];
-    let used = 0;
-    for (let i = speech.length - 1; i >= 0; i -= 1) {
-      const line = `${clock(speech[i].wall)} ${speech[i].text}`;
-      const cost = kept.length ? line.length + 1 : line.length; // +1 = 行间换行符
-      if (used + cost > limit) {
-        if (!kept.length) kept.push(line.slice(0, limit));
-        break;
+    const lineOf = (e) => `${clock(e.wall)} ${e.text}`;
+    const costOf = (list) => list.reduce((n, e, i) => n + lineOf(e).length + (i ? 1 : 0), 0);
+    let kept = speech;
+    if (costOf(speech) > limit) {
+      // 目标行数按平均行长估；首尾两句单独占掉两个名额，剩下的才分箱
+      const avg = costOf(speech) / speech.length;
+      const slots = Math.max(3, Math.floor(limit / Math.max(1, avg)));
+      const target = Math.max(1, Math.min(speech.length, slots - 2));
+      /**
+       * 分箱铺在**有台词的那一段**上，不是整个池子窗口：
+       * 窗口前 8 分钟没人说话时，按窗口分箱会把预算浪费在空箱上（实测 80 句挤在
+       * 最后 79 秒，只挑出 4 句、83 字）。实际跨度由首尾两句报给文案，不会谎报十分钟。
+       */
+      const start = speech[0].wall;
+      const end = speech[speech.length - 1].wall;
+      const width = Math.max(1, end - start);
+      const picked = new Map();
+      const add = (e) => picked.set(`${e.wall}|${e.text}`, e);
+      // 首尾必留：`from`/`to` 报的就是这两句，删了就会谎报跨度
+      add(speech[0]);
+      add(speech[speech.length - 1]);
+      for (let b = 0; b < target; b += 1) {
+        const lo = start + (width * b) / target;
+        const hi = start + (width * (b + 1)) / target;
+        const mid = (lo + hi) / 2;
+        let best = null;
+        let bestD = Infinity;
+        for (const e of speech) {
+          if (e.wall < lo) continue;
+          if (b === target - 1 ? e.wall > hi : e.wall >= hi) continue;
+          const d = Math.abs(e.wall - mid);
+          if (d < bestD) { bestD = d; best = e; }
+        }
+        if (best) add(best);
       }
-      kept.push(line);
-      used += cost;
+      kept = [...picked.values()].sort((a, b) => a.wall - b.wall);
+      while (costOf(kept) > limit && kept.length > 2) {
+        // 从中间删：保住首尾（跨度）和最新一句（上下文）
+        kept.splice(Math.floor(kept.length / 2), 1);
+      }
+      if (costOf(kept) > limit) kept = [speech[speech.length - 1]];
     }
-    return kept.reverse().join('\n').slice(0, limit);
+
+    const text = kept.map(lineOf).join('\n').slice(0, limit);
+    return {
+      text,
+      lines: kept.length,
+      chars: text.length,
+      from: kept[0].wall,
+      to: kept[kept.length - 1].wall,
+      windowFrom: from,
+      windowTo: newestAt,
+      speech: speech.length,
+    };
   }
 
   /**
@@ -188,7 +251,7 @@ export function createLiftPool({ windowMs = POOL_WINDOW_MS, max = POOL_MAX } = {
     newestAt = -Infinity;
   }
 
-  return { push, summary, around, size, clear };
+  return { push, summary, summaryDetail, around, size, clear };
 }
 
 /** 插件里共享的那一个池子（接线那一棒直接用导出的函数，不必自己建）。 */
@@ -196,6 +259,7 @@ const defaultPool = createLiftPool();
 
 export const push = (entry) => defaultPool.push(entry);
 export const summary = (opts) => defaultPool.summary(opts);
+export const summaryDetail = (opts) => defaultPool.summaryDetail(opts);
 export const around = (timeMs, opts) => defaultPool.around(timeMs, opts);
 export const size = () => defaultPool.size();
 export const clear = () => defaultPool.clear();

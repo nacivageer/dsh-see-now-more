@@ -289,9 +289,20 @@ export function createLift({ config = {}, now = () => Date.now(), senses = {}, s
       ? `那一刻的画面：\`see_now({action:"lift", since:${t0}})\``
         + `（帧时间 ${clock(png.at)}，与台词差 ${png.deltaMs} ms）`
       : '那一刻的画面：**没了** —— 比 30 秒缓冲还早。只能按文字判断，别拿现在顶。';
+    const summary = liftPool.summaryDetail();
+    /**
+     * 文案里写的是**摘要实际覆盖**的那一段，不是池子的十分钟：
+     * 300 字装不下整个窗口时，摘要按时间取代表句（首尾必留），
+     * 但仍然可能只覆盖其中几分钟 —— 不写实际跨度就是谎报（2026-11-17 改）。
+     */
+    const summaryBlock = summary.text
+      ? `最近十分钟的台词（实际覆盖 ${clock(summary.from)}–${clock(summary.to)}，`
+        + `${summary.lines} 句${summary.speech > summary.lines ? `，窗口内共 ${summary.speech} 句` : ''}）：\n`
+        + `${summary.text}\n`
+      : '最近十分钟没有可读的台词（只有声音/环境音）。\n';
     const text = `[黑听] ${clock(at)} · 听到「${hits[0].text}」（${hits[0].reason}）—— 最近 5 分钟有对话，抬头看一眼。\n`
       + `${frameLine}\n`
-      + `最近十分钟的台词：\n${liftPool.summary()}\n`
+      + summaryBlock
       + '值得细看就 `see_now({action:"watch"})`；不值得就什么都别做，我继续听。'
       + hint();
     const ok = await wake(text);

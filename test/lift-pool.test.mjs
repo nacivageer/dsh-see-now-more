@@ -72,7 +72,7 @@ test('乱序 push：按 at 排好，摘要不会把后到的旧句放最后', ()
   assert.ok(s.indexOf('前一句') < s.indexOf('后一句'), s);
 });
 
-test('summary 默认硬上限 300 字，且留下的都是靠近现在的', () => {
+test('summary 默认硬上限 300 字，且按时间铺开（首尾都在，不是只剩最后几秒）', () => {
   const pool = createLiftPool();
   const lines = 80;
   for (let i = 0; i < lines; i += 1) {
@@ -83,9 +83,56 @@ test('summary 默认硬上限 300 字，且留下的都是靠近现在的', () =
   const s = pool.summary();
   assert.ok(s.length <= SUMMARY_MAX_CHARS, `摘要 ${s.length} 字，超过 ${SUMMARY_MAX_CHARS}`);
   assert.ok(s.length > 0);
-  // 最新一句必须在；最老的一句不该挤掉它
+  // 首尾都要在：窗口最早那句决定实际覆盖的起点，最新一句是刚落下的上下文
+  assert.match(s, /这是第00句/);
   assert.match(s, /这是第79句/);
-  assert.doesNotMatch(s, /这是第00句/);
+
+  const d = pool.summaryDetail();
+  assert.equal(d.from, T0);
+  assert.equal(d.to, T0 + 79_000);
+  assert.equal(d.speech, 80);
+  assert.ok(d.lines >= 3 && d.lines < 80, `摘了 ${d.lines} 句，应当是按时间铺开的子集`);
+  assert.ok(d.text.length <= SUMMARY_MAX_CHARS);
+});
+
+test('summaryDetail：实际覆盖的是有台词的那段，窗口起点不等于摘要起点', () => {
+  const pool = createLiftPool();
+  pool.push(speech(T0 + 8 * MIN, '后段一'));
+  pool.push(speech(T0 + 8 * MIN + 30_000, '后段二'));
+  pool.push(speech(T0 + 9 * MIN, '后段三'));
+  pool.push({ at: T0 + 9 * MIN + 10_000, wall: T0 + 9 * MIN + 10_000, kind: 'music' });
+
+  const d = pool.summaryDetail();
+  assert.equal(d.from, T0 + 8 * MIN);
+  assert.equal(d.to, T0 + 9 * MIN);
+  assert.equal(d.windowFrom, T0 - 50_000);   // 最新一条（音乐）往前 10 分钟
+  assert.equal(d.windowTo, T0 + 9 * MIN + 10_000);
+  assert.equal(d.lines, 3);
+  assert.equal(d.speech, 3);
+  assert.match(d.text, /后段一/);
+  assert.match(d.text, /后段三/);
+  assert.doesNotMatch(d.text, /后段二.*后段一/);   // 时间序，不是倒序
+});
+
+test('summaryDetail：只有声音没有台词时，文本为空但窗口仍报出来', () => {
+  const pool = createLiftPool();
+  pool.push({ at: T0, kind: 'music' });
+  const d = pool.summaryDetail();
+  assert.equal(d.text, '');
+  assert.equal(d.from, null);
+  assert.equal(d.to, null);
+  assert.equal(d.speech, 0);
+  assert.equal(d.windowTo, T0);
+});
+
+test('summaryDetail：极小时只留最新一句并硬截，不超 maxChars', () => {
+  const pool = createLiftPool();
+  pool.push(speech(T0, '第一句非常非常长的台词'));
+  pool.push(speech(T0 + 1000, '最新一句也非常非常长的台词'));
+  const d = pool.summaryDetail({ maxChars: 12 });
+  assert.ok(d.text.length <= 12, `实际 ${d.text.length} 字`);
+  assert.equal(d.lines, 1);
+  assert.match(d.text, /最新/);
 });
 
 test('summary：maxChars 可调，极小时硬截且不超限', () => {
