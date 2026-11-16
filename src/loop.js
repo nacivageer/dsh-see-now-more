@@ -28,14 +28,16 @@
  * "它答一句就完了"。取消/超时的处理放在 `runner.watch()` 自己的等待循环里。
  */
 
-import { startTicker, wakeWithRetry, deliveryMode } from './timer.js';
-import { windowAlive, windowPidAlive } from './window.js';
-import { appendSpoken, chatWatcherShared, chatWaiterCount, lastSaidNote, markDelivered,
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+import { startTicker, wakeWithRetry, deliveryMode } from './timer.js';import { windowAlive, windowPidAlive } from './window.js';
+import { appendSpoken, chatWatcherShared, chatWaiterCount, dshHome, lastSaidNote, markDelivered,
          markRelaySeen } from './chat.js';
 import { noteInterjected } from './interject.js';
 import { onSpeech, speechSubscribers } from './speech.js';
 import { estimateSpeechMs, nextProactiveAt } from './pacing.js';
-import { listenGap, trajectoryText } from './listen.js';
+import { listenGap } from './listen.js';
 import { appendLift, appendLiftDebug } from './lift/log.js';
 import { createLift } from './lift/index.js';
 import { bloodbarTailText, shouldGlance } from './bloodbar.js';
@@ -81,6 +83,97 @@ const LINE_WAKE_GAP_MS = 60_000;
  */
 const IDLE_WAKE_MS = 15 * 60_000;
 const TICK_MS = 2000;
+
+/**
+ * 「合并唤醒」的预算（2026-11-16 用户要求：「可以合并」）。
+ *
+ * 连续对白时原来是每 30 秒醒一次，一晚几百轮；合并后 2 分钟内的话攒成一条。
+ * 但合并带来一个新风险：**一条唤醒可能无限长** —— 2 分钟按每 2–3 秒一句能到
+ * 40–90 句、上千字，既费 token 也可能把窗口气泡撑爆。所以这里写死预算：
+ * 单条最多 12 句 / 600 字，**超了从最旧的丢**（新台词更相关），并如实写「另有 N 句未列」。
+ *
+ * 配 `test/merge-said.test.mjs` 守着 —— 这两个数只能有意地改，不能被顺手调宽松。
+ */
+export const MERGE_WINDOW_MS = 120_000;
+/** 说话停了（静音/没数据）且已经攒下至少 2 句 → 提前结账，别让尾巴等满 2 分钟。 */
+export const MERGE_QUIET_FLUSH_MS = 20_000;
+export const MERGE_MAX_LINES = 12;
+export const MERGE_MAX_CHARS = 600;
+
+/**
+ * 这批台词从"第一句"到"现在"过了多久（毫秒）。
+ *
+ * 单独抽出来是因为踩过：`lastAudioWakeAt` 的初值是 `0`（"从没叫过"），
+ * 直接 `now - 0` 会得到 1794843709 秒那种"上次叫醒在 1970 年"的跨度
+ * （2026-11-16 实报，第一句合并唤醒就写着「这 1794843709 秒里」）。
+ * 没叫过时以**这批第一句**为基准。
+ */
+export function mergeSpanMs(now, lastWakeAt, firstT0) {
+  const base = Number(lastWakeAt) || Number(firstT0) || Number(now);
+  return Math.max(0, Number(now) - base);
+}
+
+/**
+ * 把一段台词压成一条唤醒正文：**先保最新的**，到预算就停。
+ *
+ * @param {Array<{text?: string}>} lines 按时间正序
+ * @returns {{lines: string[], text: string, dropped: number}}
+ */
+export function mergeSaid(lines, { maxLines = MERGE_MAX_LINES, maxChars = MERGE_MAX_CHARS } = {}) {
+  const all = (lines ?? []).map((l) => String(l?.text ?? '').trim()).filter(Boolean);
+  const picked = [];
+  let chars = 0;
+  for (let i = all.length - 1; i >= 0; i -= 1) {
+    const t = all[i];
+    if (picked.length >= maxLines) break;
+    // 至少留一句：哪怕单句就超预算，也不能返回空
+    if (picked.length && chars + t.length > maxChars) break;
+    picked.push(t);
+    chars += t.length;
+  }
+  picked.reverse();
+  return { lines: picked, text: picked.join(' / '), dropped: all.length - picked.length };
+}
+
+
+/**
+ * 台词全文落盘（2026-11-16 用户选方案 2：“落盘 + 摘要”）。
+ *
+ * 唤醒里只带 12 句摘要（省常驻 token），**没列出来的句子不丢**——
+ * 按天写进 `$DSH_HOME/see-now/transcript/<YYYY-MM-DD>.jsonl`，唤醒末尾给路径。
+ * 想要"听全"就按需读文件：读取只在那一刻花 token，不占每条唤醒。
+ */
+export function transcriptRelPath(at = Date.now()) {
+  const d = new Date(at);
+  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    + `-${String(d.getDate()).padStart(2, '0')}`;
+  return join('see-now', 'transcript', `${ymd}.jsonl`);
+}
+
+export function transcriptPath(env = process.env, at = Date.now()) {
+  return join(dshHome(env), transcriptRelPath(at));
+}
+
+/** 一行台词 → 落盘记录（空白句不收）。 */
+export function transcriptEntry(l) {
+  const text = String(l?.text ?? '').trim();
+  if (!text) return null;
+  return { t0: Number(l?.t0) || 0, t1: Number(l?.t1) || 0, text };
+}
+
+/** 把这一批台词全部追加进当天文件；写不进去不影响唤醒。 */
+export function writeTranscript(lines, at = Date.now(), env = process.env) {
+  try {
+    const rows = (lines ?? []).map(transcriptEntry).filter(Boolean);
+    if (!rows.length) return 0;
+    const p = transcriptPath(env, at);
+    mkdirSync(dirname(p), { recursive: true });
+    appendFileSync(p, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8');
+    return rows.length;
+  } catch {
+    return 0;
+  }
+}
 
 /** 连续这么多次叫不醒就停：会话没了还每 8 秒烧一次模型，是最贵的失败模式 */
 const WAKE_FAILS_MAX = 2;
@@ -389,7 +482,17 @@ export function startLoop({
    */
   let lastAudioKind = null;
   let lastAudioWakeAt = 0;
+  /**
+   * 已经报过的最新一句台词的 `t0`（毫秒）。
+   *
+   * **不能用 `lastAudioWakeAt` 兼这个用**：叫醒那一刻之后才有句开始（t0 落在叫醒之前）
+   * 的台词会被漏掉；而初值 0 又会让"从没叫过"被算成"上次叫醒在 1970 年"
+   * —— 2026-11-16 实报：合并唤醒第一句写成「这 1794843709 秒里听见 1 句」。
+   */
+  let lastHeardT0 = 0;
   let unansweredListenWakes = 0;
+  /** 攒台词时上一次记过的句数（只在变化时写日志，免得每 2 秒刷一行）。 */
+  let lastMergePending = 0;
   /**
    * 黑听抬头的编排（判档 / 取帧 / 记账 / 叫醒）在 `src/lift/index.js`。
    *
@@ -503,72 +606,80 @@ export function startLoop({
    */
   async function maybeWakeFromAudio() {
     const now = Date.now();
-    if (now - lastAudioWakeAt < listenGap(unansweredListenWakes)) return;
     let traj = null;
     try { traj = runner.trajectory?.(now - 60_000, now) ?? null; } catch { traj = null; }
     const seg = traj?.segments?.[traj.segments.length - 1];
-    if (!seg || seg.kind === lastAudioKind) return;
+    if (!seg) return;
     /**
-     * 静音 / 没数据不叫醒：屏幕上没东西可看，叫醒只是白烧一轮 token
-     * （2026-11-08 实报：重载后进仅监听，第一条唤醒就是「静音 9s（持续中）」）。
-     * 但照样记成 lastAudioKind —— 之后"从静音转有声"还能正常叫一次。
-     */
-    if (seg.kind === 'silent' || seg.kind === 'nodata') {
-      lastAudioKind = seg.kind;
-      return;
-    }
-    /**
-     * **别拿 3 秒就叫醒模型。** 首次实测（2026-11-08）就是这样：音频一进来 3 秒，
-     * 轨迹只有「有声 3s（持续中）」，模型既不知道之前是不是静音、也看不出在升还是在降，
-     * 等于问了一句没有信息量的问题。
+     * **只认新台词**（2026-11-16 用户要求：「这种意义不大的唤醒还不如省掉算了」）。
      *
-     * 两道门槛：轨迹至少 8 秒；当前状态至少稳定 3 秒（一声鼓点不算"状态"）。
-     */
-    if (traj.spanSec < 8 || seg.sec < 3) return;
-    /**
-     * **没有新台词就不叫**（2026-11-16 用户要求：「这种意义不大的唤醒还不如省掉算了」）。
+     * 以前只要声音形状变了（人声突出 → 有声 → 起节拍）就叫一轮，唤醒里除了
+     * "有声音"什么都没给 —— 模型只能抬眼看图才知道发生了什么，等于花一轮 token
+     * 换一句"我不知道该看什么"。暂停游戏时的 BGM + 人群低语正好是重灾区：
+     * 声学层判「人声突出」没错，但它不是"值得打扰的消息"。
      *
-     * 以前只要声音形状变了（人声突出 → 有声 → 起节拍）就叫一轮，而那种唤醒里
-     * 除了"有声音"什么都没给 —— 模型只能抬眼看图才知道发生了什么，
-     * 等于花一轮 token 换一句"我不知道该看什么"。用户侧看到的就是一串
-     * 「最近 9 秒：有声 2s → 人声突出 7s」。
-     *
-     * 现在的口径：**只有"听见了新的话"才值得打扰**。纯音乐/音效/环境声不叫，
+     * 现在的口径：**只有转出定稿台词才叫**；纯音乐/音效/环境声不叫，
      * 但照样记 `lastAudioKind`（之后从这类声音转成说话还能正常叫一次）。
      */
-    let freshForWake = [];
+    let fresh = [];
     try {
-      freshForWake = (runner.recentLines?.(now - 60_000, now) ?? [])
+      fresh = (runner.recentLines?.(now - 300_000, now) ?? [])
         .filter((l) => l && l.partial === false && String(l.text ?? '').trim()
-          && Number(l.t0) > lastAudioWakeAt);
-    } catch { freshForWake = []; }
-    if (!freshForWake.length) {
-      lastAudioKind = seg.kind;
-      log(`[listen] 声音变了（${seg.kind}）但没听见新台词，不叫醒`);
+          && Number(l.t0) > lastHeardT0);
+    } catch { fresh = []; }
+    if (!fresh.length) {
+      if (seg.kind !== lastAudioKind) {
+        lastAudioKind = seg.kind;
+        log(`[listen] 声音变了（${seg.kind}）但没听见新台词，不叫醒`);
+      }
       return;
     }
+    /**
+     * **合并**（2026-11-16 用户要求「可以合并」）：有新台词也不立刻叫，
+     * 等攒够 `MERGE_WINDOW_MS`，或者说话停了（静音 + 至少 2 句）再结账。
+     * 一条唤醒最多带 `MERGE_MAX_LINES` 句 / `MERGE_MAX_CHARS` 字（见 mergeSaid）。
+     *
+     * 时间窗从**这批台词的第一句**算起，不从 `lastAudioWakeAt` 算 ——
+     * 后者初值是 0（"从没叫过"），直接相减会得到 1794843709 秒那种数。
+     */
+    const merged = mergeSaid(fresh);
+    const firstT0 = Number(fresh[0]?.t0) || now;
+    const spanMs = mergeSpanMs(now, lastAudioWakeAt, firstT0);
+    const quiet = seg.kind === 'silent' || seg.kind === 'nodata';
+    const dueByWindow = spanMs >= MERGE_WINDOW_MS;
+    const dueByQuiet = quiet && spanMs >= MERGE_QUIET_FLUSH_MS
+      && (merged.lines.length >= 2 || spanMs >= 45_000);
+    if (!dueByWindow && !dueByQuiet) {
+      if (fresh.length !== lastMergePending) {
+        lastMergePending = fresh.length;
+        log(`[listen] 攒台词 ${fresh.length} 句（这批已 ${Math.round(spanMs / 1000)}s）`);
+      }
+      lastAudioKind = seg.kind;
+      return;
+    }
+    // 被退避挡掉的这一拍**不**加 unanswered —— 那不是"叫了没人理"
+    if (now - lastAudioWakeAt < listenGap(unansweredListenWakes)) return;
+
+    lastMergePending = 0;
     lastAudioKind = seg.kind;
     lastAudioWakeAt = now;
+    lastHeardT0 = Math.max(lastHeardT0, Number(fresh[fresh.length - 1]?.t0) || 0);
     unansweredListenWakes += 1;
-    const tempo = traj.tempo
-      ? `，节拍 ~${Math.round(traj.tempo.bpm)} BPM（可信 ${traj.tempo.conf.toFixed(2)}）` : '';
-    /**
-     * 带绝对时间 + 一句"过时了就当没看见"。
-     *
-     * 唤醒是**排队投递**的：模型正在跑一轮时它只能等，等到的可能是几分钟前的动静。
-     * 2026-11-08 实测：循环早就停了，一条「最近 3 秒：有声 3s」照样在几分钟后弹进来，
-     * 和实时的长得一模一样 —— 没有时钟就没法判断该不该理它。
-     */
+    // 全文落盘：摘要里没列的句子也在这里（方案 2 的关键——省 token 但不丢内容）
+    writeTranscript(fresh, now);
     const clock = new Date(now).toLocaleTimeString('zh-CN', { hour12: false });
-    const said = freshForWake.slice(-4).map((l) => l.text.trim()).join(' / ');
-    const text = `[仅监听] ${clock} · 最近 ${Math.round(traj.spanSec)} 秒：${trajectoryText(traj)}${tempo}。\n`
-      + `最近听见的台词：${said}\n`
+    const spanSec = Math.max(1, Math.round(spanMs / 1000));
+    const when = spanSec >= 30 ? `这 ${spanSec} 秒里` : '刚刚';
+    const dropped = merged.dropped
+      ? `\n（只列最新的 ${merged.lines.length} 句，另有 ${merged.dropped} 句未列；`
+        + `全文 ${transcriptRelPath(now).replace(/\\/g, '/')}）` : '';
+    const text = `[仅监听] ${clock} · ${when}听见 ${fresh.length} 句：\n`
+      + `${merged.text}${dropped}\n`
       + '值得看就 `see_now({action:"watch"})` 看 2–3 张；不值得就什么都别做，我继续听。'
-      + '（这条要是来得太晚 —— 你现在看到时声音早停了、或者 `status` 显示根本没在听 —— 就当没听见，别为它开画面。）'
       + lastSaidHint()
       + bloodbarTail();
     if (targetBusy()) {
-      parkAsNote(`[黑听·待领] ${clock} 听见：${said}（那会儿你正跑着一轮，没叫醒）`);
+      parkAsNote(`[黑听·待领] ${clock} ${when}听见 ${fresh.length} 句：${merged.text}`);
       unansweredListenWakes = Math.max(0, unansweredListenWakes - 1);
       return;
     }
