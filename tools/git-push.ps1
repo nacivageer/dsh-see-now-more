@@ -37,7 +37,7 @@
   只探路并打印将要执行的推送（git push --dry-run），不改远端。
 
 .PARAMETER ProbeSeconds
-  单条路探测的超时秒数，默认 6。
+  单条路探测的超时秒数，默认 15（6 秒在墙上会被误判成"不通"：实测握手能到 10 秒以上）。
 
 .PARAMETER PushSeconds
   整条推送命令的超时秒数，默认 120。
@@ -57,7 +57,7 @@ param(
   [string]$Proxy = '',
   [switch]$PreferProxy,
   [switch]$DryRun,
-  [int]$ProbeSeconds = 6,
+  [int]$ProbeSeconds = 15,
   [int]$PushSeconds = 120,
   [string]$RepoPath = ''
 )
