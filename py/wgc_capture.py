@@ -13,10 +13,14 @@ Windows Graphics Capture 抓的是**窗口自己的表面**，被遮挡照样有
   --fps       输出帧率上限（WGC 按窗口刷新率给帧，这里丢帧到 fps）
   --region    `x,y,w,h`，**屏幕物理像素**；给了就只输出这一块
   --size      强制输出尺寸 `WxH`（给了就缩放到这个尺寸；不传则 region/整窗原尺寸）
+  --check     只探一次：打印一行 JSON（hwnd / title / minimized / rect）就退出，不建会话
 
 输出：每帧 `width*height*4` 字节、通道序 BGRA（与 gdigrab 的 bgr0 一致），
       尺寸由第一行 JSON 头给一次：`{"w":…,"h":…}`。
       **读的一方必须先读这一行**，否则会把头当成像素。
+
+退出码：0 正常；1 采集中出错；2 参数错；3 找不到窗口；4 窗口最小化（没有可抓的帧）；
+      5 `--check` 成功但窗口不可抓（最小化）。
 
 约束：
   - 只认**非最小化**的窗口。最小化后窗口停止渲染，WGC 拿不到帧（会超时）。
@@ -29,6 +33,7 @@ import argparse
 import ctypes
 import json
 import sys
+import threading
 import time
 import types
 
@@ -92,6 +97,56 @@ def parse_region(text: str):
     return parts
 
 
+def is_minimized(hwnd: int) -> bool:
+    """最小化 = 窗口停止渲染 → WGC 拿不到帧。**先说清楚，不要去等超时。**"""
+    return bool(user32.IsIconic(ctypes.c_void_p(hwnd)))
+
+
+def resize_box(buf: numpy.ndarray, ow: int, oh: int) -> numpy.ndarray:
+    """
+    缩放到 `ow×oh`，**优先用 PIL 的 BOX（面积平均）**。
+
+    为什么不在 numpy 里自己平均：1922×1126 的 BGRA 转 float32 再两次 reduceat，
+    实测每帧 ~700ms —— 12fps 直接掉到 1fps。PIL 的 BOX 是 C 实现，同样保留灰度，
+    成本差两个数量级。没装 Pillow 时退回 `resize_area`（正确但慢）。
+    """
+    if (buf.shape[1], buf.shape[0]) == (ow, oh):
+        return buf
+    try:
+        from PIL import Image
+    except Exception:  # noqa: BLE001 —— 没装 Pillow 不是错误，只是慢
+        return resize_area(buf, ow, oh)
+    img = Image.frombytes("RGBA", (buf.shape[1], buf.shape[0]),
+                          numpy.ascontiguousarray(buf).tobytes(), "raw", "BGRA")
+    out = numpy.asarray(img.resize((ow, oh), Image.BOX))
+    # PIL 给的是 RGBA，下游要 BGRA（与 gdigrab 的 bgr0 一致）
+    return numpy.ascontiguousarray(out[:, :, [2, 1, 0, 3]])
+
+
+def resize_area(buf: numpy.ndarray, ow: int, oh: int) -> numpy.ndarray:
+    """
+    面积平均缩小（box filter），**不用最近邻**。
+
+    最近邻在 3 倍缩小时会把字幕/文件名这类细笔画整段丢掉一列两列，读起来像换了个字体；
+    面积平均至少保留了灰度。放大（目标比源大）没有面积可平均，退回最近邻。
+
+    BGRA 四个通道一视同仁 —— alpha 本来是 255，平均之后还是 255。
+    """
+    h, w = buf.shape[0], buf.shape[1]
+    if (w, h) == (ow, oh):
+        return buf
+    if ow >= w or oh >= h:
+        ys = (numpy.arange(oh) * h // oh).clip(0, h - 1)
+        xs = (numpy.arange(ow) * w // ow).clip(0, w - 1)
+        return buf[ys][:, xs]
+    iy = (numpy.arange(oh + 1) * h) // oh
+    ix = (numpy.arange(ow + 1) * w) // ow
+    work = buf.astype(numpy.float32)
+    work = numpy.add.reduceat(work, iy[:-1], axis=0) / numpy.diff(iy)[:, None, None]
+    work = numpy.add.reduceat(work, ix[:-1], axis=1) / numpy.diff(ix)[None, :, None]
+    return work.astype(numpy.uint8)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--title", default=None)
@@ -99,6 +154,7 @@ def main() -> int:
     ap.add_argument("--fps", type=float, default=1.0)
     ap.add_argument("--region", default=None)
     ap.add_argument("--size", default=None)
+    ap.add_argument("--check", action="store_true")
     args = ap.parse_args()
 
     hwnd = args.hwnd
@@ -120,8 +176,26 @@ def main() -> int:
         w, h = args.size.lower().split("x")
         out_size = (int(w), int(h))
 
+    if args.check:
+        rect = window_rect(hwnd)
+        mini = is_minimized(hwnd)
+        print(json.dumps({
+            "ok": not mini,
+            "hwnd": hwnd,
+            "title": title,
+            "minimized": mini,
+            "rect": None if not rect else {"x": rect[0], "y": rect[1], "w": rect[2], "h": rect[3]},
+        }), flush=True)
+        return 5 if mini else 0
+
+    # 最小化：窗口停止渲染，起会话也是等到超时 —— 直接说清楚，别让调用方去猜
+    if is_minimized(hwnd):
+        print("ERR minimized", file=sys.stderr)
+        return 4
+
     interval = 1.0 / max(0.1, args.fps)
-    state = {"last": 0.0, "sent": 0, "t0": time.time(), "header": False}
+    state = {"sent": 0, "t0": time.time(), "header": False, "stop": False}
+    latest = {"raw": None, "at": 0.0}
 
     def emit(arr: numpy.ndarray) -> None:
         sys.stdout.buffer.write(numpy.ascontiguousarray(arr).tobytes())
@@ -140,17 +214,23 @@ def main() -> int:
         sys.stdout.flush()
 
     def on_frame_arrived(frame, control):
+        # **只登记、不在这里输出**：WGC 按窗口刷新率给帧（可能 60fps），
+        # 但下游管线按**固定 fps** 给每一帧算时间戳（`t = i / fps`）。
+        # 跟着窗口刷新率输出会让时间轴歪掉，所以拷贝一份交给下面的定频发射线程；
+        # 拷贝也限频（每个输出间隔最多一次），否则 8.6MB×60/s 全是白干。
         now = time.monotonic()
-        if now - state["last"] < interval:
+        if now - latest["at"] < interval * 0.9:
             return
-        state["last"] = now
-        buf = frame.frame_buffer            # (h, w, 4) BGRA
-        fh, fw = buf.shape[0], buf.shape[1]
+        latest["at"] = now
+        latest["raw"] = numpy.array(frame.frame_buffer, copy=True)
 
+    def prepare(buf):
+        """裁剪 + 缩放到输出尺寸。返回 None = 这一拍不该输出任何东西。"""
+        fh, fw = buf.shape[0], buf.shape[1]
         if region:
             rect = window_rect(hwnd)
             if not rect:
-                return
+                return None
             wx, wy, ww, wh = rect
             x, y, w, h = region
             # 屏幕坐标 → 窗口内坐标；窗口动了也跟着动
@@ -160,7 +240,7 @@ def main() -> int:
             cx0, cy0 = max(0, x0), max(0, y0)
             cx1, cy1 = min(fw, x1), min(fh, y1)
             if cx1 - cx0 < w * 0.5 or cy1 - cy0 < h * 0.5:
-                return
+                return None
             crop = buf[cy0:cy1, cx0:cx1, :]
             if (cx1 - cx0, cy1 - cy0) != (w, h):
                 # 贴边裁掉了一部分：补黑到 region 大小，保持帧尺寸恒定
@@ -170,27 +250,52 @@ def main() -> int:
             buf = crop
 
         if out_size and (buf.shape[1], buf.shape[0]) != out_size:
-            # 最近邻缩放就够：血条那种小块不需要插值，watch 那条路不走这里
-            ow, oh = out_size
-            ys = (numpy.arange(oh) * buf.shape[0] // oh).clip(0, buf.shape[0] - 1)
-            xs = (numpy.arange(ow) * buf.shape[1] // ow).clip(0, buf.shape[1] - 1)
-            buf = buf[ys][:, xs]
+            # watch 那条路用面积平均（PIL 的 BOX）：细笔画缩小后还得认得出字
+            buf = resize_box(buf, out_size[0], out_size[1])
+        return buf
 
-        header(buf.shape[1], buf.shape[0])
-        emit(buf)
+    def emit_loop() -> None:
+        """
+        定频发射：每 `interval` 秒输出一帧（窗口没更新就重复上一帧）。
+
+        为什么必须这样：管线的背压和时间轴都按 `t = i / fps` 算，输出频率必须等于 fps。
+        画面没变时重复的是同一张图，变化分算下来接近 0 —— 正好是"没变"该有的样子。
+        """
+        next_at = time.monotonic()
+        while not state["stop"]:
+            # **按截止时间排，不是"干完再睡 interval"**：
+            # 缩放本身要几十毫秒，睡满 interval 再加干活 = 实际帧率掉一档（实测 12 → 4）。
+            next_at += interval
+            delay = next_at - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            else:
+                next_at = time.monotonic()
+            raw = latest["raw"]
+            if raw is None:
+                continue
+            out = prepare(raw)
+            if out is None:
+                continue
+            header(out.shape[1], out.shape[0])
+            emit(out)
 
     def on_closed():
+        state["stop"] = True
         print("closed", file=sys.stderr)
         sys.stdout.buffer.flush()
 
     cap = WindowsCapture(window_hwnd=hwnd)
     cap.event(on_frame_arrived)
     cap.event(on_closed)
+    threading.Thread(target=emit_loop, daemon=True).start()
     try:
         cap.start()
     except Exception as e:  # noqa: BLE001
+        state["stop"] = True
         print(f"ERR {type(e).__name__}: {e}", file=sys.stderr)
         return 1
+    state["stop"] = True
     print(f"done sent={state['sent']} in {time.time() - state['t0']:.1f}s", file=sys.stderr)
     return 0
 

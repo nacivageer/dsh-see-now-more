@@ -18,7 +18,7 @@
  */
 
 import { spawnFrames, pickScreenEngine, screenEngineWarning } from './capture.js';
-import { resolveWgcPython, spawnWindowFrames } from './capture-window.js';
+import { resolveWgcPython, spawnWindowFrames, probeWindow, WGC_FIRST_FRAME_MS, WGC_FPS } from './capture-window.js';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -168,7 +168,8 @@ function optsSig(o) {
  */
 function srcSig(s) {
   if (!s) return null;
-  return [s.kind ?? '', s.path ?? '', s.url ?? '', s.device ?? '', s.realtime === true ? 'rt' : ''].join('|');
+  return [s.kind ?? '', s.path ?? '', s.url ?? '', s.device ?? '', s.title ?? '',
+    s.realtime === true ? 'rt' : ''].join('|');
 }
 
 /**
@@ -1026,12 +1027,48 @@ export function createRunner({
     // 按窗口抓的那条要在看画面时**补起**：用户可能直接 watch（没先进仅监听），
     // 而「打的时候要残血读数」正是它该活着的时候。
     if (bloodbar?.window && bloodbarOn && !bloodbarRun) startBloodbarCapture();
+    /**
+     * **按窗口抓（WGC）的前置判定**，都在建管线之前做完：
+     *
+     * - 没装 `windows-capture` / 没有能跑的 Python → 改抓屏幕。能看，只是被别的窗口挡住时
+     *   看到的是遮挡物；这件事必须说出来，不能静默降级。
+     * - 窗口找不到 → **直接报**。别拿整屏冒充"那个窗口"，那是最难发现的一种错。
+     * - 窗口最小化 → **不抓**。窗口停止渲染，WGC 只能等到超时。
+     * - D3D 独占全屏 → 这里判不出来（会话能起、就是没帧），交给下面首帧超时那条路改抓屏幕。
+     */
+    let srcNote = null;
+    if (src.kind === 'window') {
+      const wgc = resolveWgcPython({ env: process.env });
+      if (!wgc.ok) {
+        srcNote = `按窗口抓不可用（${wgc.reason}），这次改抓屏幕 —— 被别的窗口挡住时看到的是遮挡物。`;
+        log(srcNote);
+        src = { kind: 'screen', ...(src.region ? { region: src.region, engine: 'gdigrab' } : {}) };
+      } else {
+        const probe = probeWindow({ title: src.title, hwnd: src.hwnd });
+        if (!probe.ok) {
+          if (probe.reason === 'minimized') {
+            return {
+              ok: false,
+              reason: 'window-minimized',
+              error: `${probe.detail ?? '窗口最小化了'}：窗口停止渲染，WGC 抓不到帧。`
+                + '恢复窗口再试，或者用 source:"screen" 抓整屏。',
+            };
+          }
+          return {
+            ok: false,
+            reason: 'window-not-found',
+            error: `找不到窗口「${src.title ?? src.hwnd}」：${probe.detail ?? '标题给一段就行（不用全名），确认窗口没关'}。`,
+          };
+        }
+      }
+    }
     // **窗被用户关掉之后，这里必须复位**：`windowState` 缓存着 `{ok:true}`，
     // `windowOpened` 也还是 true —— 不复位的话下一次 watch 会（a）不再开窗，
     // （b）循环立刻又把"窗没了"判成用户关窗，落第二条挂断说明。
     if (!windowAlive()) { windowState = null; windowOpened = false; }
     let engine = src.engine ?? 'auto';
-    if (src.kind === 'screen' && engine === 'auto') engine = await pickScreenEngine({ ffmpegPath });
+    if (src.kind === 'window') engine = 'wgc';
+    else if (src.kind === 'screen' && engine === 'auto') engine = await pickScreenEngine({ ffmpegPath });
     const size = SIZES[q] ?? SIZES[DEFAULT_QUALITY];
     /**
      * region 模式：`width/height` 是**单格**尺寸（长边 = 档位长边），不是画布。
@@ -1061,6 +1098,8 @@ export function createRunner({
     // oneShot 由调用方（watch）决定：**只有换清晰度**时置 true（缓冲区刚扔，等攒满等于白等一个窗口）
     const p = createPipeline({
       ...opts, width: w, height: h, ...regionOpts,
+      // 按窗口抓：缩放成本压不住 12fps，管线按 8fps 建（`dtFrames` 一起改，见 WGC_FPS 的注释）
+      ...(src.kind === 'window' ? { fps: WGC_FPS, dtFrames: WGC_FPS } : {}),
       // 音量条：直接问听声音那条链要 —— 那边已经在算 RMS 了（断句要用），
       // 这里只是把它按时间窗取出来画成柱子，**不额外解码一次音频**。
       audio: { levels: (a, b) => listener.levelsBetween(a, b) },
@@ -1079,20 +1118,29 @@ export function createRunner({
     source = s;
     lastSource = s;
     startedAt = Date.now();
-    run = spawnCapture({
-      source: s,
-      width: p.constants.width,
-      height: p.constants.height,
-      fps: p.constants.fps,
-      ffmpegPath,
-      engine,
-      onFrame: (f) => {
-        frames += 1;
-        // 一帧解码就抛 = 整条管线停摆，这里必须兜住：宁可少一帧，不能让采集线程炸掉
-        try { p.push(f); } catch (e) { lastError = `push: ${e?.message ?? e}`; }
-      },
-      onStderr: (s2) => { if (process.env.DSH_SEE_NOW_DEBUG) log(s2.trim()); },
-    });
+    const onFrame = (f) => {
+      frames += 1;
+      // 一帧解码就抛 = 整条管线停摆，这里必须兜住：宁可少一帧，不能让采集线程炸掉
+      try { p.push(f); } catch (e) { lastError = `push: ${e?.message ?? e}`; }
+    };
+    const onStderr = (s2) => { if (process.env.DSH_SEE_NOW_DEBUG) log(s2.trim()); };
+    run = s.kind === 'window'
+      ? spawnWindowFrames({
+        source: { kind: 'window', title: s.title, hwnd: s.hwnd },
+        // 整窗抓：尺寸由 sidecar 缩放到画布（面积平均），管线拿到的帧永远是固定尺寸
+        size: [p.constants.width, p.constants.height],
+        fps: p.constants.fps,
+        onFrame, onStderr,
+      })
+      : spawnCapture({
+        source: s,
+        width: p.constants.width,
+        height: p.constants.height,
+        fps: p.constants.fps,
+        ffmpegPath,
+        engine,
+        onFrame, onStderr,
+      });
     run.done.then((r) => {
       if (pipeline === p) {
         // **文件正常放完（`ended`）不是错误** —— 别写进 lastError，status 里会显示成故障
@@ -1105,7 +1153,29 @@ export function createRunner({
       lastError = `ffmpeg: ${e?.message ?? e}`;
       if (pipeline === p) teardown('ffmpeg-error');
     });
-    log(`开始看 ${s.kind}${engine && engine !== 'auto' ? `/${engine}` : ''} @${w}×${h}${s.region ? ` region=${s.region.x},${s.region.y},${s.region.w},${s.region.h}` : ''}`);
+    /**
+     * **独占全屏的兜底**：WGC 的会话能建起来，但拿不到表面 → 一帧都不会来。
+     * 这条只能靠首帧超时判（窗口最小化在开始前就拦掉了，不会走到这里）。
+     * 到点没帧就自动改抓屏幕 —— 用户的口径：独占全屏时不用 WGC，换别的抓法。
+     */
+    if (s.kind === 'window') {
+      const wgcWatch = setTimeout(() => {
+        if (pipeline !== p || frames > 0) return;
+        pendingNote = '按窗口抓 6 秒没拿到帧（多半是 D3D 独占全屏），已自动改抓屏幕：'
+          + '现在抓的是屏幕像素，被别的窗口挡住就只看到遮挡物。';
+        log('按窗口抓 6 秒没帧 → 改抓屏幕');
+        try { run?.stop?.(); } catch { /* 已经退了 */ }
+        teardown('wgc-no-frame');
+        void start({
+          src: { kind: 'screen', ...(s.region ? { region: s.region, engine: 'gdigrab' } : {}) },
+          opts: runOpts ?? opts,
+          quality,
+          audio: modeWanted === 'both' ? true : (modeWanted === 'vision' ? false : null),
+        });
+      }, WGC_FIRST_FRAME_MS);
+      wgcWatch.unref?.();
+    }
+    log(`开始看 ${s.kind}${s.title ? `「${s.title}」` : ''}${engine && engine !== 'auto' ? `/${engine}` : ''} @${w}×${h}${s.region ? ` region=${s.region.x},${s.region.y},${s.region.w},${s.region.h}` : ''}`);
     /**
      * 声音并行起，**不 await**：它要等 Python 起来 + 打开回环设备（1~4 秒），
      * 挡在前面会让"开始看"从 0.4 秒变成一个明显能感觉到的卡顿。
@@ -1115,7 +1185,7 @@ export function createRunner({
     applyAudioMode();
     // macOS 没给屏幕录制权限时，采集本身是"成功"的，只是画面全黑 ——
     // 探针已经试出来了，这里把它带回去，让模型（和用户）知道该去系统设置，而不是以为插件坏了。
-    const warning = s.kind === 'screen' ? screenEngineWarning() : null;
+    const warning = srcNote ?? (s.kind === 'screen' ? screenEngineWarning() : null);
     if (warning) log(`⚠️ ${warning}`);
     return { started: true, source: s, engine, quality, params: p.constants, warning,
              audio: modeWanted === 'both', mode: modeWanted };
@@ -1493,7 +1563,7 @@ export function createRunner({
                   : regionChanged ? 'region 变了，重开' : '换模式（逐帧 / 常规）');
           }
           if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
-          await start({
+          const began = await start({
             src: effectiveSrc,
             // 只有**换清晰度**才 oneShot：那一下缓冲区刚被扔掉，等攒满一张就等于白等一整个窗口。
             // 普通的第一次 watch 不 oneShot —— 模型要的是"这 20 秒"，不是"此刻"。
@@ -1501,6 +1571,13 @@ export function createRunner({
             quality: q,
             audio,
           });
+          /**
+           * **开始看失败就不再往下等**。按窗口抓找不到窗口 / 窗口最小化都是"立刻能知道"的
+           * 事，继续等只会等到封顶，然后报一句"没看成"——用户看到的是"它卡住了"。
+           */
+          if (began?.ok === false) {
+            return { ok: false, reason: began.reason, waited: (Date.now() - t0) / 1000, error: began.error };
+          }
         } else if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
 
         // 真要阻塞了才支窗（第一次起进程 ~1.5s，之后是空操作）

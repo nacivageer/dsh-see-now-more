@@ -120,7 +120,8 @@ export function seeNowToolSpec() {
       region: {
         type: 'string',
         description: '只抓一块矩形，格式 "x,y,w,h"（屏幕物理像素）。通常不用你填 —— 用户说"框这块"'
-          + '就调 `{action:"region"}`，他拖完自动存盘，之后 `watch` 默认用它；`"off"` 取消、回整屏。\n'
+          + '就调 `{action:"region"}`，他拖完自动存盘，之后 `watch` 默认用它；`"off"` 取消、回整屏。'
+          + '配 `source:"window"` 时表示窗口内的那一块（仍按屏幕像素写）。\n'
           + '限制（要如实告诉用户）：抓的是屏幕上此刻的像素，被别的窗口挡住就只看到遮挡物；'
           + '抓不到后台 / 最小化窗口；只支持主屏。带区域时帧不再缩小，token 更贵，要省就降 `quality`。',
       },
@@ -149,7 +150,8 @@ export function seeNowToolSpec() {
           + '（左右各裁 10%），按时间从上到下叠成一张长条图，最多 4 条，默认 quality "ultra"。'
           + '用户在看带字幕的对话 / 影视时用 —— 整屏 4 帧会把 32px 的字缩成 5px，只能靠猜。'
           + '代价：条带以上的画面你看不到，别猜那里发生了什么。`preset:""` 或不传即关闭。'
-          + '它不改采集引擎（仍是屏幕像素）：那条带子被别的窗口压住，你就只看到压住它的东西。',
+          + '它不改采集引擎：帧仍来自你给的那个源（屏幕 / 窗口），被别的窗口压住就只看到压住它的东西 —— '
+          + '要稳就用 `source:"window"`。',
       },
       task: {
         type: 'string',
@@ -170,10 +172,12 @@ export function seeNowToolSpec() {
       },
       source: {
         type: 'string',
-        enum: ['screen', 'obs', 'camera', 'file'],
+        enum: ['screen', 'obs', 'camera', 'file', 'window'],
         default: 'screen',
-        description: '只在会话第一次调用时有用："screen"（默认）/ "obs"（OBS 虚拟摄像头）/ "camera"'
-          + '（第一个摄像头）/ "file"（配合 `path` 回放本地视频，调试用）。',
+        description: '"screen"（默认，整屏）/ "window"（**按窗口抓**，配 `window` 给标题：窗口化游戏、'
+          + '常切到别的窗口、或那一路画面会被压住时用它 —— 抓的是窗口表面，被遮挡照样有）/ "obs" / '
+          + '"camera" / "file"（配 `path` 回放视频，调试用）。改它会重开采集；窗口最小化抓不到，'
+          + 'D3D 独占全屏会自动改抓屏幕。',
       },
       path: {
         type: 'string',
@@ -185,10 +189,11 @@ export function seeNowToolSpec() {
       },
       window: {
         type: 'string',
-        description: 'With `bloodbar`: 抓取方式。**不传 = 按屏幕抓**（`gdigrab`）—— 悬浮窗或别的窗口'
-          + '压到血条上，读到的就是压住它的那块。玩全屏游戏、或窗可能压住血条时，传窗口标题里的一段'
-          + '走 WGC：抓窗口自己的表面，被遮挡也读得到，窗口拖动也不用重框。'
-          + '`"off"` 回到抓屏幕。窗口最小化、D3D 独占全屏时 WGC 抓不到（那时用抓屏幕）。',
+        description: '窗口标题里的一段（不用全名），配 `source:"window"` 或 `action:"bloodbar"` 用。\n'
+          + '- `source:"window"`：按这个窗口抓画面 —— 窗口化游戏、常切到别的窗口、窗会被别的窗口压住时用它，'
+          + '抓的是窗口表面，被遮挡照样有。窗口最小化抓不到；D3D 独占全屏会自动改抓屏幕。\n'
+          + '- `bloodbar`：抓血条的方式。不传 = 按屏幕抓（`gdigrab`）—— 悬浮窗或别的窗口压到血条上，'
+          + '读到的就是压住它的那块；玩全屏游戏、或窗可能压住血条时传标题走 WGC。`"off"` 回到抓屏幕。',
       },
       show: {
         type: 'boolean',

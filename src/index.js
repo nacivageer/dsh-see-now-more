@@ -77,8 +77,32 @@ function filePathError(path) {
  *   `reason` 只有 path 不合格时才带（`bad-path`）；region 的错误不带，调用方按 `bad-region` 报。
  */
 function srcOf(args) {
+  const KINDS = ['screen', 'obs', 'camera', 'file', 'window'];
   const kind = args.source ? String(args.source).toLowerCase() : null;
+  if (kind && !KINDS.includes(kind)) {
+    return {
+      src: null,
+      error: `source 只能是 ${KINDS.join(' / ')}，收到「${kind}」。`,
+      reason: 'bad-source',
+    };
+  }
   const src = kind ? { kind } : null;
+  if (src && kind === 'window') {
+    /**
+     * 按窗口抓（WGC）要一个标题子串。**不猜、不给默认值** —— 猜错窗口等于把别人的画面
+     * 当成"这个窗口"，比报错难发现得多。
+     */
+    const title = typeof args.window === 'string' ? args.window.trim() : '';
+    if (!title || /^(off|none|clear|screen)$/i.test(title)) {
+      return {
+        src: null,
+        error: 'source:"window" 要配 window:"<窗口标题里的一段>"（不用全名，例如窗口标题里那两个字），'
+          + '才知道抓哪个窗口。',
+        reason: 'no-window-title',
+      };
+    }
+    src.title = title;
+  }
   if (src && kind === 'file') {
     const bad = filePathError(args.path);
     if (bad) return { src: null, error: bad, reason: 'bad-path' };
@@ -87,8 +111,9 @@ function srcOf(args) {
   }
   const rawRegion = args.region;
   if (rawRegion === undefined || rawRegion === null || rawRegion === '') return { src };
-  if (src && kind !== 'screen') {
-    return { src: null, error: `region 只能配 source:"screen"，现在是 "${kind}"。` };
+  // region 只对"抓屏幕/抓窗口"有意义：文件、摄像头、OBS 没有屏幕坐标可对齐
+  if (src && kind !== 'screen' && kind !== 'window') {
+    return { src: null, error: `region 只能配 source:"screen" 或 "window"，现在是 "${kind}"。` };
   }
   const region = parseRegion(rawRegion);
   if (!region) {
@@ -101,7 +126,9 @@ function srcOf(args) {
   }
   const out = src ?? { kind: 'screen' };
   out.region = region;
-  out.engine = 'gdigrab';
+  // region 的裁剪在采集侧：屏幕源只能走 gdigrab（ddagrab 没有 -offset_x）；
+  // 窗口源由 sidecar 按窗口 rect 换算，引擎仍是 WGC。
+  if (out.kind === 'screen') out.engine = 'gdigrab';
   return { src: out };
 }
 
@@ -1412,6 +1439,12 @@ async function registerAll(ctx) {
               meta: { ok: false, reason: 'cancelled', waited: +r.waited.toFixed(1) },
             };
           }
+          if (r.reason === 'window-minimized' || r.reason === 'window-not-found') {
+            return {
+              text: `${r.error}\n**不会自动改抓屏幕** —— 要整屏就说一声，用 \`source:"screen"\`。`,
+              meta: { ok: false, reason: r.reason },
+            };
+          }
           if (r.userText) {
             return {
               text: `用户刚说话：「${r.userText}」——但这一刻还没收到画面（刚开或刚发完）。\n`
@@ -1509,12 +1542,19 @@ async function registerAll(ctx) {
          */
         const audioArg = typeof args.audio === 'boolean' ? args.audio : null;
         const r = await runner.start({ src: built.src ?? { kind: 'screen' }, audio: audioArg });
+        // 按窗口抓的前置检查没过（找不到窗口 / 最小化）：直接说，别让它看起来像"开始了但没画面"
+        if (r?.ok === false) {
+          return { text: r.error ?? `没开始看（${r.reason}）。`, meta: { ok: false, reason: r.reason } };
+        }
         const audioNote = audioArg === false ? '，只开视觉（没起耳朵）'
           : audioArg === true ? '，耳朵也打开了' : '';
+        const srcLabel = r.source?.kind === 'window'
+          ? `窗口「${r.source.title ?? r.source.hwnd ?? '?'}」`
+          : `${r.source.kind}`;
         return {
           text: r.already
             ? `已经在看了${audioNote ? `，已按这个来${audioNote}` : ''}。`
-            : `开始看 ${r.source.kind}（引擎 ${r.engine}）${audioNote}${r.warning ? `。⚠️ ${r.warning}` : '。'}`,
+            : `开始看 ${srcLabel}（引擎 ${r.engine}）${audioNote}${r.warning ? `。⚠️ ${r.warning}` : '。'}`,
           // **meta 必须能无损序列化**：`runner.start()` 的返回里带着采集源（文件源含 Buffer），
           // 原样塞进 meta 会让宿主报 `value is not lossless JSON`，工具结果整个丢掉 ——
           // 表现是 start 明明生效了、模型却只看到报错（2026-11-07 实报）。
@@ -1852,7 +1892,8 @@ async function registerAll(ctx) {
         const liftText = liftLine(s.lift);
         return {
           text: (s.running
-            ? `在看 ${s.source?.kind} @${s.size?.[0]}×${s.size?.[1]}（${s.quality}，${s.since}s，收到 ${s.frames} 帧，留帧 ${s.stats?.kept ?? 0}，出图 ${s.stats?.sheets ?? 0}）`
+            ? `在看 ${s.source?.kind === 'window' ? `窗口「${s.source.title ?? s.source.hwnd ?? '?'}」` : s.source?.kind}`
+              + ` @${s.size?.[0]}×${s.size?.[1]}（${s.quality}，${s.since}s，收到 ${s.frames} 帧，留帧 ${s.stats?.kept ?? 0}，出图 ${s.stats?.sheets ?? 0}）`
               + `${s.lastError ? `\n⚠ ${s.lastError}` : ''}`
             : `没在采集（${s.idleSec}s 前停的）${s.lastError ? `\n⚠ ${s.lastError}` : ''}`)
             // 循环状态单独一行：**"模型答一句就停"时第一个要看的就是它**
