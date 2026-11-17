@@ -155,6 +155,7 @@ def main() -> int:
     ap.add_argument("--region", default=None)
     ap.add_argument("--size", default=None)
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--stats", action="store_true")
     args = ap.parse_args()
 
     hwnd = args.hwnd
@@ -194,7 +195,7 @@ def main() -> int:
         return 4
 
     interval = 1.0 / max(0.1, args.fps)
-    state = {"sent": 0, "t0": time.time(), "header": False, "stop": False}
+    state = {"sent": 0, "t0": time.time(), "header": False, "stop": False, "calls": 0}
     latest = {"raw": None, "at": 0.0}
 
     def emit(arr: numpy.ndarray) -> None:
@@ -219,6 +220,7 @@ def main() -> int:
         # 跟着窗口刷新率输出会让时间轴歪掉，所以拷贝一份交给下面的定频发射线程；
         # 拷贝也限频（每个输出间隔最多一次），否则 8.6MB×60/s 全是白干。
         now = time.monotonic()
+        state["calls"] += 1
         if now - latest["at"] < interval * 0.9:
             return
         latest["at"] = now
@@ -279,6 +281,11 @@ def main() -> int:
                 continue
             header(out.shape[1], out.shape[0])
             emit(out)
+            if args.stats and state["sent"] % max(1, int(args.fps)) == 0:
+                # **两个数要分开看**：emitted 是侧车吐帧的频率（含重复帧），
+                # calls 才是窗口自己更新了几次 —— 测"游戏卡不卡"只看后者。
+                print(f"stats emitted={state['sent']} calls={state['calls']} "
+                      f"t={time.time() - state['t0']:.1f}", file=sys.stderr, flush=True)
 
     def on_closed():
         state["stop"] = True
