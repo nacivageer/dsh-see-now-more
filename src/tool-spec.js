@@ -184,8 +184,9 @@ export function seeNowToolSpec() {
       },
       window: {
         type: 'string',
-        description: 'With `bloodbar`: 按窗口标题子串抓（Windows Graphics Capture），被遮挡也读得到，'
-          + '例如 "云·鸣潮"；`"off"` 回到抓屏幕。窗口最小化、D3D 独占全屏时抓不到（那时用抓屏幕）。',
+        description: 'With `bloodbar`: **默认按屏幕抓**（框在哪就抓哪）。只有确实要按窗口抓时才传：'
+          + '填窗口标题里的一段（不用全名），走 Windows Graphics Capture，被遮挡也读得到。'
+          + '`"off"` 回到抓屏幕。窗口最小化、D3D 独占全屏时抓不到（那时用抓屏幕）。',
       },
       show: {
         type: 'boolean',

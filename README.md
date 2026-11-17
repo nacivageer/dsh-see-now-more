@@ -299,7 +299,7 @@ macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色�
 | `task` | 用户说"我走开一会儿，你帮我看着"时填一句任务描述：循环不停工、不降级，看到用户回来为止 |
 | `mode` / `audio` | 三档感官：`both` 视听都开 / `vision` 只看 / `audio` 只听；`audio:true/false` 是旧开关的别名 |
 | `source` / `path` / `realtime` | 采集源：屏幕 / 摄像头 / 回放一个视频文件 |
-| `read` / `threshold` / `window` | 配 `action:"bloodbar"`：当场读一次比例 / 低血阈值（默认 0.3）/ 按窗口标题抓（被遮挡也读） |
+| `read` / `threshold` / `window` | 配 `action:"bloodbar"`：当场读一次比例 / 低血阈值（默认 0.3）/ 按窗口标题抓（可选，**默认抓屏幕**） |
 
 模型看到的这份说明有体积预算（每一步都在前缀里重发），所以 schema 里只留决策点，
 实现细节和实测数据都在 docs；预算本身见 [docs/决策记录.md](./docs/决策记录.md)。

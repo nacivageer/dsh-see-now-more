@@ -5,7 +5,7 @@ Windows Graphics Capture 抓的是**窗口自己的表面**，被遮挡照样有
 
 用法（由 `src/capture-window.js` 拉起，不给人直接用）：
 
-    python.exe py/wgc_capture.py --title "云·鸣潮" --fps 1 --region 2261,1525,421,16
+    python.exe py/wgc_capture.py --title "<窗口标题里的一段>" --fps 1 --region 2261,1525,421,16
 
 参数：
   --title     窗口标题子串（EnumWindows 匹配，取第一个可见的）
