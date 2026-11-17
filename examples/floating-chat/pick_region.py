@@ -64,8 +64,11 @@ def main() -> int:
     canvas = tk.Canvas(win, width=sw, height=sh, bg="#000000",
                        highlightthickness=0, cursor="crosshair")
     canvas.pack(fill="both", expand=True)
+    # 顶部提示可以按用途换（框整屏看哪块 / 框血条），由 Node 侧用 DSH_PICK_HINT 传；
+    # 不传就用这句默认文案。
+    hint = os.environ.get("DSH_PICK_HINT") or "拖动框出要给它看的那一块 · 松手确认 · Esc 取消"
     canvas.create_text(sw // 2, 28, fill="#dbe7f5", font=("Microsoft YaHei UI", 12),
-                       text="拖动框出要给它看的那一块 · 松手确认 · Esc 取消")
+                       text=hint)
     # 遮罩是半透明的，选框要**不透明**地再画一遍，否则框里框外一样暗
     box = canvas.create_rectangle(0, 0, 0, 0, outline=ACCENT, width=2, state="hidden")
     fill = canvas.create_rectangle(0, 0, 0, 0, outline="", fill=ACCENT,

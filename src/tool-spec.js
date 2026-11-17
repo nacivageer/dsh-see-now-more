@@ -87,7 +87,8 @@ export function seeNowToolSpec() {
           + '- `lift` — 取 `since` 那一刻的单帧，只在仅监听时（唤醒文案会给你 `t0`）。\n'
           + '- `window` — 配合 `show` 显示或隐藏悬浮窗。\n'
           + '- `region` — 让用户拖一块框，之后 `watch` 默认只看那块。\n'
-          + '- `bloodbar` — 让用户框一条血条；`read:true` 读一次比例。进仅监听后每秒读一次，'
+          + '- `bloodbar` — 让用户框**自己角色**那条常驻 UI 的血条（敌人血条只在交战时出现，别框）；'
+          + '`read:true` 读一次比例。进仅监听后每秒读一次，'
           + '但读数只写进唤醒文案、`watch` 结果和 `status`，**低血不会叫醒你**。\n'
           + '- `start` / `stop` — 显式开关采集（平时 `watch` / `stop` 就够）。',
       },

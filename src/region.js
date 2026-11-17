@@ -67,7 +67,7 @@ export function pickScript() {
  *   `reason`: `cancelled`（用户 Esc / 右键）/ `timeout` / `no-python` / `no-script` / `failed`
  */
 export async function pickRegion({
-  log = () => {}, timeoutMs = PICK_TIMEOUT_MS, env = process.env, save = saveRegion,
+  log = () => {}, timeoutMs = PICK_TIMEOUT_MS, env = process.env, save = saveRegion, hint = null,
 } = {}) {
   const script = pickScript();
   if (!existsSync(script)) return { ok: false, reason: 'no-script', detail: script };
@@ -76,21 +76,23 @@ export async function pickRegion({
   for (const python of pythonCandidates()) {
     if (!hasTkinter(python)) { tried.push(`${python}（无 tkinter）`); continue; }
 
-    const r = await runPicker(python, script, timeoutMs, env, save);
+    const r = await runPicker(python, script, timeoutMs, env, save, hint);
     if (r.spawned === false) { tried.push(`${python}（${r.detail}）`); continue; }
     return r.result;
   }
   return { ok: false, reason: 'no-python', detail: tried.join(' / ') || '没有候选解释器' };
 }
 
-function runPicker(python, script, timeoutMs, env, save = saveRegion) {
+function runPicker(python, script, timeoutMs, env, save = saveRegion, hint = null) {
   return new Promise((resolve) => {
     let child;
     try {
       child = spawn(python, [script], {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
-        env: { ...env, DSH_VIDEO_CACHE_DIR: chatDir(env), DSH_HOME: dshHome(env) },
+        // 取框窗顶部那行提示按用途变（框整屏看哪块 / 框血条），由调用方给；
+        // 不给就用 pick_region.py 里的默认文案。
+        env: { ...env, DSH_VIDEO_CACHE_DIR: chatDir(env), DSH_HOME: dshHome(env), ...(hint ? { DSH_PICK_HINT: hint } : {}) },
       });
     } catch (e) {
       resolve({ spawned: false, detail: String(e?.message ?? e) });

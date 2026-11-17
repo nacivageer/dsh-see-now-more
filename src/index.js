@@ -1766,6 +1766,8 @@ async function registerAll(ctx) {
 
         const r = await pickRegion({
           log,
+          // 取框窗顶部那一行：让人一眼知道这次框的是「自己角色的血条」，不是敌人血条
+          hint: '框住你自己角色那条常驻血条（不是敌人血条） · 松手确认 · Esc 取消',
           // pickRegion 的回调形状是 (region, env)，配置这边收 { region, threshold }
           save: (region, env) => saveBloodbar({ region }, env),
         });        if (!r.ok) {
@@ -1782,7 +1784,8 @@ async function registerAll(ctx) {
         try { runner.setBloodbar?.(loadBloodbar()); } catch { /* 下次 listen 生效 */ }
         return {
           text: `血条框好了：**${bloodbarText(r.region)}**（${r.region.w}×${r.region.h}，屏幕物理像素）。\n`
-            + '只框血条本身：别把数字、图标、队友血条带进去，框越小越准。\n'
+            + '框的是**自己角色**那条常驻 UI 的血条：敌人血条只在交战时出现，读数忽有忽无，别框它；\n'
+            + '也别把数字、图标、队友血条带进去，框越小越准。\n'
             + '换游戏或换 UI 缩放，重新框一次就行。\n'
             + '进仅监听后每秒读一次，读数会出现在唤醒文案和 `status` 里；要当场读一次就传 `read:true`。',
           meta: { ok: true, region: r.region },
