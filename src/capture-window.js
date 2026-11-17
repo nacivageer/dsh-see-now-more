@@ -120,7 +120,7 @@ export function parseProbeLine(line) {
     return {
       ok: o.ok === true,
       hwnd: Number(o.hwnd) || 0,
-      title: typeof o.title === 'string' ? o.title : null,
+      title: typeof o.title === 'string' ? o.title.trim() : null,
       minimized: o.minimized === true,
       rect,
     };

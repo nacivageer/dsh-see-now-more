@@ -618,9 +618,14 @@ export function createRunner({
       }).catch((e) => {
         if (bloodbarRun !== run) return;
         bloodbarRun = null;
-        bloodbarError = `血条采集：${e?.message ?? e}`;
+        // sidecar 的退出码 4 = 窗口最小化了（窗口停止渲染，WGC 拿不到帧）。
+        // 这不是"采集坏了"，别让人去查 ffmpeg，也别按故障重试三次。
+        const minimized = engine === 'wgc' && Number(e?.code) === 4;
+        bloodbarError = minimized
+          ? '血条采集：窗口最小化了（WGC 抓不到帧）；恢复窗口后重新进一次仅监听就会接着读'
+          : `血条采集：${e?.message ?? e}`;
         log(bloodbarError);
-        scheduleBloodbarRetry(engine === 'wgc' ? 'WGC 采集失败' : '采集失败');
+        if (!minimized) scheduleBloodbarRetry(engine === 'wgc' ? 'WGC 采集失败' : '采集失败');
       });
       return { ok: true, engine };
     } catch (e) {

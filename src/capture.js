@@ -324,7 +324,9 @@ export function captureArgs({
         return;
       }
       if (code !== 0) {
-        const error = new Error(`ffmpeg exit ${code}（运行 ${secs}s / ${n} 帧）`
+        // 按窗口抓走的是 Python sidecar，不是 ffmpeg —— 报错里写错执行体，排查时会顺着错线索走
+        const binLabel = source?.kind === 'window' ? 'WGC sidecar' : 'ffmpeg';
+        const error = new Error(`${binLabel} exit ${code}（运行 ${secs}s / ${n} 帧）`
           + `: ${err.trim().slice(-300) || '无 stderr'}`);
         error.code = code;
         error.stderrTail = stderrTail;
