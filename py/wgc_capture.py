@@ -104,11 +104,15 @@ def is_minimized(hwnd: int) -> bool:
 
 def resize_box(buf: numpy.ndarray, ow: int, oh: int) -> numpy.ndarray:
     """
-    缩放到 `ow×oh`，**优先用 PIL 的 BOX（面积平均）**。
+    缩放到 `ow×oh`，优先用 PIL（C 实现）：**面积平均（BOX）保灰度，最近邻只做前置降倍**。
 
-    为什么不在 numpy 里自己平均：1922×1126 的 BGRA 转 float32 再两次 reduceat，
-    实测每帧 ~700ms —— 12fps 直接掉到 1fps。PIL 的 BOX 是 C 实现，同样保留灰度，
-    成本差两个数量级。没装 Pillow 时退回 `resize_area`（正确但慢）。
+    两处实测（2026-11-17，4K 源 3840×2160 → 798×450）：
+      - `frombytes` 每帧 130ms，`frombuffer` 65ms —— 前者多一次整帧拷贝，换成 frombuffer；
+      - 直接 BOX 到目标 181ms（源像素越多越贵），**先最近邻到 2× 目标再 BOX** 只要 95ms，
+        亮度均值几乎一样（69.9 vs 70.3），所以大倍率（≥3×）走两步。
+
+    这两条把 4K 源的吐帧能力从 ~5fps 拉回 ~10fps（1922×1126 那种 2.4× 仍是一步 BOX）。
+    没装 Pillow 时退回 `resize_area`（正确但慢）。
     """
     if (buf.shape[1], buf.shape[0]) == (ow, oh):
         return buf
@@ -116,8 +120,11 @@ def resize_box(buf: numpy.ndarray, ow: int, oh: int) -> numpy.ndarray:
         from PIL import Image
     except Exception:  # noqa: BLE001 —— 没装 Pillow 不是错误，只是慢
         return resize_area(buf, ow, oh)
-    img = Image.frombytes("RGBA", (buf.shape[1], buf.shape[0]),
-                          numpy.ascontiguousarray(buf).tobytes(), "raw", "BGRA")
+    src = numpy.ascontiguousarray(buf)
+    img = Image.frombuffer("RGBA", (buf.shape[1], buf.shape[0]), src, "raw", "BGRA", 0, 1)
+    if buf.shape[1] >= ow * 3 or buf.shape[0] >= oh * 3:
+        # 大倍率：先最近邻压到 2× 目标，把 BOX 的输入像素数降到 1/4 以下
+        img = img.resize((ow * 2, oh * 2), Image.NEAREST)
     out = numpy.asarray(img.resize((ow, oh), Image.BOX))
     # PIL 给的是 RGBA，下游要 BGRA（与 gdigrab 的 bgr0 一致）
     return numpy.ascontiguousarray(out[:, :, [2, 1, 0, 3]])
@@ -196,7 +203,7 @@ def main() -> int:
 
     interval = 1.0 / max(0.1, args.fps)
     state = {"sent": 0, "t0": time.time(), "header": False, "stop": False, "calls": 0}
-    latest = {"raw": None, "at": 0.0}
+    latest = {"out": None, "at": 0.0}
 
     def emit(arr: numpy.ndarray) -> None:
         sys.stdout.buffer.write(numpy.ascontiguousarray(arr).tobytes())
@@ -215,16 +222,23 @@ def main() -> int:
         sys.stdout.flush()
 
     def on_frame_arrived(frame, control):
-        # **只登记、不在这里输出**：WGC 按窗口刷新率给帧（可能 60fps），
-        # 但下游管线按**固定 fps** 给每一帧算时间戳（`t = i / fps`）。
-        # 跟着窗口刷新率输出会让时间轴歪掉，所以拷贝一份交给下面的定频发射线程；
-        # 拷贝也限频（每个输出间隔最多一次），否则 8.6MB×60/s 全是白干。
+        # **在回调里就把这一帧处理完**（裁剪 + 缩放），只留缩好的小图给发射线程。
+        #
+        # 以前是把整帧 copy 一份交给发射线程 —— 4K 源一帧 33MB，10 次/秒就是 330MB/s 的
+        # memcpy，还是拿着 GIL 的；实测把吐帧能力从 ~10fps 压到 ~7fps。现在不在回调里
+        # 留缓冲引用（`frame_buffer` 会被复用），但也不复制整帧：PIL 直接读它。
         now = time.monotonic()
         state["calls"] += 1
         if now - latest["at"] < interval * 0.9:
             return
         latest["at"] = now
-        latest["raw"] = numpy.array(frame.frame_buffer, copy=True)
+        try:
+            out = prepare(numpy.asarray(frame.frame_buffer))
+        except Exception as e:  # noqa: BLE001
+            print(f"ERR prepare: {type(e).__name__}: {e}", file=sys.stderr)
+            return
+        if out is not None:
+            latest["out"] = out
 
     def prepare(buf):
         """裁剪 + 缩放到输出尺寸。返回 None = 这一拍不该输出任何东西。"""
@@ -273,10 +287,7 @@ def main() -> int:
                 time.sleep(delay)
             else:
                 next_at = time.monotonic()
-            raw = latest["raw"]
-            if raw is None:
-                continue
-            out = prepare(raw)
+            out = latest["out"]
             if out is None:
                 continue
             header(out.shape[1], out.shape[0])
