@@ -95,7 +95,9 @@ README 从 680 行 / 39.3 KB 收到 493 行 / 31.5 KB，同时补上原本没有
 
 新增 `test/window-source.test.mjs`：入口造源（缺标题 / `"off"` / 未知 source / region 配对）、
 探针那行 JSON 的解析（正常 / 最小化 / 坏行）。真机验证走
-`py/wgc_capture.py --check` 与 `--fps 8 --size 798x450`（实测 7.5fps、真实画面）。
+`py/wgc_capture.py --check` 与 `--fps 8 --size 798x450`（请求 8fps、输出 7.5fps、真实画面）。
+**口径**：7.5fps 是侧车的发射频率（没新画面时会重复上一帧），不是"游戏帧率"的证据 ——
+同一时段原生抓帧只有 7.7fps，当时游戏本身在卡；侧车上限要等源窗口健康时重测。
 
 ### Changed — 术语：不再写「三人队」
 
