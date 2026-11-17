@@ -2,6 +2,40 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.15] - 2026-11-17
+
+### Changed — `see_now` 的契约实测压掉 48%（12,072 → 5,707 字符，≈3,909 → ≈2,047 token）
+
+这份定义每一步都在宿主的工具前缀里重发。按 345 个会话 / 43,333 步的历史折算，
+它的前缀成本约 ¥9.4；压到现在的体积后约 ¥4.9（`SPEC_BUDGET_CHARS` 挡住了回涨）。
+
+- 删掉的是**论证性长文**：`pace` 的射击游戏帧数对照与 `cutAbs` 的 F1 数字、`region` 的
+  逐档 token 细账、`quality` 的像素表 —— 改成定性判据，实测数据留在 docs/README。
+- 删掉重复：`say` 的「一次 2–3 句」原本在 description 和参数里各写一遍；带日期的
+  用户引用（「2026-11-06 用户说过」）删掉，规则本身保留。
+- 保留的是**决策点**：`say` 是当时唯一被看见/听见的通道、阻塞调用就是停顿、读不清要升档
+  而不是猜、台词是机转、看视频走 `bilibili`。
+- 每个参数补上 `default`（宿主只当注释，但省掉「默认 300」这类句子），
+  `action` / `pace` / `quality` / `source` 补上 `enum`。
+
+### Fixed — 三个参数「用了但没声明」
+
+- `read`（`action:"bloodbar"` 里读一次比例）在 `index.js` 里读、在 `action` 的散文里教模型传，
+  却没在 `parameters` 里声明。宿主不拒未声明参数（编译出的参数对象没有
+  `additionalProperties:false`），所以它靠散文活着 —— 描述一压缩就会断。现在正式声明。
+- `keep`（等价 `task`）和 `t0`（等价 `since`）是没有任何文档的别名，直接删掉读取：
+  唤醒文案里给的一直是 `since`，没有东西在传 `t0`。
+- `lift` 在 description 和唤醒文案里都有，却不在 `action` 的取值列表里；`index.js`
+  认不出动作时的提示也只列了 5 个值。现在 `ACTION_VALUES` 一个真源，三处共用。
+  新增 `test/tool-spec.test.mjs`：声明必须覆盖 `index.js` 读到的每个参数、
+  `action` 每个值都要有分支、`pace`/`quality` 的 enum 必须在 `PACES`/`SIZES` 里、
+  以及体积上限。
+
+### Fixed — 血条框好后还在说「P1a 还没接采集」
+
+`action:"bloodbar"` 框完后那句提示是 P1a 时期的，P1b/P2 早就接上了采集。改成
+「进仅监听后每秒读一次，读数在唤醒文案和 `status` 里；要当场读就传 `read:true`」。
+
 ## [0.1.1-more.14] - 2026-11-17
 
 ### Fixed — 黑听唤醒文案把「300 字」说成「最近十分钟」

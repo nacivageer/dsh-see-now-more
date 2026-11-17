@@ -6,8 +6,15 @@
  * `unsupported JSON schema: parameters.type must be a value schema object`。
  * （`output.schema` 反而是完整 JSON Schema —— 两个形状不一样，别抄错。）
  *
- * 参数**写成什么样，模型就会怎么用**。所以 description 里要把"什么时候调、等多久"说清楚，
- * 而不是罗列字段。
+ * 参数**写成什么样，模型就会怎么用**。所以：
+ * - 决策类的规则留在 description（什么时候调、要不要等、`say` 必须带）；
+ * - 单个参数的规则（默认值、取值范围、配对）留在那个参数上，别在 description 里复述；
+ * - 枚举值走 `enum`，别只写在散文里 —— 宿主按 enum 校验，模型也直接看到候选；
+ * - `default` 只是注释（宿主不替你填默认值），写出来是为了不用在句子里解释默认档。
+ *
+ * **体积是有预算的**：这份定义每一步都在宿主的工具前缀里重发，按 2026-11-17 的账，
+ * 每 1,000 token ≈ 全历史 ¥1.4。`test/tool-spec.test.mjs` 里有一条上限断言挡着，
+ * 加参数/加长文之前先看那一条。实测数据、档位推导过程属于 docs，不属于这里。
  */
 
 /**
@@ -28,231 +35,176 @@ export const DEFAULT_BLOCK_SEC = 300;
 /** 工具名。注册日志、报错文案、测试都从这里取，别各处再写一遍字符串。 */
 export const TOOL_NAME = 'see_now';
 
+/**
+ * `action` 的全部取值。
+ *
+ * 三处共用：`enum`（宿主校验 + 模型看到的候选）、`index.js` 认不出动作时的提示、
+ * 单测（每个值都必须有分支）。少一个值的后果是实的：`lift` 一度只在 description
+ * 里出现、不在这个列表里，于是 `index.js` 的兜底提示教模型「可用 watch / peek /
+ * start / stop / status」—— 唤醒文案刚好在叫它调 `lift`。
+ */
+export const ACTION_VALUES = Object.freeze([
+  'watch', 'peek', 'listen', 'lift', 'start', 'stop', 'status', 'window', 'region', 'bloodbar',
+]);
+
 export function seeNowToolSpec() {
   return {
     name: TOOL_NAME,
     description:
-      'Watch what is on the user\'s screen **live** and get back one image made of several frames. '
-      + 'Frames are picked by how much the picture changes, so a static screen costs almost nothing '
-      + 'while a busy one gives you more frames.\n\n'
-      + 'How to use it:\n'
-      + '- `see_now({action:"watch"})` — **blocking call; this is the normal way to watch.** The first '
-      + 'call returns the current screen in about a second; after that it blocks until a sheet is ready '
-      + '(15–40s when the screen is changing, longer when it is static) or the user types in the floating '
-      + 'window, then returns that sheet. **Call it again right after you reply** — the blocking call IS '
-      + 'the pause; the conversation never ends between sheets. Do not end your turn while the user is '
-      + 'still watching.\n'
-      + '- `see_now({action:"peek"})` — grab the sheet that already piled up, without waiting. Use this '
-      + 'when the plugin wakes you ("有新画面了"), because then you are not inside a `watch` any more.\n'
-      + '- `see_now({action:"status"})` — is it still watching, is the loop alive, is sound attached, '
-      + 'and is the floating window actually visible.\n'
-      + '- `see_now({action:"lift", since})` — **only while black-listening**: the one frame captured at '
-      + 'that instant (`since` = epoch ms, the ASR line\'s `t0` from a "[黑听]" wake). It is **not** "now" — '
-      + 'if the buffer has slid past it you get an explicit "gone"; do not substitute a fresh frame.\n'
-      + '- `see_now({action:"window", show:true})` — bring the floating window back when the user cannot see '
-      + 'it (it can be left hidden from an earlier run). `show:false` hides it again. **Whenever a result '
-      + 'or `status` says the window is hidden, the user is seeing nothing you say** — fix it with this '
-      + 'before you say anything else.\n'
-      + '- `see_now({action:"stop"})`.\n\n'
-      + 'Safety net: if you ever stop calling `watch`, the plugin still keeps capturing and will wake '
-      + 'you with a short note when a new sheet fills up (then `peek`). It also stops everything the '
-      + 'moment the user closes the floating window, and tells you so — when that note appears, do NOT '
-      + 'call `see_now` again until the user asks.\n\n'
-      + '**`say` is the ONLY thing the user sees and hears at the moment you say it.** Your normal reply '
-      + 'text is appended to the floating window\'s log afterwards (so the record of the conversation is '
-      + 'complete), but it is never spoken and never shows up as a bubble at the right time — only `say` '
-      + 'does. So whenever the user might be waiting, watching, or has just typed something, put what you '
-      + 'want to tell them in `say` on the same call. '
-      + 'One `say` = one bubble = one spoken utterance, so put two or three sentences in it rather than '
-      + 'splitting them across calls. Never tell the user their conversation "is not recorded" — it is.\n\n'
-      + '**They are looking at the same screen as you, over and over.** So: do not narrate everything, '
-      + 'do not repeat the sentence you already said (the tool result reminds you of it), and silence is '
-      + 'a perfectly good answer — there is no quota. Say something when it actually changed or when it '
-      + 'is worth pointing at.\n\n'
-      + 'The image is returned as a tool result (not pushed into the chat), so just read it. '
-      + 'Frames are numbered 1..n in time order; the text lists each frame\'s timestamp and pixel size. '
-      + 'Do NOT poll faster than every ~10 seconds — nothing new arrives that fast, and each image costs tokens.\n\n'
-      + '**Sound.** When the machine can hear what is playing (system audio → speech-to-text), the text '
-      + 'also carries a transcript block (it starts with `台词`): what was said during that window, with '
-      + 'timestamps in the same coordinate system as the frames. Use it to follow dialogue and narration '
-      + 'instead of guessing from faces. Two caveats: it is **machine-transcribed** (homophones happen — '
-      + 'never quote it as an exact line), and it only appears when audio capture is available; if the '
-      + 'block is missing, just work from the pictures and do not claim the video was silent.\n\n'
-      + 'If you cannot read something (small text, filenames, a menu), do NOT guess: call again with '
-      + '`quality:"high"` and you get one sharp frame of the current screen in about half a second.\n\n'
-      + '**When NOT to use this.** This is for what is happening on screen **now** — live streams, the user '
-      + 'playing a game, something they are doing in an app. For a recorded video or a whole series you want '
-      + 'reviewed, use the `bilibili` skill instead: it reads the full file, its subtitles and its comments, '
-      + 'while this tool only samples a few frames a minute. The user has said this explicitly (2026-11-06): '
-      + '看视频/电影走 bilibili 技能，直播和游戏才走 see-now。',
+      'See what is on the user\'s screen **now**, as one image made of several frames, and talk to them '
+      + 'through the floating window. Frames are picked by how much the picture changes, so a still screen '
+      + 'costs almost nothing.\n\n'
+      + '- `action:"watch"` (default) is the normal way to watch: the first call returns the current screen '
+      + 'in about a second, then blocks until a sheet is ready (15–40s while the screen changes, longer when '
+      + 'it is still) or the user types in the floating window. **Call it again right after you reply** — the '
+      + 'blocking call IS the pause; the conversation never ends between sheets. Do not end your turn while '
+      + 'the user is still watching.\n'
+      + '- If you stop calling `watch`, capture keeps running and you get woken when a sheet piles up (then '
+      + '`peek`). Everything stops when the user closes the floating window, and that note is final — do not '
+      + 'call `see_now` again until the user asks.\n'
+      + '- **`say` is the only text the user sees and hears at the moment you say it**; your normal reply is '
+      + 'appended to the window log afterwards, never spoken. Never claim the conversation is not recorded '
+      + '— it is.\n'
+      + '- They watch the same screen over and over: do not narrate, do not repeat yourself, silence is a '
+      + 'good answer.\n'
+      + '- If you cannot read something (small text, a filename, a menu), do not guess — call again with '
+      + '`quality:"high"`.\n'
+      + '- A `台词` block in the result is machine-transcribed speech from that window: homophones happen '
+      + '(never quote it as exact), and a missing block does not mean the video was silent.\n\n'
+      + '**Not for recorded video or a series** — the `bilibili` skill reads the whole file, its subtitles '
+      + 'and its comments; this tool samples a few frames a minute.',
     parameters: {
       action: {
         type: 'string',
-        description: 'watch (default) | peek | listen | start | stop | status | window | region | bloodbar\n'
-          + '- `listen` — **只留耳朵**：停画面、音频不停、常驻循环继续跑。用户说「先只听 / 黑听」时用。'
-          + '之后听到值得看的东西，插件会用一条带「最近 60 秒声音轨迹」的消息叫你，'
-          + '你自己判断要不要 `watch` 抬眼；判断不值得就什么都不做。\n'
-          + '- `bloodbar` — 让用户框一条**血条**（黑听抬头血条线）。'
-          + '坐标存 `~/.dsh/see-now/bloodbar.json`，与看图的 `region` 分开；'
-          + '传 `read:true` 抓一次算比例。**进仅监听后会自动每秒读**，但它只是**读数不是触发器**：'
-          + '低血不会叫醒你，只会把「此刻 x%、30 秒前多少、上次低血几点」写在你本来就收到的唤醒文案、'
-          + '`watch` 结果和 `status` 里——要不要 `watch` 看一眼，你自己判断（理由：三人队切人、奶妈、'
-          + '免死会让低血只出现一小会，按阈值唤就是反复白瞥）。'
-          + '传 `window:"<标题子串>"` 改成**按窗口抓**（被遮挡也读得到），`window:"off"` 回到抓屏幕。',
-      },
-      task: {
-        type: 'string',
-        description: 'With action:"watch": 用户分配了一个「盯着」的任务（"我走开一会儿，你帮我看着"）时填一句任务描述。'
-          + '填了之后循环**不会因为闲下来自己收工或降级**——一直看到用户说「我回来了」为止。'
-          + '期间每出一张图会往 `~/.dsh/see-now/missed.jsonl` 记一行（时间/帧数/台词/声音，不叫醒、不花 token），'
-          + '两张之间没有图的区间另记一行（`kind:"gap"`，只有起止秒数），'
-          + '用户回来时你读这个文件就能汇报"错过了什么"，然后 `stop` 或 `listen` 结束任务。',
-      },
-      region: {
-        type: 'string',
-        description: '只抓屏幕上的**一块矩形**（手机竖屏通话、某个播放器窗口之类）。'
-          + '格式 "x,y,w,h"，屏幕物理像素。**通常不用你填**：让用户说"框这块"就调 '
-          + '`see_now({action:"region"})`，屏幕上会变暗、他自己拖一个框，坐标自动存下来，'
-          + '之后每次 `watch` 默认就是那块（存到 `~/.dsh/see-now/region.json`）。\n'
-          + '传 `region:"off"` 取消，回到整屏。\n'
-          + '限制（要如实告诉用户）：抓的是**屏幕上正在显示的像素** —— 这块被别的窗口挡住就只看到挡住它的东西；'
-          + '没接 OBS，抓不到后台/最小化窗口；只支持主屏。\n'
-          + '带上区域后：强制 gdigrab（ddagrab 没有偏移参数）、按区域比例出图（竖屏出竖屏）、'
-          + '每帧长边 = 档位长边、一张默认 2 帧最多 4 帧。token 会比全屏贵（帧不再被缩小）：'
-          + 'low 档 2 帧约 345 token、4 帧约 872（普通全屏 4 帧是 233）；要省钱就降 `quality`。',
-      },
-      threshold: {
-        type: 'number',
-        description: 'With action:"bloodbar": 低于这个比例算「低血」（0–1，默认 0.3）。'
-          + '它只决定报告里「低于阈值 xx%」那半句，**不触发任何叫醒**。',
-      },
-      window: {
-        type: 'string',
-        description: 'With action:"bloodbar": 让它**按窗口抓**（Windows Graphics Capture），'
-          + '填窗口标题的子串，例如 "云·鸣潮"。配了之后这个窗口被别的窗口挡住、失去焦点也照样读得到'
-          + '（`ddagrab`/`gdigrab` 抓的是屏幕像素，被挡住就只剩挡住它的东西）。'
-          + '传 `window:"off"` 回到抓屏幕。'
-          + '限制：窗口**最小化**时拿不到帧；D3D 独占全屏也抓不到（那时游戏一定在前台全屏，用抓起屏幕的方式）。'
-          + '要 `windows-capture`（pip），没装时 `status` 会报「按窗口抓起不来」。',
-      },
-      since: {
-        type: 'number',
-        description: 'With action:"lift": the moment to fetch, in **epoch milliseconds** — '
-          + 'use the `t0` printed in a "[黑听]" wake ("那句话那一刻"). It returns the single frame '
-          + 'captured around that instant (≈222 tokens). If it is older than the 30-second buffer you '
-          + 'get an explicit "gone" — say so instead of showing the current screen as if it were that moment.',
-      },
-      show: {
-        type: 'boolean',
-        description: 'With action:"window": true = 让悬浮窗显示出来（用户看不见窗时用），false = 藏起来'
-          + '（采集照常，只是一句 `say` 也看不见）。不传就只报状态，什么都不改。',
-      },
-      source: {
-        type: 'string',
-        description: 'Where to capture from: "screen" (whole desktop, default), "obs" (OBS virtual camera), '
-          + '"camera" (first webcam). Only matters on the first call of a session. '
-          + 'Use "file" together with path to replay a local video instead of a live source (debugging).',
-      },
-      path: {
-        type: 'string',
-        description: 'With source:"file": absolute path of a video to replay.',
-      },
-      realtime: {
-        type: 'boolean',
-        description: 'With source:"file": replay at 1x speed instead of as fast as ffmpeg can decode.',
-      },
-      pace: {
-        type: 'string',
-        description: '"calm" | "normal"（默认）| "dense" | "game-economic" —— 控制**多久算换一次画面、多久叫醒你一次**。\n'
-          + '用户说**"太密了 / 回复太频繁 / 省点钱 / 慢一点 / 别老说话"**时，立刻传 `pace:"calm"`'
-          + '（20 分以上才算换画面，最多 30 秒叫一次）。这是唯一能真的降低开销的旋钮 —— '
-          + '口头答应"我少说点"不会改变出图频率。\n'
-          + '用户抱怨**"漏了 / 不灵敏 / 太迟钝"**时传 `pace:"dense"`（7 分就算换，最多 8 秒一次，贵）。\n'
-          + '用户在**打游戏、看高速运动画面**，抱怨"发得太频繁 / 一张图糊得看不清 / 顶到限速"时，'
-          + '传 `pace:"game-economic"`：切点门槛抬到 80、出帧按 30 秒运动量攒、每张最多 8 帧、最多 20 秒叫一次。'
-          + '这一档只适合**动作游戏**。实测代价：同一段 137 秒的射击游戏，normal 出 95 帧、action 只出 11 帧；'
-          + '而在一段快剪视频上覆盖率只有 12.7%（normal 67%）。所以**不适合访谈/口播/播放器看剧/快剪视频**'
-          + '（那些内容会半天没反应或漏掉大半镜头，要切回 normal）。\n'
-          + '粘性，一直生效到下次再改；改它要重开采集（约 0.5 秒）。不传就是保持当前档。\n'
-          + '**看视频 / 影视剧**已经自动用 dense 的切点门槛（文件回放时生效，实测 27 段短视频上 cutAbs=7 的切点 F1 是 56.8%，'
-          + '默认 12 只有 51.9% —— 12fps 采样本来就会吃掉一部分快切）；直播/录屏仍是默认档。',
-      },
-      scene: {
-        type: 'boolean',
-        description: '**逐帧 / 逐场景模式**，默认关。'
-          + '打开后：每留下一个画面就单独给你一张**满幅**图（一张图 = 一个场景，不再拼格），'
-          + '并且每换一次画面就叫你一次，你回一句 `say` 说清那是什么。'
-          + '`scene:true` 打开，`scene:false` 关掉；**它是粘性的**，一直生效到这轮看完，'
-          + '不用每次 watch 都传。\n'
-          + '**什么时候才该打开**：用户明确说要"每换一个场景就告诉我"、"每翻一页说一句这是什么"、'
-          + '"逐帧播报"、"一个画面一张图"这类要求时。'
-          + '**平时一律不要开** —— 每次唤醒 = 一张图 + 一轮模型往返，'
-          + '画面每 2 秒换一次就是每分钟 30 次唤醒，很贵，而且用户会嫌你话太多。'
-          + '用户没明确这么说，就别传这个参数。',
+        enum: [...ACTION_VALUES],
+        default: 'watch',
+        description: 'Which entry point.\n'
+          + '- `watch` (default) — keep watching; this is the one you need most of the time.\n'
+          + '- `peek` — take the sheet that already piled up, without waiting (use it after a 唤醒).\n'
+          + '- `status` — loop / sound / window / capability state, as text.\n'
+          + '- `listen` — **只留耳朵**：停画面、音频不停。用户说「先只听 / 黑听」时用；之后插件会用'
+          + '「最近 60 秒声音轨迹」叫你，你自己判断要不要 `watch` 抬眼。\n'
+          + '- `lift` — 取 `since` 那一刻的单帧，只在仅监听时（唤醒文案会给你 `t0`）。\n'
+          + '- `window` — 配合 `show` 显示或隐藏悬浮窗。\n'
+          + '- `region` — 让用户拖一块框，之后 `watch` 默认只看那块。\n'
+          + '- `bloodbar` — 让用户框一条血条；`read:true` 读一次比例。进仅监听后每秒读一次，'
+          + '但读数只写进唤醒文案和 `status`，**低血不会叫醒你**。\n'
+          + '- `start` / `stop` — 显式开关采集（平时 `watch` / `stop` 就够）。',
       },
       say: {
         type: 'string',
-        description: 'What you say to the user — **this is the only text they can see and hear**. '
-          + 'It goes into their floating window as one bubble and is spoken aloud once. '
-          + 'Your normal reply never reaches them. Put two or three sentences in a single `say` '
-          + 'instead of calling again just to add more.',
+        description: '用户此刻唯一看得见也听得见的话：一条气泡 + 朗读一次。一次说 2–3 句，'
+          + '别为了补一句再调一次。',
       },
       seconds: {
         type: 'integer',
-        description: 'With action:"watch": the **upper bound** of the blocking wait, in seconds (default 300, '
-          + 'capped at 860). You normally do not need to touch this: it returns early the moment a sheet '
-          + 'fills up (every 15–40s when the screen is changing) or the user types in the floating window. '
-          + 'The ceiling only matters when the screen is static — then you simply stay blocked instead of '
-          + 'ending your turn, which is exactly right: the blocking call IS the pause.',
+        default: DEFAULT_BLOCK_SEC,
+        description: 'With `watch`: 阻塞等待的上限秒数（默认 300，封顶 860）。平时不用传 —— '
+          + '攒够一张就提前返回；上限只在画面静止时起作用，那时就该一直挂着，而不是结束回合。',
       },
       minFrames: {
         type: 'integer',
-        description: 'With action:"watch": do not bother returning an image with fewer frames than this '
-          + '(default 1). A 1-frame image costs the same as a 4-frame one, so raising this saves tokens '
-          + 'when the screen is mostly static.',
+        default: 1,
+        description: 'With `watch`: 少于这么多帧就不返回（默认 1）。1 帧和 4 帧一样贵，'
+          + '画面基本不动时调高能省 token。',
       },
       quality: {
         type: 'string',
-        description: 'How sharp the image is. "low" (default, 798×462 = 450px of frames + a 12px audio '
-          + 'strip, ≈222 tokens) — 4 frames are 399×225 each, enough for faces/scenes/video but small text '
-          + 'is unreadable. '
-          + '"standard" (1050×630, ≈392 tokens) — 525×300 per frame, medium text readable. '
-          + '"high" (1260×756, ≈560 tokens) — 630×360 per frame, filenames readable. '
-          + '"ultra" (1596×924, ≈860 tokens) — a single frame is nearly the real screen; use it only '
-          + 'when "high" is still not enough.\n'
-          + 'Switch it UP as soon as you cannot read something — do not guess from a blurry image. '
-          + 'Changing quality restarts the capture (~0.6s) and immediately returns ONE frame of the current '
-          + 'screen, so you get the sharp view right away; the following calls stay at that quality.',
+        enum: ['low', 'standard', 'high', 'ultra'],
+        default: 'low',
+        description: '"low"（默认，≈222 token/张）/ "standard"（≈392）/ "high"（≈560，文件名可读）/ '
+          + '"ultra"（≈860，单帧近原屏）。读不清就升档、别猜；改档会重开采集（≈0.6s）并立刻返回'
+          + '当前画面一张，之后保持该档。',
       },
-      mode: {
+      region: {
         type: 'string',
-        enum: ['both', 'vision', 'audio'],
-        description: '**Senses mode — one entry per combination** (the user picks a mode, you map it here). '
-          + '`"both"` = 视听都开 (picture + ears). `"vision"` = 只看 (picture, no ears — the orange '
-          + '「仅开启视觉」 light; same as `audio:false`). `"audio"` = 只听 (no picture, ears only — same as '
-          + '`action:"listen"`, which does NOT wait for an image). '
-          + '`both` / `vision` are **persisted** to `~/.dsh/see-now.json` `mode`, so the next DSH start '
-          + 'uses the same one; `audio` is one-off and never persisted. '
-          + 'Omit = keep the current mode. Combine with `watch` / `start` (or nothing, which means watch).',
+        description: '只抓一块矩形，格式 "x,y,w,h"（屏幕物理像素）。通常不用你填 —— 用户说"框这块"'
+          + '就调 `{action:"region"}`，他拖完自动存盘，之后 `watch` 默认用它；`"off"` 取消、回整屏。\n'
+          + '限制（要如实告诉用户）：抓的是屏幕上此刻的像素，被别的窗口挡住就只看到遮挡物；'
+          + '抓不到后台 / 最小化窗口；只支持主屏。带区域时帧不再缩小，token 更贵，要省就降 `quality`。',
       },
-      audio: {
+      pace: {
+        type: 'string',
+        enum: ['calm', 'normal', 'dense', 'game-economic'],
+        default: 'normal',
+        description: '多久算换一次画面、多久叫醒你一次。粘性，不传就保持当前档。\n'
+          + '- 用户说**「太密了 / 回复太频繁 / 省点钱 / 慢一点」** → `calm`：这是唯一真能降开销的'
+          + '旋钮，口头答应没用。\n'
+          + '- 用户说**「漏了 / 不灵敏 / 太迟钝」** → `dense`（费钱，只在演示或快画面时用）。\n'
+          + '- 动作游戏且嫌糊 / 太频繁 → `game-economic`：出帧按运动量攒、每张最多 8 帧，'
+          + '只适合动作游戏 —— 访谈、口播、看剧、快剪视频会漏掉大半镜头。\n'
+          + '文件回放（看视频）自动按 dense 的切点门槛；屏幕采集照当前档。',
+      },
+      scene: {
         type: 'boolean',
-        description: 'Older single switch, kept as an alias: `false` = `mode:"vision"`, `true` = `mode:"both"`. '
-          + 'New calls should use `mode` (it has a name for 只听 too). '
-          + 'Ears = system audio -> transcript; the floating window shows the result as the orange dot '
-          + '「仅开启视觉」 vs green「实时视觉 + 听觉」。',
+        description: '**逐帧播报**，默认关、粘性。开了之后每留下一个画面就单独给一张满幅图，'
+          + '每换一次画面叫你一次，你回一句 `say`。只在用户明确说「每换一个场景就告诉我 / '
+          + '每翻一页说一句 / 逐帧播报 / 一个画面一张图」时开：每次唤醒 = 一张图 + 一轮往返，很贵，也吵。',
       },
       preset: {
         type: 'string',
         enum: ['subtitle'],
-        description: 'A viewing mode that changes **what part of the screen you get**, not how sharp it is. '
-          + '`"subtitle"` = only the bottom 16% band (subtitles / dialogue captions), with 10% cropped off the '
-          + 'left and right (captions never run edge to edge), stacked newest-last '
-          + 'into one tall strip image, up to 4 lines per image, default quality "ultra". '
-          + 'Use it when the user is watching dialogue with captions: full-screen frames at 4-per-image shrink '
-          + 'a 32px caption to ~5px and you end up guessing, while the band keeps it at ~20px for ~1/8 of the '
-          + 'tokens. You get no context above the band — say so instead of describing the scene. '
-          + 'Turn it off with `preset:""` (or by not passing it next time).',
+        description: '换的是**拿屏幕的哪一块**，不是清晰度：`"subtitle"` = 只取底部 16% 那条'
+          + '（左右各裁 10%），按时间从上到下叠成一张长条图，最多 4 条，默认 quality "ultra"。'
+          + '用户在看带字幕的对话 / 影视时用 —— 整屏 4 帧会把 32px 的字缩成 5px，只能靠猜。'
+          + '代价：条带以上的画面你看不到，别猜那里发生了什么。`preset:""` 或不传即关闭。',
+      },
+      task: {
+        type: 'string',
+        description: 'With `watch`: 用户分配了「盯着」的任务（"我走开一会儿，你帮我看着"）时填一句描述。'
+          + '填了循环不停工、不降级，直到用户说「我回来了」；期间每张图记一行到 '
+          + '`~/.dsh/see-now/missed.jsonl`（两张之间的空档另记 `kind:"gap"`），回来时读它汇报错过了什么。',
+      },
+      mode: {
+        type: 'string',
+        enum: ['both', 'vision', 'audio'],
+        description: '三档感官：`both` 视听都开 / `vision` 只看（画面、不起耳朵）/ `audio` 只听'
+          + '（= `action:"listen"`，不返回图）。`both` / `vision` 写回 `~/.dsh/see-now.json` 的 `mode`，'
+          + '重开 DSH 沿用；`audio` 一次性。不传 = 保持当前档。',
+      },
+      audio: {
+        type: 'boolean',
+        description: '旧开关，别名：`false` = `mode:"vision"`，`true` = `mode:"both"`。新调用用 `mode`。',
+      },
+      source: {
+        type: 'string',
+        enum: ['screen', 'obs', 'camera', 'file'],
+        default: 'screen',
+        description: '只在会话第一次调用时有用："screen"（默认）/ "obs"（OBS 虚拟摄像头）/ "camera"'
+          + '（第一个摄像头）/ "file"（配合 `path` 回放本地视频，调试用）。',
+      },
+      path: {
+        type: 'string',
+        description: 'With `source:"file"`: 视频的绝对路径。',
+      },
+      realtime: {
+        type: 'boolean',
+        description: 'With `source:"file"`: 按 1x 播放，而不是能多快就多快。',
+      },
+      window: {
+        type: 'string',
+        description: 'With `bloodbar`: 按窗口标题子串抓（Windows Graphics Capture），被遮挡也读得到，'
+          + '例如 "云·鸣潮"；`"off"` 回到抓屏幕。窗口最小化、D3D 独占全屏时抓不到（那时用抓屏幕）。',
+      },
+      show: {
+        type: 'boolean',
+        description: 'With `window`: true = 显示悬浮窗，false = 藏起来（采集照常，但 `say` 也看不见）。'
+          + '不传只报状态。**结果是「窗是藏着的」时，用户看不到你说的话** —— 先显示再说话。',
+      },
+      since: {
+        type: 'number',
+        description: 'With `lift`: epoch 毫秒 —— 用"[黑听]"唤醒文案里给的 `t0`。返回那一刻的单帧'
+          + '（≈222 token）；比 10 分钟留底更早就明确回「没了」，不要拿当前帧冒充。',
+      },
+      read: {
+        type: 'boolean',
+        description: 'With `bloodbar`: true = 当场读一次血条比例（不弹框）。',
+      },
+      threshold: {
+        type: 'number',
+        default: 0.3,
+        description: 'With `bloodbar`: 低于这个比例算「低血」（0–1，默认 0.3）。只影响报告措辞，'
+          + '不触发任何叫醒。',
       },
     },
     output: {

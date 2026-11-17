@@ -9,7 +9,7 @@
 import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE } from './runner.js';
 import { resolveFfmpeg } from './binaries.js';
 import { parseRegion } from './layout.js';
-import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC, TOOL_NAME } from './tool-spec.js';
+import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC, TOOL_NAME, ACTION_VALUES } from './tool-spec.js';
 import { interjectNote, noteInterjected, replyReminder, clearInterjected } from './interject.js';
 import { appendSpoken, appendChat, lastSaidNote, lastSaidText, chatDir, chatWatcherShared,
          chatWaiterCount, markDelivered, relaySeenHas, markRelaySeen } from './chat.js';
@@ -1433,7 +1433,7 @@ async function registerAll(ctx) {
         // 从仅监听抬眼看：把循环切回 active（否则它下一拍又按 listen 分支走）
         lp?.leaveListen?.();
         // 用户分配了「盯着」任务（"我走开一会儿，你帮我看着"）：这一轮不看闲不闲
-        if (args?.task || args?.keep) {
+        if (args?.task) {
           lp?.setPinned?.(true);
           runner.clearMissed?.();     // 新任务从零开始记「错过了什么」
         }
@@ -1784,7 +1784,7 @@ async function registerAll(ctx) {
           text: `血条框好了：**${bloodbarText(r.region)}**（${r.region.w}×${r.region.h}，屏幕物理像素）。\n`
             + '只框血条本身：别把数字、图标、队友血条带进去，框越小越准。\n'
             + '换游戏或换 UI 缩放，重新框一次就行。\n'
-            + '现在只存了坐标（P1a 还没接采集），所以 `status` 里显示「未采」。',
+            + '进仅监听后每秒读一次，读数会出现在唤醒文案和 `status` 里；要当场读一次就传 `read:true`。',
           meta: { ok: true, region: r.region },
         };
       }
@@ -1797,7 +1797,7 @@ async function registerAll(ctx) {
        * 参数是 ASR 的 `t0`（epoch 毫秒），唤醒文案里会原样给出。
        */
       if (action === 'lift') {
-        const since = Number(args.since ?? args.t0);
+        const since = Number(args.since);
         if (!Number.isFinite(since) || since <= 0) {
           return { text: '`since` 必须是毫秒时间戳 —— 用唤醒文案里那个 `t0`。', meta: { ok: false } };
         }
@@ -1907,7 +1907,7 @@ async function registerAll(ctx) {
         };
       }
 
-      return { text: `未知 action: ${action}（可用 watch / peek / start / stop / status）`, meta: { action } };
+      return { text: `未知 action: ${action}（可用 ${ACTION_VALUES.join(' / ')}）`, meta: { action } };
     },
   };
 

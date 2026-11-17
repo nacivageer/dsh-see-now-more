@@ -406,16 +406,20 @@ macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色�
 
 | 参数 | 说明 |
 |---|---|
-| `action` | `watch`（默认，阻塞取图）/ `peek` / `start` / `stop` / `status` / `window` / `region` |
+| `action` | `watch`（默认，阻塞取图）/ `peek` / `listen`（只留耳朵）/ `lift`（配 `since` 取那一刻的帧）/ `start` / `stop` / `status` / `window` / `region` / `bloodbar` |
 | `show` | 配 `action:"window"`：`true` 把悬浮窗叫回来，`false` 藏起来，不传只报状态 |
 | `region` | 只看屏幕上一块：`"x,y,w,h"`（屏幕物理像素），或 `"off"` 取消。**一般不用手填** —— 说"框这块"让它自己框，见下 |
 | `say` | **唯一能进悬浮窗、能被念出来的通道**。普通回复不进气泡，但会被记进小窗的对话记录 |
-| `quality` | `low`(800×450) / `standard` / `high` / `ultra`。改它会重启采集（~0.6s），并立刻返回当前这一帧 |
-| `pace` | 节奏：`calm` / `normal`（默认）/ `dense`。见下 |
+| `quality` | `low`(798×462) / `standard`(1050×630) / `high`(1260×756) / `ultra`(1596×924)，括号里是出图尺寸（含底部音轨条）。改它会重启采集（~0.6s），并立刻返回当前这一帧 |
+| `pace` | 节奏：`calm` / `normal`（默认）/ `dense` / `game-economic`。见下 |
 | `scene` | `true` = 逐场景模式：一张图只装一个画面、铺满。见下 |
+| `preset` | `"subtitle"` = 只取屏幕底部 16% 那条（左右各裁 10%），叠成一张长条图，最多 4 条。用户在看带字幕的对话/影视时给模型用 |
 | `seconds` | `watch` 的阻塞上限（默认 300，封顶 860）。只是上限，攒够一张就提前返回 |
 | `minFrames` | 少于这么多帧的图就别给我了（省 token） |
+| `task` | 用户说"我走开一会儿，你帮我看着"时填一句任务描述：循环不停工、不降级，看到用户回来为止 |
+| `mode` / `audio` | 三档感官：`both` 视听都开 / `vision` 只看 / `audio` 只听；`audio:true/false` 是旧开关的别名 |
 | `source` / `path` / `realtime` | 采集源：屏幕 / 摄像头 / 回放一个视频文件 |
+| `read` / `threshold` / `window` | 配 `action:"bloodbar"`：当场读一次比例 / 低血阈值（默认 0.3）/ 按窗口标题抓（被遮挡也读） |
 
 ### 只看一块（`region` / `action:"region"`）
 
@@ -428,26 +432,36 @@ macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色�
 
 - 抓的是**屏幕上正在显示的像素**：这块被别的窗口挡住，看到的就是挡住它的那个窗口；
 - **默认不接 OBS**，所以抓不到后台窗口、最小化的窗口。想让 OBS 出力（或者在没有物理屏的机器上抓），
-  用 `source: { kind: "obs" }` 或 `{ kind: "camera", device: "..." }`，走 dshow 设备；
+  用 `source:"obs"` 或 `source:"camera"`（走 dshow 设备）；
 - 只支持**主屏**（负坐标表达不了，gdigrab 也不接受）。
 
-> 设备名带空格（`OBS Virtual Camera`）时如果报 `input url video=OBS` 这类"名字被截断"的错，
-> 把它换成 DirectShow 里的**无空格备用名**（`@device_sw_{...}\{...}`，在 ffmpeg 的
+> 选具体设备只有**当普通 Node 库用**的时候有：`spawnFrames({ source: { kind:"camera", device:"…" } })`
+> （工具参数里只有 `source`，没有 `device`）。
+> 设备名带空格（`OBS Virtual Camera`）时报 `input url video=OBS` 这类"名字被截断"的错，
+> 就换成 DirectShow 里的**无空格备用名**（`@device_sw_{...}\{...}`，在 ffmpeg 的
 > `-list_devices` 输出里能看到）传给 `device`。
 
 带上区域后出图规则也变了：按区域宽高比出图（竖屏就出竖屏）、每帧长边固定 = 档位长边、
 一张默认 2 帧最多 4 帧。token 会比全屏贵（帧不再被缩小）：low 档 2 帧约 345 token。
 
-### 三档节奏（`pace`）
+### 四档节奏（`pace`）
 
 | 档 | 换画面门槛 | 最多多久叫醒一次 | 适合 |
 |---|---|---|---|
 | `calm` | 20 分 | 30 秒 | 日常挂着，只想知道"大场面变了没" |
 | **`normal`**（默认） | 12 分 | 15 秒 | 滚网页、切窗口不会每下都留帧 |
 | `dense` | 7 分 | 8 秒 | 幻灯片、逐帧播报 —— 贵，别常开 |
+| `game-economic` | 80 分 | 20 秒 | 动作游戏：出帧按 30 秒运动量攒、每张最多 8 帧 |
 
 > 觉得它太吵、太烧钱，就说一句「慢一点 / 省点钱」，模型会传 `pace:"calm"`。
 > 觉得它漏了、迟钝，就说「不灵敏」，它会传 `dense`。
+
+`game-economic` 是给**动作游戏**的省电档，代价是信息量 —— 同一段 137 秒的射击游戏，
+`normal` 出 95 帧、`game-economic` 只出 11 帧；把这一档用在快剪视频上，覆盖率只有 12.7%
+（`normal` 是 67%）。所以访谈、口播、播放器看剧、快剪视频不要用它，那些场景要的是 `normal`。
+
+**文件回放（看视频）自动按 `dense` 的切点门槛**：实测 27 段短视频上，`cutAbs=7` 的切点
+F1 是 56.8%，默认的 12 只有 51.9% —— 12fps 采样本来就会吃掉一部分快切。屏幕采集不受影响。
 
 ### 逐场景模式（`scene`）
 
