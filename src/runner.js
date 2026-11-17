@@ -1135,6 +1135,8 @@ export function createRunner({
         // 整窗抓：尺寸由 sidecar 缩放到画布（面积平均），管线拿到的帧永远是固定尺寸
         size: [p.constants.width, p.constants.height],
         fps: p.constants.fps,
+        // 测试钩子：只建会话不出帧（`src.dropFrames`），用来验首帧超时的回退路径
+        dropFrames: s.dropFrames === true,
         onFrame, onStderr,
       })
       : spawnCapture({

@@ -161,20 +161,44 @@ export function probeWindow({ title = null, hwnd = 0, python = null, timeoutMs =
 }
 
 /**
+ * 拼 sidecar 的命令行（纯函数，好测：钩子有没有带上不该靠读代码猜）。
+ *
+ * @param {{python:string, script:string, source?:{title?:string,hwnd?:number},
+ *          region?:object|null, size?:number[]|null, fps?:number, dropFrames?:boolean}} o
+ * @returns {string[]}
+ */
+export function windowCaptureArgs({
+  python, script, source, region = null, size = null, fps = 1, dropFrames = false,
+} = {}) {
+  const s = source ?? {};
+  const argv = [python, script, '--fps', String(fps)];
+  if (s.hwnd) argv.push('--hwnd', String(s.hwnd));
+  else if (s.title) argv.push('--title', String(s.title));
+  else throw new Error('window 源要给 title 或 hwnd');
+  if (region) argv.push('--region', `${region.x},${region.y},${region.w},${region.h}`);
+  if (size) argv.push('--size', `${size[0]}x${size[1]}`);
+  if (dropFrames) argv.push('--drop-frames');
+  return argv;
+}
+
+/**
  * 起一路按窗口抓的帧流。
  *
  * @param {{
  *   source: {kind:'window', title?:string, hwnd?:number},
  *   region: {x:number,y:number,w:number,h:number},
  *   size?: number[], fps?: number, python?: string, script?: string,
+ *   dropFrames?: boolean,
  *   onFrame?: Function, onStderr?: Function, onFirst?: Function,
  * }} o
  *   `region` 是**屏幕物理像素**，也是这一路输出的尺寸（固定，血条按它算比例）。
  *   `size` 是 `[w,h]`：整窗抓时由 sidecar 缩放到这个尺寸（watch 那条路用，面积平均）。
+ *   `dropFrames` 是**测试钩子**：会话照起、一帧不吐，用来验「首帧超时 → 改抓屏幕」。
  * @returns {{stop:()=>void, done:Promise<object>}}
  */
 export function spawnWindowFrames({
   source, region, size = null, fps = 1, python = null, script = null,
+  dropFrames = false,
   onFrame, onStderr = null, onFirst = null,
 } = {}) {
   const py = python ?? resolveWgcPython().python;
@@ -184,14 +208,7 @@ export function spawnWindowFrames({
   }
   const sc = script ?? wgcScript();
   const s = source ?? {};
-  const argv = [py, sc, '--fps', String(fps)];
-  if (s.hwnd) argv.push('--hwnd', String(s.hwnd));
-  else if (s.title) argv.push('--title', String(s.title));
-  else throw new Error('window 源要给 title 或 hwnd');
-  if (region) {
-    argv.push('--region', `${region.x},${region.y},${region.w},${region.h}`);
-  }
-  if (size) argv.push('--size', `${size[0]}x${size[1]}`);
+  const argv = windowCaptureArgs({ python: py, script: sc, source: s, region, size, fps, dropFrames });
   return spawnFrames({
     source: { kind: 'window', ...s },
     width: size ? size[0] : region?.w,

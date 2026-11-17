@@ -163,6 +163,9 @@ def main() -> int:
     ap.add_argument("--size", default=None)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--stats", action="store_true")
+    # 测试钩子：建会话、正常跑，但**一帧都不吐**。用来验 runner 的「首帧超时 → 改抓屏幕」，
+    # 不需要真独占全屏的 GPU 行为（那种窗口我们这儿没有）。
+    ap.add_argument("--drop-frames", action="store_true")
     args = ap.parse_args()
 
     hwnd = args.hwnd
@@ -289,6 +292,8 @@ def main() -> int:
                 next_at = time.monotonic()
             out = latest["out"]
             if out is None:
+                continue
+            if args.drop_frames:
                 continue
             header(out.shape[1], out.shape[0])
             emit(out)

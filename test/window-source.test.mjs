@@ -21,7 +21,7 @@ process.env.DSH_SEE_NO_WINDOW = '1';
 
 const { __test } = await import('../src/index.js');
 const { srcOf } = __test;
-const { parseProbeLine } = await import('../src/capture-window.js');
+const { parseProbeLine, windowCaptureArgs } = await import('../src/capture-window.js');
 const { seeNowToolSpec } = await import('../src/tool-spec.js');
 
 test('source:"window" 不配 title 就明确报错，不许猜窗口', () => {
@@ -77,8 +77,7 @@ test('schema 的 source 枚举包含 window，且默认仍是 screen', () => {
   assert.ok(parameters.window, 'window 参数要还在（它现在同时服务 source:"window" 和血条）');
 });
 
-test('probe 那行 JSON 解析：正常 / 最小化 / 坏行', () => {
-  const ok = parseProbeLine('{"ok":true,"hwnd":264826,"title":"某个窗口","minimized":false,'
+test('probe 那行 JSON 解析：正常 / 最小化 / 坏行', () => {  const ok = parseProbeLine('{"ok":true,"hwnd":264826,"title":"某个窗口","minimized":false,'
     + '"rect":{"x":1,"y":2,"w":1922,"h":1126}}');
   assert.deepEqual(ok, {
     ok: true, hwnd: 264826, title: '某个窗口', minimized: false,
@@ -93,4 +92,19 @@ test('probe 那行 JSON 解析：正常 / 最小化 / 坏行', () => {
   assert.equal(parseProbeLine('ERR 找不到窗口：x'), null);
   assert.equal(parseProbeLine(''), null);
   assert.equal(parseProbeLine('{broken'), null);
+});
+
+test('sidecar 命令行：钩子只在明确要求时才带，参数顺序稳定', () => {
+  const base = { python: 'py.exe', script: 'wgc_capture.py', source: { title: '某个窗口' }, fps: 10 };
+  assert.deepEqual(windowCaptureArgs(base), ['py.exe', 'wgc_capture.py', '--fps', '10', '--title', '某个窗口']);
+
+  const all = windowCaptureArgs({
+    ...base, region: { x: 1, y: 2, w: 3, h: 4 }, size: [798, 450], dropFrames: true,
+  });
+  assert.deepEqual(all.slice(4), [
+    '--title', '某个窗口', '--region', '1,2,3,4', '--size', '798x450', '--drop-frames',
+  ]);
+
+  // 没给标题/句柄要说清楚，不能拼出一条注定起不来的命令
+  assert.throws(() => windowCaptureArgs({ ...base, source: {} }), /title 或 hwnd/);
 });

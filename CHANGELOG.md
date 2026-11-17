@@ -96,9 +96,13 @@ README 从 680 行 / 39.3 KB 收到 493 行 / 31.5 KB，同时补上原本没有
 - `region` 现在也能叠在窗口源上（仍按屏幕物理像素写，sidecar 按窗口当前 rect 换算）。
 
 新增 `test/window-source.test.mjs`：入口造源（缺标题 / `"off"` / 未知 source / region 配对）、
-探针那行 JSON 的解析（正常 / 最小化 / 坏行）。真机验证走 `py/wgc_capture.py --check`，
-以及 `--stats` 下的两组数（`emitted` = 侧车吐帧频率，`calls` = 窗口真实更新次数）——
-12fps 请求实测 72 帧/6 秒、起手 1.2 秒。
+探针那行 JSON 的解析（正常 / 最小化 / 坏行）、sidecar 命令行拼装（钩子只在要求时才带）。
+真机验证走 `py/wgc_capture.py --check`，以及 `--stats` 下的两组数
+（`emitted` = 侧车吐帧频率，`calls` = 窗口真实更新次数）—— 12fps 请求实测 72 帧/6 秒、起手 1.2 秒。
+
+**回退路径已实测**：sidecar 的 `--drop-frames` 钩子（建会话、一帧不吐，等价于独占全屏的表现）
+让「首帧超时 → 改抓屏幕」真跑了一遍 —— 11 秒后 `source.kind` 变成 `screen`、画面继续出帧，
+结果里带「按窗口抓 6 秒没拿到帧（多半是 D3D 独占全屏），已自动改抓屏幕」。
 
 ### Changed — 术语：不再写「三人队」
 
