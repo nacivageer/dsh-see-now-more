@@ -17,6 +17,28 @@
  * "字先到、声音后到"。**该挪的是字，不是声音**（声音一挪就离画面远去），所以展示层等 `spoken`。
  */
 
+/**
+ * 念之前把 Markdown 抹掉（2026-11-20 用户实报：`**加粗**` 会被念成"星号星号…星号星号"）。
+ *
+ * 只删"读出来是噪音"的标记，不动正文：代码块整段换成一句提示（念代码毫无意义），
+ * 行内 code 去掉反引号，链接只留文字，标题/列表去掉前缀符号。
+ */
+export function stripForSpeech(text) {
+  let t = String(text ?? '');
+  t = t.replace(/```[\s\S]*?```/g, '（这里有一段代码）');
+  t = t.replace(/`([^`]+)`/g, '$1');
+  t = t.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1');
+  t = t.replace(/\*\*([^*]+)\*\*/g, '$1');
+  t = t.replace(/__([^_]+)__/g, '$1');
+  t = t.replace(/~~([^~]+)~~/g, '$1');
+  t = t.replace(/^\s{0,3}#{1,6}\s*/gm, '');
+  t = t.replace(/^\s{0,3}[-*+]\s+/gm, '');
+  t = t.replace(/^\s{0,3}>\s?/gm, '');
+  t = t.replace(/\|/g, ' ');
+  t = t.replace(/\n{3,}/g, '\n\n');
+  return t.trim();
+}
+
 /** 只认这四种；写错了按 `due` 处理（容错方向要护住"会念"） */
 function normalizeState(s) {
   if (s === 'scheduled') return 'scheduled';
@@ -74,7 +96,7 @@ export function emitSpeech(event) {
   const payload = Object.freeze({
     seq,
     at: Number.isFinite(event?.at) ? Number(event.at) : null,
-    text: String(event?.text ?? ''),
+    text: stripForSpeech(event?.text),
     state: normalizeState(event?.state),
     // `origin: 'chat'` = 这条已经被写进聊天流了，展示层不要再写一遍
     ...(event?.origin ? { origin: String(event.origin) } : {}),
