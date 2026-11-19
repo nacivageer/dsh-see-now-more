@@ -1357,6 +1357,8 @@ export function createRunner({
     listenOnly,
     setMode,
     mode: () => modeWanted,
+    /** 排布容差（apply 时读进来的那个值；设置页改了要重启才对得上） */
+    packStretch: () => packStretch,
     noteMissed,
     clearMissed,
     /** 最近一段的声学轨迹（仅监听的唤醒文案用） */

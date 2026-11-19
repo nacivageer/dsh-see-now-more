@@ -359,6 +359,13 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     /** 游戏模式：临时覆盖节奏，关掉恢复；gameModeAt 同 modeAt，用来识别"又点了一次" */
     gameMode: raw.gameMode === true,
     gameModeAt: Number(raw.gameModeAt) || 0,
+    /**
+     * 默认清晰度（设置页写的那项）。以前**宿主根本不读它**，卡片改了也白改 ——
+     * 2026-11-19 加「检查是否生效」时才发现。`null` = 没配，走 runner 的默认 low。
+     */
+    quality: ['low', 'standard', 'high', 'ultra'].includes(raw.quality) ? raw.quality : null,
+    /** 设置页点「检查当前选项是否生效」的时间戳 */
+    checkAt: Number(raw.checkAt) || 0,
     idleCaptureMin,
     scoreNormalize,
     packStretch,

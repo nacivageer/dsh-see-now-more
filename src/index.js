@@ -6,7 +6,7 @@
  * 自己唤醒自己，停不下来（0.0.1 就是死在这儿）。
  */
 
-import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE } from './runner.js';
+import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE, DEFAULT_QUALITY } from './runner.js';
 import { resolveFfmpeg } from './binaries.js';
 import { parseRegion } from './layout.js';
 import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC, TOOL_NAME, ACTION_VALUES } from './tool-spec.js';
@@ -754,6 +754,8 @@ async function registerAll(ctx) {
   let sceneMode = false;
   /** 节奏：calm / normal / dense（粘性）。**这是"省点钱"唯一能真的生效的旋钮。** */
   let paceMode = PACES[tuning.defaultPace] ? tuning.defaultPace : DEFAULT_PACE;
+  /** 默认清晰度（`see-now.json` 的 quality）：watch 不带 quality 时用它 */
+  let defaultQuality = tuning.quality ?? DEFAULT_QUALITY;
   /**
    * **上一次真正生效的 source 类型**。`cutAbs` 的自动选择要靠它，不能看本次请求的 `src`：
    * 第二次 `watch` 通常不带 path（接着看同一段），那时 `src` 是 undefined，判定就会从
@@ -998,6 +1000,41 @@ async function registerAll(ctx) {
   }, 1500);
   gameWatcher.unref?.();
   disposers.push(() => clearInterval(gameWatcher));
+
+  /**
+   * 「检查当前选项是否生效」（2026-11-19 用户要求）：设置页里那颗胶囊按钮写 `checkAt`，
+   * 宿主把**配置里的值**和**这次 apply 时真正用上的值**逐项比一遍，结果落成一条
+   * 居中系统气泡（跟游戏模式开关同一条通道）。
+   *
+   * 为什么要这个按钮：节奏/清晰度/排布容差都是 apply 时读的，改完不重启就不会生效，
+   * 但界面上看不出差别 —— 与其让用户猜，不如给个"现在到底用的是哪一档"的实测答案。
+   */
+  const PACE_NAME = { calm: '省', normal: '常规', dense: '密', 'game-economic': '游戏' };
+  let lastCheckAt = (() => { try { return readTuning().checkAt || 0; } catch { return 0; } })();
+  const checkWatcher = setInterval(() => {
+    let t = null;
+    try { t = readTuning(); } catch { return; }
+    const at = Number(t.checkAt) || 0;
+    if (!at || at === lastCheckAt) return;
+    lastCheckAt = at;
+    const cfgPace = t.defaultPace ?? DEFAULT_PACE;
+    const runPace = paceMode;
+    const cfgQ = t.quality ?? DEFAULT_QUALITY;
+    const runQ = defaultQuality;
+    const cfgS = Number(t.packStretch) || 0;
+    const runS = Number(runner.packStretch?.()) || 0;
+    const okPace = cfgPace === runPace || (t.gameMode && runPace === 'game-economic');
+    const line = (name, cfg, run, ok) => `${name}：配置 ${cfg} ／ 运行 ${run}${ok ? ' ✓' : ' ✗（重启 DSH 后生效）'}`;
+    const text = '检查当前选项是否生效：\n'
+      + line('节奏', PACE_NAME[cfgPace] ?? cfgPace,
+        (PACE_NAME[runPace] ?? runPace) + (t.gameMode ? '（游戏模式覆盖中）' : ''), okPace)
+      + '\n' + line('清晰度', cfgQ, runQ, cfgQ === runQ)
+      + '\n' + line('排布容差', cfgS, runS, cfgS === runS);
+    try { appendNotice(text, boundSessionNow() ?? ''); } catch { /* 写不进也不能影响别的 */ }
+    log(`检查选项：${text.split('\n').join(' | ')}`);
+  }, 1500);
+  checkWatcher.unref?.();
+  disposers.push(() => clearInterval(checkWatcher));
 
   /**
    * **裸采集闲置自动收工**（2026-11-09 用户要求 S1）。
@@ -1508,7 +1545,7 @@ async function registerAll(ctx) {
           src,
           // 存下来的那块（undefined = 这次没提，保持原样；null = 显式取消）
           region: regionOff ? null : stickyRegion,
-          quality: args.quality ? String(args.quality).toLowerCase() : (subtitleMode ? 'ultra' : null),
+          quality: args.quality ? String(args.quality).toLowerCase() : (subtitleMode ? 'ultra' : defaultQuality),
           // 逐帧模式：一张图一帧 + 档位固定 1（铺满）；常规按节奏定切点门槛。
           // 参数变了 runner 会自己重开管线。
           opts: {

@@ -8556,6 +8556,8 @@ class LiveGlass:
         for row in self.SETTINGS_ROWS:
             rows.append({"kind": "setting", "row": row,
                          "value": self._settings_value(row, data), "h": 56})
+        # 「检查当前选项是否生效」：点了给宿主一个时间戳，结果由宿主落成居中气泡
+        rows.append({"kind": "checkbtn", "text": "检查当前选项是否生效", "h": 64})
         head, hint_h = 68, 18
         cw = max(380, min(560, self._geo.width - 24))
         ch = head + sum(r["h"] for r in rows) + hint_h
@@ -8631,6 +8633,17 @@ class LiveGlass:
                 c.create_text(cw - 30, (y0 + y1) // 2, text=("开" if on else "关"),
                               anchor="e", fill=(self.MODE_COLORS["both"] if on else "#8e9db2"),
                               font=f11b, tags=("gmodeval",))
+            elif kind == "checkbtn":
+                bh = 40
+                by0 = (y0 + y1) // 2 - bh // 2
+                bw = min(cw - 48, 260)
+                bx0 = (cw - bw) // 2
+                c.create_polygon(
+                    self._rounded_points(bx0, by0, bx0 + bw, by0 + bh, 14, 8),
+                    fill="#000000", outline="#ffffff", smooth=True,
+                    tags=("checkbtn",))
+                c.create_text(cw // 2, (y0 + y1) // 2, text=r["text"], anchor="center",
+                              fill="#ffffff", font=f11b, tags=("checkbtn",))
             elif kind == "setting":
                 _key, label, _options, names, _default = r["row"]
                 c.create_text(34, (y0 + y1) // 2, text=label, anchor="w",
@@ -8673,6 +8686,8 @@ class LiveGlass:
                 self._settings_pick_mode(r["value"])
             elif r["kind"] == "gmode":
                 self._settings_toggle_game(r)
+            elif r["kind"] == "checkbtn":
+                self._settings_check()
             elif r["kind"] == "setting":
                 self._settings_cycle(r)
             return
@@ -8705,6 +8720,12 @@ class LiveGlass:
                 c.itemconfigure(f"modecheck_{val}", text=("✓" if sel else ""))
             except Exception:
                 pass
+
+    def _settings_check(self) -> None:
+        """请求宿主核对一次"配置值 vs 运行值"，结果会以居中系统气泡回来。"""
+        self._settings_write("checkAt", int(time.time() * 1000))
+        if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
+            print("[settings] check requested", flush=True)
 
     def _settings_toggle_game(self, r) -> None:
         """游戏模式开关：只写 gameMode/modeAt 式的标记，**不碰 defaultPace** ——
