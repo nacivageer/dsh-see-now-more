@@ -1011,6 +1011,9 @@ class LiveGlass:
             # "3" = 启动 8 秒后开、10 秒后关：留给外部脚本逐帧抓过渡
             self.root.after(8000, self._show_bind_bar)
             self.root.after(10000, self._hide_bind_bar)
+        if os.environ.get("DSH_SEE_SETTINGS_OPEN") == "1":
+            # 调试入口：自动弹设置卡（验收「卡会不会被主窗盖住」用，同 DSH_SEE_BIND_OPEN）
+            self.root.after(1500, self._open_settings)
         self.root.after(250, self._poll_chat)
         self.root.after(1200, self._keep_on_top)
         if SNAPSHOT:
@@ -1122,12 +1125,20 @@ class LiveGlass:
         的 overlay 做得到）；无边框窗口化 / 有边框窗口下这条看门狗有效。
         """
         try:
-            # 预览窗/右键菜单/确认弹窗开着时也不要抢：这条每 800ms 把主窗顶回
-            # topmost 带最前面，会把刚打开的图窗、右键菜单、确认框挤到下面去
-            # （2026-11-06 实测；重命名/删除确认框同理）。
+            # 预览窗/右键菜单/确认弹窗/**设置卡**开着时都不要抢：这条每 800ms 把主窗
+            # 顶回 topmost 带最前面，会把刚打开的图窗、右键菜单、确认框、设置卡挤到
+            # 下面去（2026-11-06 实测；重命名/删除确认框同理）。设置卡漏了这条守卫，
+            # 表现为「点开一秒内就看不见了」——其实是被主窗盖住，不是被关掉
+            # （2026-11-19 实报）。
+            if getattr(self, "_settings", None):
+                try:
+                    self._settings["win"].lift()
+                except Exception:
+                    pass
             if (not self._hidden and not self._collapsed
                     and not self._viewer_alive()
                     and not getattr(self, "_img_menu", None)
+                    and not getattr(self, "_settings", None)
                     and not self._dialog_alive()):
                 hwnd = self._hwnd_root()
                 if hwnd:
