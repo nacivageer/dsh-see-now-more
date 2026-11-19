@@ -8629,7 +8629,7 @@ class LiveGlass:
                               fill=("#f4f9ff" if on else "#b9c6d6"),
                               font=(f11b if on else f11), tags=("gmodelabel",))
                 c.create_text(cw - 30, (y0 + y1) // 2, text=("开" if on else "关"),
-                              anchor="e", fill=(FOCUS_LIVE if on else "#8e9db2"),
+                              anchor="e", fill=(self.MODE_COLORS["both"] if on else "#8e9db2"),
                               font=f11b, tags=("gmodeval",))
             elif kind == "setting":
                 _key, label, _options, names, _default = r["row"]
@@ -8720,9 +8720,10 @@ class LiveGlass:
             c.itemconfigure("gmodelabel", fill=("#f4f9ff" if on else "#b9c6d6"),
                             font=(f11b if on else f11))
             c.itemconfigure("gmodeval", text=("开" if on else "关"),
-                            fill=(FOCUS_LIVE if on else "#8e9db2"))
-        except Exception:
-            pass
+                            fill=(self.MODE_COLORS["both"] if on else "#8e9db2"))
+        except Exception as exc:
+            if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
+                print("[settings] gmode redraw failed:", repr(exc), flush=True)
 
     def _settings_cycle(self, r) -> None:
         st = self._settings
