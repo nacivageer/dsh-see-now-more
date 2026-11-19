@@ -8545,11 +8545,14 @@ class LiveGlass:
         rows = [{"kind": "header", "text": "点击选项即可变更当前感官模式", "h": 40}]
         for val, label in self.MODE_OPTIONS:
             rows.append({"kind": "mode", "value": val, "label": label, "h": 48})
-        rows.append({"kind": "sep", "h": 14})
+        # 这句只约束下面三项（模式是即时生效的，见标题行）—— 2026-11-19 用户要求
+        rows.append({"kind": "hint",
+                     "text": "以下选项存进 see-now.json，重启 DSH 后生效", "h": 30})
+        rows.append({"kind": "sep", "h": 8})
         for row in self.SETTINGS_ROWS:
             rows.append({"kind": "setting", "row": row,
                          "value": self._settings_value(row, data), "h": 56})
-        head, hint_h = 68, 46
+        head, hint_h = 68, 18
         cw = max(380, min(560, self._geo.width - 24))
         ch = head + sum(r["h"] for r in rows) + hint_h
         x = int(max(self._vx + 4,
@@ -8594,6 +8597,10 @@ class LiveGlass:
             if kind == "sep":
                 c.create_line(22, (y0 + y1) // 2, cw - 22, (y0 + y1) // 2, fill="#1b2431")
                 continue
+            if kind == "hint":
+                c.create_text(28, (y0 + y1) // 2, text=r["text"], anchor="w",
+                              fill="#8fa0b6", font=f10)
+                continue
             hits.append((y0, y1, r))
             if kind == "mode":
                 sel = r["value"] == mode_now
@@ -8620,9 +8627,7 @@ class LiveGlass:
                               text=names.get(r["value"], "默认"), anchor="e",
                               fill=("#8fd3ff" if r["value"] is not None else "#77859a"),
                               font=f11b, tags=(f"setval_{_key}",))
-        c.create_text(cw // 2, ch - hint_h // 2 + 2,
-                      text="模式点了就生效 · 其余项存进 see-now.json，重启 DSH 后生效",
-                      fill="#77859a", font=f10)
+
         self._settings = {"win": win, "canvas": c, "cw": cw, "head": head,
                           "rows": rows, "hits": hits, "mode": mode_now}
         # **只绑 canvas**：canvas 与 Toplevel 同时绑同一条 <Button-1> 会触发两次，
