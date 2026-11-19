@@ -216,10 +216,13 @@ export async function attach(api, options = {}) {
     let rate = emp.baseRate;
     if (tildes > 0) rate = `-${Math.min(45, 22 + (tildes - 1) * 8)}%`;
     try {
-      const mm = /〔([^〕]+)〕/.exec(spoken);
+      // 重读段：`〔…〕` 或 `【…】` 都收（情绪前缀 `【急】/【柔】` 已经在上面剥掉了）
+      const mm = /〔([^〕]+)〕|【([^】]+)】/.exec(spoken);
       if (mm) {
-        const i = spoken.indexOf('〔');
-        const j = spoken.indexOf('〕');
+        const open = mm[0][0];
+        const close = open === '〔' ? '〕' : '】';
+        const i = mm.index;
+        const j = spoken.indexOf(close, i);
         const pre = spoken.slice(0, i).replace(/~/g, '');
         const emph = spoken.slice(i + 1, j).replace(/~/g, '');
         const suf = spoken.slice(j + 1).replace(/~/g, '');
