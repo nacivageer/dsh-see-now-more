@@ -98,6 +98,8 @@ export async function attach(api, options = {}) {
     gapMs: Number.isFinite(Number(options?.emphasis?.gapMs))
       ? Math.max(100, Math.min(500, Number(options.emphasis.gapMs)))
       : 200,
+    // 重读段的音高（edge 在合成时渲染，不是事后移调，所以不会换嗓声）
+    strongPitch: typeof options?.emphasis?.strongPitch === 'string' ? options.emphasis.strongPitch : '+15Hz',
     // 非重点段的音量（情绪预设会改它）
     baseVolume: typeof options?.emphasis?.baseVolume === 'string' ? options.emphasis.baseVolume : '+0%',
     // 整句短于这么多汉字就整句一次念（情绪短句不切段），0 = 关掉
@@ -206,121 +208,40 @@ export async function attach(api, options = {}) {
       }
       emp.shortUtteranceMax = 0;     // 情绪句要保留那个气口
     }
-    // **加粗只管排版，不进语音**（格 2026-11-20）：排版的重音和口语的重音标准不一样，
-    // 按 `**` 切词会让接缝落在词中间、重音落错字。语音只认 `‖`（气口）与 `~`（拖音），
-    // 其余交给引擎自己的韵律。
+    // **语音标记**（2026-11-20 定）：`〔…〕` = 重读段、`‖` = 换气口、`~` = 拖音、
+    // `【急】/【柔】` = 情绪；`**加粗**` 只管气泡排版，进语音前先剥掉。
+    // 重读段交给 edge 自己的 SSML —— 服务端最多认 2 段 prosody，重读只能是一段连续文本。
     const spoken = String(ev.text).replace(/^【(急|柔)】/, '').replace(/‖/g, '，').replace(/\*\*/g, '');
-    const chunks = [spoken];
+    const tildes = (spoken.match(/~/g) ?? []).length;
+    let rate = emp.baseRate;
+    if (tildes > 0) rate = `-${Math.min(45, 22 + (tildes - 1) * 8)}%`;
     try {
-      // **切段后别把标点甩到段首**：`‖` 变成逗号后常常正好落在段首（`\|再翻滚`），
-      // edge 对「以逗号开头」的文本会合成不出音频（synth failed）。把段首标点挪到上一段末尾。
-      const segs0 = splitEmphasis(spoken);
-      for (let i = 1; i < segs0.length; i += 1) {
-        const m = /^([，。、！？；：…]+)/.exec(segs0[i].text);
-        if (m) {
-          segs0[i - 1].text += m[1];
-          segs0[i].text = segs0[i].text.slice(m[1].length);
+      const mm = /〔([^〕]+)〕/.exec(spoken);
+      if (mm) {
+        const i = spoken.indexOf('〔');
+        const j = spoken.indexOf('〕');
+        const pre = spoken.slice(0, i).replace(/~/g, '');
+        const emph = spoken.slice(i + 1, j).replace(/~/g, '');
+        const suf = spoken.slice(j + 1).replace(/~/g, '');
+        const spec = {
+          plain: pre + emph + suf,
+          pre, emph, suf,
+          preRate: rate, preVolume: emp.baseVolume,
+          emphRate: emp.rate, emphVolume: emp.volume, emphPitch: emp.strongPitch,
+          voice: cfg.voice, out: file,
+        };
+        const specFile = join(tmpdir(), `dsh-say-${stamp}-spec.json`);
+        job.parts.push(specFile);
+        writeFileSync(specFile, JSON.stringify(spec), 'utf8');
+        const r = spawnSync(python, [join(import.meta.dirname, 'edge-ssml-synth.py'),
+          '--spec', specFile], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, timeout: 60000 });
+        if (r.status !== 0) {
+          if (process.env.DSH_VOICE_DEBUG) console.error('[edge-tts] helper stderr:', String(r.stderr).slice(-800));
+          throw new Error('ssml synth failed');
         }
-      }
-      for (let i = segs0.length - 1; i > 0; i -= 1) {
-        if (!segs0[i].text.trim()) { segs0[i - 1].text += segs0[i].text; segs0.splice(i, 1); }
-      }
-      // **切点别落在词中间**：接缝本身就是"换气"，落在「眼睛闪｜红光」这种地方很怪。
-      // 加粗词前面若只剩一小截（≤ absorbMax 个汉字，默认 4），就把它并进重点段，
-      // 让接缝退到上一个标点处——「眼睛闪红光」当成一个整体念。
-      for (let i = 1; i < segs0.length; i += 1) {
-        if (!segs0[i].strong || !segs0[i - 1].text) continue;
-        const frag = (segs0[i - 1].text.match(/[^，。、！？；：…\s]+$/) ?? [''])[0];
-        const cjk = [...frag].filter((c) => /[\u4e00-\u9fff]/.test(c)).length;
-        if (cjk > 0 && cjk <= emp.absorbMax && frag !== segs0[i - 1].text.trim()) {
-          segs0[i].text = frag + segs0[i].text;
-          segs0[i - 1].text = segs0[i - 1].text.slice(0, -frag.length);
-        }
-      }
-      for (let i = segs0.length - 1; i > 0; i -= 1) {
-        if (!segs0[i - 1].text.trim()) segs0.splice(i - 1, 1);
-      }
-      // **尾巴上的虚词不能单独成段**：`没**无敌**了` 会把「了」甩到下一段，
-      // 接缝正好落在「无敌｜了」中间——格 2026-11-20 实听（「它抬手完就没无敌…了」）。
-      // 加粗段后面若只剩一两个字的虚词（了/的/吗/吧/呢…），并进重点段。
-      for (let i = 0; i < segs0.length - 1; i += 1) {
-        if (!segs0[i].strong) continue;
-        const head = (segs0[i + 1].text.match(/^[^，。、！？；：…\s]+/) ?? [''])[0];
-        const cjk = [...head].filter((c) => /[\u4e00-\u9fff]/.test(c)).length;
-        if (cjk > 0 && cjk <= emp.absorbTailMax) {
-          segs0[i].text += head;
-          segs0[i + 1].text = segs0[i + 1].text.slice(head.length);
-        }
-      }
-      for (let i = segs0.length - 1; i > 0; i -= 1) {
-        // 纯标点的段（并入虚词后剩下的「。」）并回上一段，否则 edge 合成不出音频
-        if (!segs0[i].text.trim() || /^[，。、！？；：…]+$/.test(segs0[i].text)) {
-          segs0[i - 1].text += segs0[i].text;
-          segs0.splice(i, 1);
-        }
-      }
-      // **重点只标短词**（格 2026-11-20）：口头重音落在 1–3 个字上才有力；标成
-      // 「伤害很高」这种长段，整段一起放慢会拖成一句、反而不像重点。超过上限就按普通念。
-      const cjkLen = (s) => [...s].filter((c) => /[\u4e00-\u9fff]/.test(c)).length;
-      for (const s of segs0) {
-        if (s.strong && cjkLen(s.text) > emp.maxStrongChars) s.strong = false;
-      }
-      if (process.env.DSH_VOICE_DEBUG) console.error('[edge-tts] segs:', JSON.stringify(segs0.map((s) => (s.strong ? '*' : '') + s.text)));
-      // 很短的整句（含情绪短句）不切段：`哇，小心！` 切成两截就成了两声，语气断了。
-      const totalCjk = cjkLen(spoken);
-      if ((segs0.length <= 1 || totalCjk <= emp.shortUtteranceMax) && !hadBreath && !spoken.includes('~')) {
-        const r = await runSynth(spoken, emp.baseRate, file);
-        if (!r.ok) throw new Error('synth failed');
       } else {
-        const clips = [];
-        let n = 0;
-        for (let i = 0; i < segs0.length; i += 1) {
-          const part = join(tmpdir(), `dsh-say-${stamp}-${n += 1}.mp3`);
-          job.parts.push(part);
-          // `~` = 拖音（2026-11-20）：`呃啊~！太~吓人了~！` 里的波浪号是"颤/拖"的提示，
-          // 念的时候去掉它，把这一段整体放慢；同一段里波浪号越多越慢（每多一个再 -8%）。
-          const tildes = (segs0[i].text.match(/~/g) ?? []).length;
-          const textForSynth = segs0[i].text.replace(/~/g, '');
-          const slow = tildes > 0;
-          const rate = slow
-            ? `-${Math.min(45, 22 + (tildes - 1) * 8)}%`
-            : (segs0[i].strong ? emp.rate : emp.baseRate);
-          const r = await runSynth(textForSynth,
-            rate,
-            part,
-            segs0[i].strong ? emp.pitch : '+0Hz',
-            segs0[i].strong ? emp.volume : emp.baseVolume);
-          if (!r.ok) throw new Error('synth failed');
-          const isFinalStrong = segs0[i].strong && i === segs0.length - 1;
-          const trimmed = trimEdges(part, isFinalStrong ? 0 : 0.05);
-          if (trimmed !== part) job.parts.push(trimmed);
-          clips.push(trimmed);
-          // 加粗段后的自动停顿默认关（emp.pauseMs=0）：整句里凭空多一个气口会像逗号
-          if (segs0[i].strong && emp.pauseMs > 0 && i < segs0.length - 1) {
-            clips.push(silenceFor(emp.pauseMs));
-          }
-        }
-        // **接缝留出固定气口**：每段裁边后各留 50ms，中间再补 gapMs−100ms 的静音，
-        // 让「在｜红」之间的空档约等于正常字间隔的 1.1 倍（1.1 倍速下约 200ms）。
-        // 太少会被听成抢话（格 2026-11-20 实听），太多像顿号。
-        if (clips.length === 1) {
-          copyFileSync(clips[0], file);
-        } else {
-          const pad = Math.max(0, Math.round(emp.gapMs - 100));
-          const gapClip = pad > 0 ? silenceFor(pad) : null;
-          const seq = [];
-          clips.forEach((c, i) => {
-            seq.push(c);
-            if (gapClip && i < clips.length - 1) seq.push(gapClip);
-          });
-          const list = join(tmpdir(), `dsh-say-${stamp}.txt`);
-          job.parts.push(list);
-          writeFileSync(list, seq.map((f) => `file '${f.replace(/\\/g, '/')}'`).join('\n'));
-          const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
-            '-f', 'concat', '-safe', '0', '-i', list, '-c:a', 'libmp3lame', '-b:a', '48k', file],
-          { stdio: 'ignore', windowsHide: true });
-          if (r.status !== 0) throw new Error('concat failed');
-        }
+        const r = await runSynth(spoken.replace(/~/g, ''), rate, file);
+        if (!r.ok) throw new Error('synth failed');
       }
       // 换气口：把内部静音压到 breathMs（逗号那口"气"本来 300–400ms，太长就成逗号了）
       if (hadBreath) {
@@ -335,6 +256,10 @@ export async function attach(api, options = {}) {
         }
       }
       if (!alive) throw new Error('detached');
+      // 调试/试听用：DSH_VOICE_KEEP 指向一个路径，就把成品留一份（不改变正常流程）
+      if (process.env.DSH_VOICE_KEEP) {
+        try { copyFileSync(file, process.env.DSH_VOICE_KEEP); } catch { /* 留不下就算了 */ }
+      }
       let play;
       try {
         play = spawn(ffplay, ['-nodisp', '-autoexit', '-loglevel', 'quiet', file],

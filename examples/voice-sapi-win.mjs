@@ -68,12 +68,32 @@ const PS_SCRIPT = [
   'if ($env:DSH_SAY_SSML) { $s.SpeakSsml($env:DSH_SAY_SSML) } else { $s.Speak($env:DSH_SAY_TEXT) }',
 ].join('; ');
 
-/** **加粗** → `<emphasis level="strong"><prosody rate="slow">…</prosody></emphasis>` */
-function toSsml(text) {
+/**
+ * 语音标记 → SSML（2026-11-20 重写）：
+ *
+ * - `**顺**` → `<prosody rate="+0%" volume="loud">顺</prosody>`，其余部分各套一段
+ *   `<prosody rate="+10%">`：**非重点快 10%、重点回到原速**，跟 edge 那套对比一样，
+ *   但 SAPI 是一次合成，所以能精确落到「顺」而不切断「顺时针」——edge 做不到的那件事。
+ *   （实测 `rate="+10%"` 有效：同一句 5.42s → 4.87s。）
+ * - `‖` → `<break time="200ms"/>`：换气口，SAPI 自己就能精确插。
+ * - `X~` → 把 X 套进 `<prosody rate="x-slow">`：拖音。
+ */
+export function toSsml(text, { baseRate = '+10%', strongRate = '+0%', strongVolume = 'loud' } = {}) {
   const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const body = splitEmphasis(text).map((seg) => (seg.strong
-    ? `<emphasis level="strong"><prosody rate="slow">${esc(seg.text)}</prosody></emphasis>`
-    : esc(seg.text))).join(' ');
+  const body = String(text).split('‖').map((chunk) => {
+    // 先切加粗，再对非加粗部分处理 `X~`
+    return splitEmphasis(chunk).map((seg) => {
+      if (seg.strong) {
+        // 段内再强一层：`〔顺〕` → 更慢 + 更响（2026-11-20：整段是重点，但某一个字要再压一层）
+        const inner = esc(seg.text)
+          .replace(/〔(.+?)〕/g, '<prosody rate="-10%" volume="loud">$1</prosody>');
+        return `<prosody rate="${strongRate}" volume="${strongVolume}">${inner}</prosody>`;
+      }
+      const plain = esc(seg.text)
+        .replace(/([^，。、！？；：…\s])~/g, '<prosody rate="x-slow">$1</prosody>');
+      return `<prosody rate="${baseRate}">${plain}</prosody>`;
+    }).join('');
+  }).join('<break time="200ms"/>');
   return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN">${body}</speak>`;
 }
 
@@ -102,8 +122,8 @@ export async function attach(api, options = {}) {
           windowsHide: true,
           env: {
             ...process.env,
-            DSH_SAY_TEXT: ev.text.replace(/\*\*(.+?)\*\*/g, '$1'),
-            DSH_SAY_SSML: /\*\*(.+?)\*\*/.test(ev.text) ? toSsml(ev.text) : '',
+            DSH_SAY_TEXT: ev.text.replace(/\*\*(.+?)\*\*/g, '$1').replace(/‖/g, '，').replace(/~/g, ''),
+            DSH_SAY_SSML: /\*\*.+?\*\*|‖|~/.test(ev.text) ? toSsml(ev.text) : '',
             DSH_SAY_VOICE: cfg.voice || '',
             DSH_SAY_RATE: String(rate),
           },

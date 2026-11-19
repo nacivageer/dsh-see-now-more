@@ -43,6 +43,7 @@
     "icon.svg",
     "examples/floating-chat/*.py",
     "examples/floating-chat/*.png",
+    "examples/edge-ssml-synth.py",
     "examples/voice-say-mac.mjs",
     "scripts",
     "cordis.patch.yml",
