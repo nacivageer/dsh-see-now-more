@@ -356,6 +356,9 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     mode,
     /** 设置页点「模式」时写的时间戳：同一个值再点一次也要重新执行（见 index.js 的 modeWatcher） */
     modeAt: Number(raw.modeAt) || 0,
+    /** 游戏模式：临时覆盖节奏，关掉恢复；gameModeAt 同 modeAt，用来识别"又点了一次" */
+    gameMode: raw.gameMode === true,
+    gameModeAt: Number(raw.gameModeAt) || 0,
     idleCaptureMin,
     scoreNormalize,
     packStretch,

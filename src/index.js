@@ -940,6 +940,58 @@ async function registerAll(ctx) {
   disposers.push(() => clearInterval(modeWatcher));
 
   /**
+   * **游戏模式**（2026-11-19 用户要求）：设置页里点开关 → 临时把节奏换成
+   * `game-economic`，关掉时恢复**原来那一档**；不写 `defaultPace`，所以配置里
+   * 用户自己的选择永远不被覆盖。
+   *
+   * 为什么也走"文件 + 时间戳"：窗口只能写 `see-now.json`，没有回调宿主的通道；
+   * `gameModeAt` 让"同一个开关再点一次"也能被识别（跟 modeAt 一个道理）。
+   *
+   * 开关时给模型发一条提醒：贴在循环会话上（`wakeWithRetry`），同时 `note()` 一份
+   * 兜底（模型正好没在跑时，下一次工具结果里也能看到）。
+   */
+  let lastGameMode = (() => { try { return Boolean(readTuning().gameMode); } catch { return false; } })();
+  let lastGameModeAt = (() => { try { return readTuning().gameModeAt || 0; } catch { return 0; } })();
+  /** 开游戏模式之前的节奏；`null` = 当前没被覆盖 */
+  let paceBeforeGame = null;
+  // 重启时游戏模式还开着：启动就该是覆盖态，并把"原来的档"记下来，关掉才还得回去
+  if (lastGameMode) {
+    paceBeforeGame = PACES[tuning.defaultPace] ? tuning.defaultPace : DEFAULT_PACE;
+    paceMode = 'game-economic';
+  }
+  const gameWatcher = setInterval(() => {
+    let t = null;
+    try { t = readTuning(); } catch { return; }
+    const on = Boolean(t.gameMode);
+    const at = Number(t.gameModeAt) || 0;
+    if (at === lastGameModeAt && on === lastGameMode) return;
+    lastGameModeAt = at;
+    lastGameMode = on;
+    if (on) {
+      if (paceBeforeGame === null) paceBeforeGame = paceMode;
+      paceMode = 'game-economic';
+    } else {
+      paceMode = paceBeforeGame
+        ?? (PACES[tuning.defaultPace] ? tuning.defaultPace : DEFAULT_PACE);
+      paceBeforeGame = null;
+    }
+    // 循环是按节奏建的：换档要重建，否则唤醒间隔还是旧的
+    try { if (loop) ensureLoop(boundSessionNow()); } catch (e) { log(`游戏模式重建循环失败：${e?.message ?? e}`); }
+    const text = on
+      ? '用户刚在悬浮窗打开了「游戏模式」：节奏临时换成 game-economic（切点门槛 80、最多 20 秒叫一次），关掉后会恢复原来的节奏。'
+      : `用户刚关掉了「游戏模式」，节奏已恢复为 ${paceMode}。`;
+    try { runner.note?.(text); } catch { /* 记不住也要提醒 */ }
+    log(`游戏模式：${on ? '开' : '关'}（节奏 ${paceMode}）`);
+    const who = boundSessionNow() ?? lastSessionId;
+    if (who) {
+      wakeWithRetry({ ctx, sessionId: who, text, steer: false })
+        .catch((e) => log(`游戏模式提醒没送到：${e?.message ?? e}`));
+    }
+  }, 1500);
+  gameWatcher.unref?.();
+  disposers.push(() => clearInterval(gameWatcher));
+
+  /**
    * **裸采集闲置自动收工**（2026-11-09 用户要求 S1）。
    *
    * 为什么需要它：`action:"start"` 只起采集、不建常驻循环，而收工线（`idleStopMin`）

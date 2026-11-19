@@ -8479,8 +8479,8 @@ class LiveGlass:
 
     SETTINGS_ROWS = (
         # key, 标题, 可选值, 显示名, 默认（None = 未写过，显示「默认」）
-        ("defaultPace", "节奏", ("calm", "normal", "dense"),
-         {"calm": "省", "normal": "常规", "dense": "密"}, "normal"),
+        ("defaultPace", "节奏", ("calm", "normal", "dense", "game-economic"),
+         {"calm": "省", "normal": "常规", "dense": "密", "game-economic": "游戏"}, "normal"),
         ("quality", "清晰度", ("low", "standard", "high", "ultra"),
          {"low": "低", "standard": "标准", "high": "高", "ultra": "超高"}, None),
         ("packStretch", "排布容差", (0, 0.1, 0.2, 0.3),
@@ -8546,6 +8546,10 @@ class LiveGlass:
         for val, label in self.MODE_OPTIONS:
             rows.append({"kind": "mode", "value": val, "label": label, "h": 48})
         # 这句只约束下面三项（模式是即时生效的，见标题行）—— 2026-11-19 用户要求
+        # 游戏模式：**临时覆盖**，关掉就恢复原来的节奏（2026-11-19 用户要求）。
+        # 放在提示**上面**：提示里的"以下选项"只指节奏/清晰度/排布，不含它。
+        rows.append({"kind": "gmode", "on": bool(data.get("gameMode")), "h": 54})
+        rows.append({"kind": "sep", "h": 8})
         rows.append({"kind": "hint",
                      "text": "以下选项存进 see-now.json，重启 DSH 后生效", "h": 30})
         rows.append({"kind": "sep", "h": 8})
@@ -8619,6 +8623,14 @@ class LiveGlass:
                 c.create_text(cw - 30, (y0 + y1) // 2, text=("✓" if sel else ""),
                               anchor="e", fill=self.MODE_COLORS[r["value"]],
                               font=f11b, tags=(f"modecheck_{r['value']}",))
+            elif kind == "gmode":
+                on = bool(r["on"])
+                c.create_text(36, (y0 + y1) // 2, text="游戏模式", anchor="w",
+                              fill=("#f4f9ff" if on else "#b9c6d6"),
+                              font=(f11b if on else f11), tags=("gmodelabel",))
+                c.create_text(cw - 30, (y0 + y1) // 2, text=("开" if on else "关"),
+                              anchor="e", fill=(FOCUS_LIVE if on else "#8e9db2"),
+                              font=f11b, tags=("gmodeval",))
             elif kind == "setting":
                 _key, label, _options, names, _default = r["row"]
                 c.create_text(34, (y0 + y1) // 2, text=label, anchor="w",
@@ -8659,6 +8671,8 @@ class LiveGlass:
                 continue
             if r["kind"] == "mode":
                 self._settings_pick_mode(r["value"])
+            elif r["kind"] == "gmode":
+                self._settings_toggle_game(r)
             elif r["kind"] == "setting":
                 self._settings_cycle(r)
             return
@@ -8691,6 +8705,24 @@ class LiveGlass:
                 c.itemconfigure(f"modecheck_{val}", text=("✓" if sel else ""))
             except Exception:
                 pass
+
+    def _settings_toggle_game(self, r) -> None:
+        """游戏模式开关：只写 gameMode/modeAt 式的标记，**不碰 defaultPace** ——
+        宿主那边临时把节奏换成 game-economic，关掉时恢复它自己记着的旧值。"""
+        on = not bool(r.get("on"))
+        r["on"] = on
+        self._settings_write("gameMode", on)
+        self._settings_write("gameModeAt", int(time.time() * 1000))
+        st = self._settings
+        try:
+            c = st["canvas"]
+            f11, f11b = self.fonts.get(11), self.fonts.get(11, True)
+            c.itemconfigure("gmodelabel", fill=("#f4f9ff" if on else "#b9c6d6"),
+                            font=(f11b if on else f11))
+            c.itemconfigure("gmodeval", text=("开" if on else "关"),
+                            fill=(FOCUS_LIVE if on else "#8e9db2"))
+        except Exception:
+            pass
 
     def _settings_cycle(self, r) -> None:
         st = self._settings
