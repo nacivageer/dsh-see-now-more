@@ -2,8 +2,8 @@
 
 这是 `dsh-see-now` 的本地分支，不是上游官方版本；当前方向是**黑听抬头**（见 README「它往哪走」）。提交前请先理解三件事：
 
-1. **范围**：只在 **Windows 10 + DSH 桌面版 `0.2.2-rc.1`** 上验证过；macOS / Linux 未验证，
-   **麦克风输入从未测试**，不知道是否可用。改这些路径前先在对应环境里跑通。
+1. **范围**：只在 **Windows 10 + DSH 桌面版 `0.2.2-rc.1`** 上验证过；**macOS 不做**（暂不支持，
+   见 `docs/决策记录.md`），Linux 未验证；**麦克风输入从未测试**，不知道是否可用。改这些路径前先在对应环境里跑通。
 2. **别跑生成链。** `npm run sync:window` 会用上游 `dsh-watch-together` 覆盖
    `examples/floating-chat/window.py`，而本仓对这个文件改动很大。只读检查用
    `npm run check:window`。

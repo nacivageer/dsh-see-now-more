@@ -130,14 +130,14 @@ setInterval(() => {
 
 | 项 | 状态 |
 |---|---|
-| 操作系统 | **Windows 10** —— 文档里的所有实测都在这一台上做的。Windows 11 用同一套 `ddagrab` / `gdigrab`，没专门验。macOS 代码里有 `avfoundation` 分支、Linux 没接（`x11grab` / PipeWire 待补）。 |
+| 操作系统 | **Windows 10** —— 文档里的所有实测都在这一台上做的。Windows 11 用同一套 `ddagrab` / `gdigrab`，没专门验。**macOS 不在计划里**（目前没打算做；代码里保留了上游的 `avfoundation` 分支，不验证、不承诺）。Linux 没接（`x11grab` / PipeWire 待补）。 |
 | DSH 版本 | **`0.2.2-rc.5`**（2026-11 的 desktop 包；rc.5 于 2026-11-19 整套重测过一轮）。插件依赖 DSH 内部的 `sessionController` / `tools` / `attachments` 服务，还直接读 `~/.dsh/sessions` 的目录格式；升级 DSH 后坏掉是正常预期。**rc.5 起多一条：DSH 升级会整体替换它托管的 Python 运行时**，`mss`、`pyaudiowpatch` 这类装在托管运行时里的包会一起消失（表现为开窗报「缺少 mss」、黑听报「没有能用的 Python」）——改用独立 Python 并在 `~/.dsh/see-window.json` 里写 `python` / `listenPython` 可以避开。 |
-| 系统声音（听声音） | Windows 上验证过，走 WASAPI 回环，抓的是"电脑在放什么"，**不是麦克风**。mac 上要装 BlackHole 之类的虚拟声卡，这版没做。 |
+| 系统声音（听声音） | Windows 上验证过，走 WASAPI 回环，抓的是"电脑在放什么"，**不是麦克风**。mac 不做（虚拟声卡那套也不在计划里）。 |
 | 麦克风输入 | **完全没测过。** `examples/floating-chat/mic.py` 和浮窗里的「麦」按钮是上游带进来的，开发期没有可用的麦克风环境，**不知道它能不能用**。它的默认模型目录是开发机的 `D:/asr-local/models-sherpa`，换机器要传 `--models-dir`（或改 `~/.dsh/asr.json` 的 `manage.start`）。 |
 
 > 麦克风这条路的未知状态不会被 `status` 报出来：`status` 只覆盖窗口 / 循环 / 听声音。
 > 性能参考（12fps → 800×450）：`ddagrab` 0.28 核、`gdigrab` 0.45 核、OBS 虚拟摄像头 0.13 核；
-> 全部测量条件与**上游的 macOS 早期记录（本仓未复验）**见 [docs/实测.md](./docs/实测.md)。
+> 全部测量条件见 [docs/实测.md](./docs/实测.md)。
 
 ## 黑听抬头：它往哪走
 
@@ -196,7 +196,7 @@ setInterval(() => {
 
 ```json
 // ~/.dsh/voice.json
-{ "adapter": "/绝对路径/examples/voice-say-mac.mjs" }
+{ "adapter": "C:/…/examples/voice-edge-tts.mjs" }
 ```
 
 适配器的 `options` 原样交给 `attach(api, options)`，换自己训的模型不用改适配器源码。
@@ -258,21 +258,11 @@ DeepSeek 那档要开放平台的 key（`platform.deepseek.com` 申请，和 DSH
 
 `full` 撞上付费音色（DeepSeek 官方）时**只念前 200 字**（等于 `reaction` 的长度上限），不会静默变哑；设置页里切到 DeepSeek 那档时，如果 `speakScope` 本来是 `full`，也会顺手落成 `reaction`。
 
-macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色和语速从
-`~/.dsh/tts.json` 读（和 `dsh-watch-together` 共用同一份）：
-
-```json
-// ~/.dsh/tts.json
-{ "voice": "Tingting", "rate": 185 }
-```
-
-`say -v '?' | grep zh_` 可以列出本机所有中文音色（`Tingting` / `Meijia` / `Sinji` / `Reed` / `Rocko`…）。
+macOS 不在计划里（见「适用范围」）。`examples/voice-say-mac.mjs` 是上游带的 `say` 适配器
+（音色/语速读 `~/.dsh/tts.json`），本项目不验证、不承诺。
 
 **改完不用重启**：每次调用工具前都会比对一次配置指纹（适配器路径 + `tts.json` 内容摘要 + `options` 的 JSON），
 变了就自动卸载重挂，没变就一次读文件的开销。所以改音色、换适配器，**下一句就生效**。
-
-> 适配器要自己处理两件事：**串行**（两个 `say` 抢音频设备会像结巴）和 **`spoken` 上报**
-> （在出声的那一瞬发，不能等念完 —— 展示层是"字跟着声音走"的）。
 
 ## 听声音（视频里在说什么）
 
@@ -318,7 +308,7 @@ macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色�
 
 **已知限制**：
 
-- **只有 Windows**（mac 上会直接报"抓不到回环"，画面功能照常）；
+- **只有 Windows**（mac 不支持，见「适用范围」）；
 - **抓的是整个系统的输出**，不只是视频：QQ 提示音、BGM、游戏音效都会进台词。
   视频里没人在说话时，转写多半是空的（服务端有 VAD），偶尔会对着音乐吐出几句幻觉歌词；
 - **它听得见自己**：TTS 念台词时音箱会出声，那段会被回环收回去。所以落盘前查
@@ -510,9 +500,8 @@ see_now({ action: "watch", source: "window", window: "窗口标题里的一段" 
 - **区域模式只能看到前台像素**：没有 OBS 之类的采集源，被遮挡 / 最小化的窗口抓不到。
   抓屏整体失败时（锁屏、UAC 安全桌面、远程桌面）窗口会退成一块**纯色底板**，
   字还能读，但背后不是真实画面。
-- **平台与麦克风**：只在 Windows 10 上验证；macOS 还要单独给「屏幕录制」权限
-  （系统设置 → 隐私与安全性 → 屏幕录制，勾上跑 DSH 的那个 App）—— 没给不会报错，只会全黑，
-  插件会提示，但权限本身只能你去点；麦克风那条路完全没测过。详见「适用范围」。
+- **平台与麦克风**：只在 Windows 10 上验证；**macOS 不做**（上游代码里还有分支，未验、不承诺）。
+  麦克风那条路完全没测过。详见「适用范围」。
 
 ## 它读哪些本地文件
 

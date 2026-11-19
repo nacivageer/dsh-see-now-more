@@ -117,7 +117,7 @@ node bin/see-window.mjs
 |---|---|
 | 窗起不来 | `~/.dsh/see-now-window-error.log`、`~/.dsh/watch-window-error.log` |
 | 插件没加载 / 工具表里没有 `see_now` | `~/.dsh/see-now/plugin-error.log`，再确认已重启 |
-| 窗口打开但全黑 | macOS 没给屏幕录制权限；Windows 上检查是否锁屏 / UAC |
+| 窗口打开但全黑 | Windows：检查是否锁屏 / UAC（本项目不支持 macOS） |
 | 没有台词 | 缺 WASAPI 回环或 ASR，不是 bug；看 `status` 的「听声音」行 |
 | 窗里发的字没人回 | 没绑定会话，见第 3 步 |
 
