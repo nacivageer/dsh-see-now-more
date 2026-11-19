@@ -84,10 +84,10 @@ export async function attach(api, options = {}) {
   // edge-tts 不支持 SSML，所以只能按段合成再拼接；参数分别落在每段的 `--rate` /
   // `--pitch` / `--volume` 和段后的静音上。
   const emp = {
-    rate: typeof options?.emphasis?.rate === 'string' ? options.emphasis.rate : '-20%',
-    baseRate: typeof options?.emphasis?.baseRate === 'string' ? options.emphasis.baseRate : '+8%',
+    rate: typeof options?.emphasis?.rate === 'string' ? options.emphasis.rate : '+0%',
+    baseRate: typeof options?.emphasis?.baseRate === 'string' ? options.emphasis.baseRate : '+10%',
     pitch: typeof options?.emphasis?.pitch === 'string' ? options.emphasis.pitch : '+0Hz',
-    volume: typeof options?.emphasis?.volume === 'string' ? options.emphasis.volume : '+20%',
+    volume: typeof options?.emphasis?.volume === 'string' ? options.emphasis.volume : '+0%',
     pauseMs: Number.isFinite(Number(options?.emphasis?.pauseMs))
       ? Math.max(0, Math.min(600, Number(options.emphasis.pauseMs)))
       : 0,
@@ -95,6 +95,11 @@ export async function attach(api, options = {}) {
       ? Math.max(0, Math.min(400, Number(options.emphasis.breathMs)))
       : 200,
   };
+
+  // 接缝重叠时长（秒）：0.05 ≈ 听不出，太长会吞字
+  const seam = (Number.isFinite(Number(options?.emphasis?.seamMs))
+    ? Math.max(10, Math.min(150, Number(options.emphasis.seamMs)))
+    : 20) / 1000;
 
   const silenceCache = new Map();   // 每种时长只合成一次
   const silenceFor = (ms) => {
@@ -166,7 +171,19 @@ export async function attach(api, options = {}) {
     const spoken = String(ev.text).replace(/‖/g, '，');
     const chunks = [spoken];
     try {
+      // **切段后别把标点甩到段首**：`‖` 变成逗号后常常正好落在段首（`\|再翻滚`），
+      // edge 对「以逗号开头」的文本会合成不出音频（synth failed）。把段首标点挪到上一段末尾。
       const segs0 = splitEmphasis(spoken);
+      for (let i = 1; i < segs0.length; i += 1) {
+        const m = /^([，。、！？；：…]+)/.exec(segs0[i].text);
+        if (m) {
+          segs0[i - 1].text += m[1];
+          segs0[i].text = segs0[i].text.slice(m[1].length);
+        }
+      }
+      for (let i = segs0.length - 1; i > 0; i -= 1) {
+        if (!segs0[i].text.trim()) { segs0[i - 1].text += segs0[i].text; segs0.splice(i, 1); }
+      }
       if (segs0.length <= 1 && !hadBreath) {
         const r = await runSynth(spoken, '+0%', file);
         if (!r.ok) throw new Error('synth failed');
@@ -190,14 +207,24 @@ export async function attach(api, options = {}) {
             clips.push(silenceFor(emp.pauseMs));
           }
         }
-        const list = join(tmpdir(), `dsh-say-${stamp}.txt`);
-        job.parts.push(list);
-        writeFileSync(list, clips.map((f) => `file '${f.replace(/\\/g, '/')}'`).join('\n'));
-        // 裁过边 + 夹静音，编码参数不一定一致，统一重编码
-        const concat = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
-          '-f', 'concat', '-safe', '0', '-i', list, '-c:a', 'libmp3lame', '-b:a', '48k', file],
-        { stdio: 'ignore', windowsHide: true });
-        if (concat.status !== 0) throw new Error('concat failed');
+        // **接缝不许留静音**：直接 concat 会把两段各自的边缘静音叠起来，重点词前就"顿一下"。
+        // 改用 acrossfade 重叠 seamMs 秒，让前后段的气口接上——格要的"弹簧被压下去再弹起"。
+        if (clips.length === 1) {
+          copyFileSync(clips[0], file);
+        } else {
+          const inputs = clips.flatMap((f) => ['-i', f]);
+          let chain = '';
+          let prev = '[0:a]';
+          for (let i = 1; i < clips.length; i += 1) {
+            const label = i === clips.length - 1 ? '[mix]' : `[m${i}]`;
+            chain += `${prev}[${i}:a]acrossfade=d=${seam}:c1=tri:c2=tri${label};`;
+            prev = label;
+          }
+          const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...inputs,
+            '-filter_complex', chain.slice(0, -1), '-map', '[mix]', '-c:a', 'libmp3lame',
+            '-b:a', '48k', file], { stdio: 'ignore', windowsHide: true });
+          if (r.status !== 0) throw new Error('concat failed');
+        }
       }
       // 换气口：把内部静音压到 breathMs（逗号那口"气"本来 300–400ms，太长就成逗号了）
       if (hadBreath) {
@@ -227,7 +254,8 @@ export async function attach(api, options = {}) {
       };
       play.on('close', done);
       play.on('error', done);
-    } catch {
+    } catch (err) {
+      if (process.env.DSH_VOICE_DEBUG) console.error('[edge-tts] say failed:', err);
       try { api.emitSpeech({ text: ev.text, at: ev.at ?? null, state: 'skipped' }); } catch { /* 没人听 */ }
       for (const f of [file, ...job.parts]) cleanup(f);
       if (synth === job) synth = null;
