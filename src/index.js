@@ -739,8 +739,12 @@ async function registerAll(ctx) {
     try { return Boolean(loop) && loop.stopped?.() !== true; } catch { return false; }
   };
   const voiceLooksPaid = () => String(configuredVoiceAdapter() ?? '').toLowerCase().includes('deepseek-tts');
+  /** 朗读范围**热读**：它是行为开关、不是管线参数，改完不该逼人重启。 */
+  const speakScopeNow = () => {
+    try { return readTuning().speakScope ?? 'off'; } catch { return tuning.speakScope ?? 'off'; }
+  };
   const speakAssistantReply = (text) => {
-    const scope = tuning.speakScope ?? 'off';
+    const scope = speakScopeNow();
     if (scope === 'off') return;
     let payload = '';
     if (scope === 'notify') payload = '有新消息';
