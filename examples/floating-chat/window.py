@@ -8579,8 +8579,9 @@ class LiveGlass:
         f16b = self.fonts.get(16, True)
         c.create_text(24, head // 2 - 2, text="本插件设置", anchor="w",
                       fill="#f4f9ff", font=f16b)
-        c.create_text(cw - 24, head // 2 - 2, text="✕", anchor="e",
-                      fill="#a9b8cc", font=f11b)
+        # 关闭按钮：18 号粗体（2026-11-19 用户要求「大一点」）
+        c.create_text(cw - 26, head // 2 - 3, text="✕", anchor="e",
+                      fill="#c3d0e2", font=self.fonts.get(18, True))
         hits = []
         yy = head
         for idx, r in enumerate(rows):
@@ -8645,7 +8646,7 @@ class LiveGlass:
         if not st:
             return
         if e.y < st["head"]:
-            if e.x >= st["cw"] - 48:
+            if e.x >= st["cw"] - 64:
                 self._close_settings()
             return
         for y0, y1, r in st["hits"]:
@@ -10036,7 +10037,14 @@ class LiveGlass:
         self._close_img_menu()
         # 点在主窗上 = 点在设置卡外面（卡片是独立 Toplevel，命中不会走到这儿）。
         # 卡片自己不绑 FocusOut 自动关（那样会「闪一下就没了」），靠这一条收。
-        if getattr(self, "_settings", None):
+        # **但点在【本插件设置】胶囊上不算"外面"**：那一下要留给 toggle（2026-11-19
+        # 用户要求：再点一次应该收起，而不是重开）。
+        _setr = getattr(self, "_bind_settings_rect", None)
+        _on_set_btn = bool(
+            self._pad and _setr
+            and _setr[0] <= e.x <= _setr[2] and _setr[1] <= e.y <= _setr[3]
+        )
+        if getattr(self, "_settings", None) and not _on_set_btn:
             self._close_settings()
         self._sel_drag = False
         # 标题栏 ▴/▾ 与 ✕：整块矩形判定（2026-11-06 用户要求判定范围同步加大）
@@ -10082,7 +10090,11 @@ class LiveGlass:
             # 【本插件设置】在这条行的最右边（2026-11-19 用户指定）
             r = getattr(self, "_bind_settings_rect", None)
             if r is not None and r[0] <= e.x <= r[2] and r[1] <= e.y <= r[3]:
-                self._open_settings()
+                # 开着就收起，没开就打开（2026-11-19 用户要求）
+                if getattr(self, "_settings", None):
+                    self._close_settings()
+                else:
+                    self._open_settings()
                 return
             r = getattr(self, "_bind_input_rect", None)
             if r is not None and r[0] <= e.x <= r[2] and r[1] <= e.y <= r[3]:
