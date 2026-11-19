@@ -2,6 +2,36 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.16] - 2026-11-19
+
+### Added — 悬浮窗设置页
+
+- 「关联变更」展开行右侧新增【本插件设置】胶囊（再点一次收起）；卡片可按住标题栏拖动；右上角 ✕ 放大到 18 号。
+- 当前感官模式四选一：视听都开 / 仅看 / 仅听（使用黑听抬头机制）/ 无。点一行**即时生效**：前两档起采集 + 常驻循环，仅听进黑听（listen 循环），无则全停。
+- 游戏模式开关：临时把节奏切到 `game-economic`（切点门槛 80、最多 20 秒叫一次），关掉恢复原档；**不写 `defaultPace`**。开关时在窗里落一条居中系统气泡，并给模型留一条 note（不额外起一轮模型调用）。
+- 【检查当前选项是否生效】胶囊：宿主逐项比对「配置值 vs 本次 apply 真正用上的值」，结果落成系统气泡；按钮点下先变暗，气泡到达再恢复。
+- 展开态胶囊衬底改为 `#17324f`（与「收藏/历史」一致）。
+
+### Changed — 感官模式四档可持久化
+
+- `mode` 现在允许 `audio` / `none` 写进 `see-now.json`；`watch` 显式看画面时 `none→vision`、`audio→both`，只改内存、不写回配置。
+- 设置页的「当前感官模式」读 `focus.json` 的真实状态，不再只显示配置值。
+
+### Fixed
+
+- 设置卡被主窗 800ms 顶置看门狗盖住（表现为「点开只闪一下就不见」）。
+- 设置卡 canvas 与 Toplevel 双绑 `<Button-1>`，一次点击跑两遍、看起来只能在两档间跳。
+- 游戏模式开关只写配置、界面不刷新：`FOCUS_LIVE` 是类属性，方法里裸引用触发 `NameError`，被 `except Exception: pass` 吞掉。
+- `readJson` 不剥 BOM：PowerShell 5.1 写出的 `see-window.json` 会让整份配置被静默忽略。
+- 开窗前只探 `tkinter`：缺 `mss` 时 `window.py` 弹出阻塞 MessageBox，被 700ms 存活判定当成「开窗成功」、不再换候选；现在四个包（tkinter/mss/numpy/PIL）都探，并且开窗后 20 秒内只认 pid（启动期没有心跳不算死）。
+- 积分阈值跟着采集 fps 漂：8fps（按窗口抓）阈值低 1/3，同样素材多留 33% 的帧；现在钉在基准 12fps（`INTEGRAL_BASE_FPS`）。
+- 设置页的「清晰度」以前宿主根本不读——`tuning` 不解析 `quality`、`watch` 默认写死 `null`；现在由 `defaultQuality` 生效。
+
+### Notes
+
+- `pyaudiowpatch` / `mss` 会随 DSH 托管 runtime 的整体替换丢失（2026-11-19 实测过一次）；建议把 `listenPython` 指到独立 venv，别依赖托管 runtime。
+- `node --test`：328 项，325 通过 / 0 失败 / 3 跳过（OCR 等环境依赖）。
+
 ## [0.1.1-more.15] - 2026-11-17
 
 ### Changed — `see_now` 的契约压掉 49%（12,072 → 6,122 字符，≈3,909 → ≈2,251 token）
