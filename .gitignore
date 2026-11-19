@@ -31,3 +31,7 @@ docs/verify-*.png
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# ---- 运行时残留（从仓目录直接跑 bin/see-window.mjs 时会落在当前目录）----
+see-now.json
+see-now-window.pid
