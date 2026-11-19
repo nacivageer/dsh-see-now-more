@@ -265,9 +265,10 @@ export function windowVerdict({ wasOpen = false, alive = false, pidAlive = false
  * 下一次工具结果带走 —— 和陪看的 `markHungUp` 同一个路子。
  */
 export const HANGUP_NOTE = '[看屏幕·挂断] 悬浮窗被关掉了 —— 用户关它就是在说「不看了」。\n'
-  + '采集已经停，不会再出图。**不要再调 see_now**，也不要再说话。\n'
+  + '采集已经停，不会再出图。**不要再自动调 see_now**，也不要再说话。\n'
   + '只回一句短的（用 `say`，否则他看不到），比如"好，先停在这儿"。\n'
-  + '他要接着看时会自己说一声，那时候再重新调 `see_now({action:"watch"})`。';
+  + '他明确说要看时有三条路：① `see_now({action:"window", show:true})` 开回窗并解除挂断，再 `watch`；'
+  + '② 他自己把窗点开；③ 本地视频 `watch` 带 `source:"file"`。';
 
 /**
  * 起一个常驻循环。

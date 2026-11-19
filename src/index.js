@@ -1419,7 +1419,10 @@ async function registerAll(ctx) {
           if (r.reason === 'hung-up') {
             return {
               text: '用户已经关掉了悬浮窗，这一轮看屏幕结束了。\n'
-                + '**不要再调 `see_now`**。等用户明确说要看（或者重新打开窗口）再开始。',
+                + '**别再自动调 `see_now`** —— 除非用户明确说要看。那时候有三条路：\n'
+                + '① `see_now({action:"window", show:true})` 开回窗并解除挂断，再 `watch`；\n'
+                + '② 用户自己把窗点开（窗活着就算解除）；\n'
+                + '③ 本地视频 `watch` 带 `source:"file"`。',
               meta: { ok: false, reason: 'hung-up' },
             };
           }
