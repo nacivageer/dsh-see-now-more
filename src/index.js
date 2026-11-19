@@ -1100,10 +1100,15 @@ async function registerAll(ctx) {
   const speakScopeLine = (t) => {
     const scope = t.speakScope ?? 'off';
     const downgraded = scope === 'full' && voiceLooksPaid();
+    // `reaction` 只在陪看循环在跑时出声；循环没起就完全静默——不说清会被当成"功能坏了"
+    // （2026-11-20 实测：设了 reaction、循环早收工，于是怎么都不出声）。
+    const silentReaction = scope === 'reaction' && !loopActiveNow();
     return `朗读范围：${SPEAK_NAME[scope] ?? scope}`
       + (downgraded
         ? ' ⚠（付费音色下自动按「陪看即时反应」念，不会念全文）'
-        : ' ✓');
+        : silentReaction
+          ? ' ⚠（陪看循环没在跑，这一档现在不会出声）'
+          : ' ✓');
   };
   let lastCheckAt = (() => { try { return readTuning().checkAt || 0; } catch { return 0; } })();
   const checkWatcher = setInterval(async () => {
