@@ -7369,9 +7369,14 @@ class LiveGlass:
         """
         c = self.canvas
         w = self._geo.width
-        # 右边距 36 → 设置胶囊 104 → 间隔 10 → 确定变更 110 → 间隔 12 → 输入栏
+        # 胶囊宽度按字实测（2026-11-19 实报：写死 104 装不下「本插件设置」五个字，
+        # 文字从圆角框两边溢出来）。+44 是左右内边距，至少 104。
+        f11b = self.fonts.get(11, True)
+        set_label = "本插件设置"
+        gw = max(104, f11b.measure(set_label) + 44)
+        # 右边距 36 → 设置胶囊 gw → 间隔 10 → 确定变更 110 → 间隔 12 → 输入栏
         gx1 = w - 36
-        gx0 = gx1 - 104
+        gx0 = gx1 - gw
         sx1 = gx0 - 10
         sx0 = sx1 - 110
         x1 = sx0 - 12
@@ -7388,10 +7393,11 @@ class LiveGlass:
                              tags=("bindbar", "chrome"))
             self.text.draw((sx0 + sx1) // 2, (sy0 + sy1) // 2, "确定变更", anchor="center",
                            fill="#ffffff", size=11, bold=True, tags=("bindbar", "chrome"))
+            # 设置胶囊：按字宽拉伸（见上），别再用固定宽度
             c.create_polygon(self._rounded_points(gx0, y0, gx1, y1, 27, 12),
                              fill="#000000", outline="#ffffff", smooth=True,
                              tags=("bindbar", "chrome", "setbtn"))
-            self.text.draw((gx0 + gx1) // 2, (y0 + y1) // 2, "本插件设置", anchor="center",
+            self.text.draw((gx0 + gx1) // 2, (y0 + y1) // 2, set_label, anchor="center",
                            fill="#ffffff", size=11, bold=True,
                            tags=("bindbar", "chrome", "setbtn"))
         except Exception:
@@ -8495,13 +8501,16 @@ class LiveGlass:
         self._close_settings()
         data = self._settings_read()
         values = [self._settings_value(r, data) for r in self.SETTINGS_ROWS]
-        cw, head, row_h, hint_h = 340, 52, 42, 30
+        # 尺寸跟着主窗走（2026-11-19 实报：340 宽太小，像一张菜单不像设置页）。
+        # 主窗 647 时卡片 560；更窄的窗口退到「窗口宽 - 24」，最小 380。
+        cw = max(380, min(560, self._geo.width - 24))
+        head, row_h, hint_h = 68, 56, 46
         ch = head + row_h * len(values) + hint_h
         x = int(max(self._vx + 4,
                     min(self._x + (self._geo.width - cw) // 2,
                         self._vx + self._vw - cw - 4)))
         y = int(max(self._vy + 4,
-                    min(self._y + 110, self._vy + self._vh - ch - 4)))
+                    min(self._y + 80, self._vy + self._vh - ch - 4)))
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
@@ -8513,50 +8522,46 @@ class LiveGlass:
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=cw, height=ch)
         c.pack()
         try:
-            c.create_polygon(self._rounded_points(0, 0, cw, ch, 12, 8),
-                             fill="#0f1319", outline="#2a3546", smooth=True)
+            # 跟主窗一个调子：深色圆角面板 + 细边，四角 16
+            c.create_polygon(self._rounded_points(0, 0, cw, ch, 16, 10),
+                             fill="#0c1118", outline="#3a4759", width=1, smooth=True)
+            c.create_line(22, head, cw - 22, head, fill="#1e2836")
         except Exception:
-            c.configure(bg="#0f1319")
+            c.configure(bg="#0c1118")
         f10 = self.fonts.get(10)
-        f12 = self.fonts.get(12, True)
-        c.create_text(18, head // 2, text="本插件设置", anchor="w", fill="#f2f8ff", font=f12)
-        c.create_text(cw - 20, head // 2, text="✕", anchor="e", fill="#9fb0c8", font=f10)
-        c.create_line(14, head, cw - 14, head, fill="#1f2a38")
+        f11 = self.fonts.get(11)
+        f11b = self.fonts.get(11, True)
+        f16b = self.fonts.get(16, True)
+        c.create_text(24, head // 2 - 2, text="本插件设置", anchor="w",
+                      fill="#f4f9ff", font=f16b)
+        c.create_text(cw - 24, head // 2 - 2, text="✕", anchor="e",
+                      fill="#a9b8cc", font=f11b)
         for i, (row, cur) in enumerate(zip(self.SETTINGS_ROWS, values)):
             _key, label, _options, names, _default = row
             yy = head + i * row_h
             if i % 2 == 1:
-                c.create_rectangle(12, yy + 2, cw - 12, yy + row_h - 2,
-                                   fill="#141a23", outline="")
-            c.create_text(20, yy + row_h // 2, text=label, anchor="w",
-                          fill="#dfe9f6", font=f10)
-            c.create_text(cw - 22, yy + row_h // 2,
+                c.create_rectangle(16, yy + 2, cw - 16, yy + row_h - 2,
+                                   fill="#121924", outline="")
+            c.create_text(28, yy + row_h // 2, text=label, anchor="w",
+                          fill="#dfe9f6", font=f11)
+            c.create_text(cw - 30, yy + row_h // 2,
                           text=names.get(cur, "默认"), anchor="e",
                           fill="#8fd3ff" if cur is not None else "#77859a",
-                          font=f10, tags=(f"setval{i}",))
-        c.create_text(cw // 2, ch - hint_h // 2,
+                          font=f11b, tags=(f"setval{i}",))
+        c.create_text(cw // 2, ch - hint_h // 2 + 2,
                       text="点一行切换 · 存进 see-now.json · 重启 DSH 后生效",
-                      fill="#77859a", font=self.fonts.get(9))
+                      fill="#77859a", font=f10)
         self._settings = {"win": win, "canvas": c, "cw": cw, "head": head,
                           "row_h": row_h, "values": values}
         c.bind("<Button-1>", self._settings_click)
         win.bind("<Button-1>", self._settings_click)
         win.bind("<Escape>", lambda _e: self._close_settings())
-        win.bind("<FocusOut>", lambda _e: self.root.after(160, self._settings_focus_lost))
+        # **不要绑 FocusOut 自动关**：无边框 Toplevel 抢不到焦点时 focus_displayof()
+        # 返回 None，卡片会在打开后 160ms 自己消失（2026-11-19 实报「只闪一下」）。
+        # 关它的三条路：✕ / Esc / 点主窗任意位置（见 `_press` 开头）。
         try:
             win.update_idletasks()
             win.lift()
-            win.focus_force()
-        except Exception:
-            pass
-
-    def _settings_focus_lost(self) -> None:
-        st = self._settings
-        if not st:
-            return
-        try:
-            if st["win"].focus_displayof() is None:
-                self._close_settings()
         except Exception:
             pass
 
@@ -9915,6 +9920,10 @@ class LiveGlass:
 
     def _press(self, e):
         self._close_img_menu()
+        # 点在主窗上 = 点在设置卡外面（卡片是独立 Toplevel，命中不会走到这儿）。
+        # 卡片自己不绑 FocusOut 自动关（那样会「闪一下就没了」），靠这一条收。
+        if getattr(self, "_settings", None):
+            self._close_settings()
         self._sel_drag = False
         # 标题栏 ▴/▾ 与 ✕：整块矩形判定（2026-11-06 用户要求判定范围同步加大）
         r = getattr(self, "_title_close_rect", None)
