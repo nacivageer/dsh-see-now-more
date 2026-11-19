@@ -57,7 +57,7 @@ See Now 换了个思路：**先判断这一帧值不值得看，再决定传不�
 ## 快速开始
 
 > **不是一键安装，也不是全平台承诺。** 本包没有发布到 npm，只提供源码安装；
-> **只保证 Windows 10 + DSH `0.2.2-rc.1`**（见「适用范围」）。
+> **只保证 Windows 10 + DSH `0.2.2-rc.5`**（见「适用范围」）。
 > 让 AI 照着装：把 [INSTALL.md](./INSTALL.md) 指给它——那份是给机器读的安装单，含前置检查、期望输出和失败分支。
 
 ### 在 DSH 里用
@@ -126,12 +126,12 @@ setInterval(() => {
 
 ## 适用范围
 
-**只在 Windows 10 + DSH 桌面版 `0.2.2-rc.1` 上开发和验证过。** 其它组合请当作未验证，不要按"应该能用"来预期：
+**只在 Windows 10 + DSH 桌面版 `0.2.2-rc.5` 上开发和验证过。** 其它组合请当作未验证，不要按"应该能用"来预期：
 
 | 项 | 状态 |
 |---|---|
 | 操作系统 | **Windows 10** —— 文档里的所有实测都在这一台上做的。Windows 11 用同一套 `ddagrab` / `gdigrab`，没专门验。macOS 代码里有 `avfoundation` 分支、Linux 没接（`x11grab` / PipeWire 待补）。 |
-| DSH 版本 | **`0.2.2-rc.1`**（2026-11 的 desktop 包）。插件依赖 DSH 内部的 `sessionController` / `tools` / `attachments` 服务，还直接读 `~/.dsh/sessions` 的目录格式；升级 DSH 后坏掉是正常预期。 |
+| DSH 版本 | **`0.2.2-rc.5`**（2026-11 的 desktop 包；rc.5 于 2026-11-19 整套重测过一轮）。插件依赖 DSH 内部的 `sessionController` / `tools` / `attachments` 服务，还直接读 `~/.dsh/sessions` 的目录格式；升级 DSH 后坏掉是正常预期。**rc.5 起多一条：DSH 升级会整体替换它托管的 Python 运行时**，`mss`、`pyaudiowpatch` 这类装在托管运行时里的包会一起消失（表现为开窗报「缺少 mss」、黑听报「没有能用的 Python」）——改用独立 Python 并在 `~/.dsh/see-window.json` 里写 `python` / `listenPython` 可以避开。 |
 | 系统声音（听声音） | Windows 上验证过，走 WASAPI 回环，抓的是"电脑在放什么"，**不是麦克风**。mac 上要装 BlackHole 之类的虚拟声卡，这版没做。 |
 | 麦克风输入 | **完全没测过。** `examples/floating-chat/mic.py` 和浮窗里的「麦」按钮是上游带进来的，开发期没有可用的麦克风环境，**不知道它能不能用**。它的默认模型目录是开发机的 `D:/asr-local/models-sherpa`，换机器要传 `--models-dir`（或改 `~/.dsh/asr.json` 的 `manage.start`）。 |
 
