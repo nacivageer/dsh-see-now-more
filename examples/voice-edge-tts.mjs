@@ -87,10 +87,13 @@ export async function attach(api, options = {}) {
     rate: typeof options?.emphasis?.rate === 'string' ? options.emphasis.rate : '+0%',
     baseRate: typeof options?.emphasis?.baseRate === 'string' ? options.emphasis.baseRate : '+10%',
     pitch: typeof options?.emphasis?.pitch === 'string' ? options.emphasis.pitch : '+0Hz',
-    volume: typeof options?.emphasis?.volume === 'string' ? options.emphasis.volume : '+0%',
+    volume: typeof options?.emphasis?.volume === 'string' ? options.emphasis.volume : '+15%',
     pauseMs: Number.isFinite(Number(options?.emphasis?.pauseMs))
       ? Math.max(0, Math.min(600, Number(options.emphasis.pauseMs)))
       : 0,
+    absorbMax: Number.isFinite(Number(options?.emphasis?.absorbMax))
+      ? Math.max(0, Math.min(8, Number(options.emphasis.absorbMax)))
+      : 6,
     breathMs: Number.isFinite(Number(options?.emphasis?.breathMs))
       ? Math.max(0, Math.min(400, Number(options.emphasis.breathMs)))
       : 200,
@@ -184,6 +187,22 @@ export async function attach(api, options = {}) {
       for (let i = segs0.length - 1; i > 0; i -= 1) {
         if (!segs0[i].text.trim()) { segs0[i - 1].text += segs0[i].text; segs0.splice(i, 1); }
       }
+      // **切点别落在词中间**：接缝本身就是"换气"，落在「眼睛闪｜红光」这种地方很怪。
+      // 加粗词前面若只剩一小截（≤ absorbMax 个汉字，默认 4），就把它并进重点段，
+      // 让接缝退到上一个标点处——「眼睛闪红光」当成一个整体念。
+      for (let i = 1; i < segs0.length; i += 1) {
+        if (!segs0[i].strong || !segs0[i - 1].text) continue;
+        const frag = (segs0[i - 1].text.match(/[^，。、！？；：…\s]+$/) ?? [''])[0];
+        const cjk = [...frag].filter((c) => /[\u4e00-\u9fff]/.test(c)).length;
+        if (cjk > 0 && cjk <= emp.absorbMax) {
+          segs0[i].text = frag + segs0[i].text;
+          segs0[i - 1].text = segs0[i - 1].text.slice(0, -frag.length);
+        }
+      }
+      for (let i = segs0.length - 1; i > 0; i -= 1) {
+        if (!segs0[i - 1].text.trim()) segs0.splice(i - 1, 1);
+      }
+      if (!segs0.length) throw new Error('empty after split');
       if (segs0.length <= 1 && !hadBreath) {
         const r = await runSynth(spoken, '+0%', file);
         if (!r.ok) throw new Error('synth failed');
