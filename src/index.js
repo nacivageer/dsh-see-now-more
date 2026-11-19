@@ -746,7 +746,10 @@ async function registerAll(ctx) {
     if (scope === 'notify') payload = '有新消息';
     else if (scope === 'reaction') {
       if (!loopActiveNow()) return;
-      payload = String(text ?? '').slice(0, 200);
+      const body = String(text ?? '');
+      // 长消息（比如把攻略整篇搬过来）不念正文，改成一句提醒 —— 半自动滑到"仅提示"，
+      // 但不放弃"陪看时有声"这条线（2026-11-20 用户定）。
+      payload = body.length > 200 ? '我发了一条很长的消息，需要你暂停看看' : body;
     } else if (scope === 'full') {
       // 付费音色（DeepSeek 官方）下「全文」是防呆位：**自动降级成即时反应**，
       // 而不是干脆不念 —— 用户要的是"陪看时有声"，不是"配置一冲突就哑"（2026-11-20）
