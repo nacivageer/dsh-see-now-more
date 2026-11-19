@@ -210,8 +210,9 @@ Windows 自带两个（2026-11-19 加）：
 |---|---|---|---|
 | `examples/voice-edge-tts.mjs` | 微软在线语音（`edge-tts`） | 联网 + 一个装了 `edge_tts` 的 Python（见下） | **音色最自然**，默认 `zh-CN-XiaoxiaoNeural`；断网时这句跳过 |
 | `examples/voice-sapi-win.mjs` | 系统 `System.Speech`（SAPI） | 无 | 离线可用，中文音色一般是 `Microsoft Huihui Desktop`；偏机械 |
+| `examples/voice-deepseek-tts.mjs` | DeepSeek 官方 TTS（`/v1/tools/tts`） | 开放平台 `sk-` key（按量计费，3 元/万字符） | 官方两把音色 `stella`（海星，女声）/ `tide`（暗潮，男声）；**不认网页登录态** |
 
-设置页的「声音」一行就是在 `关 / edge-tts / SAPI` 之间切：它改写 `~/.dsh/voice.json` 的 `adapter`，
+设置页的「声音」一行点开是在 `关 / edge-tts / DeepSeek（海星）/ SAPI` 之间选：它改写 `~/.dsh/voice.json` 的 `adapter`，
 **下一次工具调用就换，不用重启 DSH**（`voice.json` 是热读的）。
 
 edge-tts 要一个装了包的解释器，写进 `options.python` 即可（不写则依次看 `DSH_TTS_PYTHON`、`see-window.json` 的 `listenPython`、`python`）：
@@ -223,6 +224,15 @@ edge-tts 要一个装了包的解释器，写进 `options.python` 即可（不�
 
 装法：`<那个 python> -m pip install edge-tts`；可用音色 `python -m edge_tts --list-voices | findstr zh-CN`。
 播放用 `ffplay`（`ffmpeg` 自带的那个），不在 PATH 时用 `options.ffplay` 指定。
+
+DeepSeek 那档要开放平台的 key（`platform.deepseek.com` 申请，和 DSH 里的「DeepSeek 账号」登录态是两套）：
+
+```json
+// ~/.dsh/voice.json
+{ "adapter": "C:/…/examples/voice-deepseek-tts.mjs", "options": { "apiKey": "sk-…", "voice_id": "stella" } }
+```
+
+没填 key 时选这一档不会出声，`status` 的「声音」行与设置页的【检查当前选项是否生效】都会写明原因。
 
 macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色和语速从
 `~/.dsh/tts.json` 读（和 `dsh-watch-together` 共用同一份）：

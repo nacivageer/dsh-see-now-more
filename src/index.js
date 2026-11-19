@@ -1025,11 +1025,23 @@ async function registerAll(ctx) {
     const runS = Number(runner.packStretch?.()) || 0;
     const okPace = cfgPace === runPace || (t.gameMode && runPace === 'game-economic');
     const line = (name, cfg, run, ok) => `${name}：配置 ${cfg} ／ 运行 ${run}${ok ? ' ✓' : ' ✗（重启 DSH 后生效）'}`;
+    // 声音单独报：它是"选中了但没接上"最典型的一项（DeepSeek 缺 key、SAPI 缺组件、
+    // edge-tts 缺 python），这三条都不该让用户自己去猜（2026-11-19 用户要求）。
+    const voiceSpec = configuredVoiceAdapter();
+    const voiceAdapters = attachedAdapters();
+    const vName = voiceSpec ? String(voiceSpec).split(/[\\/]/).pop() : '';
+    const vErr = lastVoiceError();
+    const voiceLine = !voiceSpec
+      ? '声音：关 ✓'
+      : (voiceAdapters.length
+        ? `声音：${vName} 已接上 ✓`
+        : `声音：${vName} ✗（${vErr || '未接上'}）`);
     const text = '检查当前选项是否生效：\n'
       + line('节奏', PACE_NAME[cfgPace] ?? cfgPace,
         (PACE_NAME[runPace] ?? runPace) + (t.gameMode ? '（游戏模式覆盖中）' : ''), okPace)
       + '\n' + line('清晰度', cfgQ, runQ, cfgQ === runQ)
-      + '\n' + line('排布容差', cfgS, runS, cfgS === runS);
+      + '\n' + line('排布容差', cfgS, runS, cfgS === runS)
+      + '\n' + voiceLine;
     try { appendNotice(text, boundSessionNow() ?? ''); } catch { /* 写不进也不能影响别的 */ }
     log(`检查选项：${text.split('\n').join(' | ')}`);
   }, 1500);

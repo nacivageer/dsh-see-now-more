@@ -8480,9 +8480,11 @@ class LiveGlass:
     MODE_OPTIONS = (("both", "视听都开"), ("vision", "仅看"),
                     ("audio", "仅听（使用黑听抬头机制）"), ("none", "无"))
     # 声音：写 ~/.dsh/voice.json，**热读**（下一次工具调用就换，不用重启 DSH）
-    VOICE_MODES = ("off", "edge", "sapi")
-    VOICE_OPTIONS = (("off", "关"), ("edge", "edge-tts（在线）"), ("sapi", "SAPI（系统）"))
-    VOICE_LABELS = {"off": "关", "sapi": "SAPI", "edge": "edge-tts", "custom": "自定义"}
+    VOICE_MODES = ("off", "edge", "deepseek", "sapi")
+    VOICE_OPTIONS = (("off", "关"), ("edge", "edge-tts（在线）"),
+                     ("deepseek", "DeepSeek（海星）"), ("sapi", "SAPI（系统）"))
+    VOICE_LABELS = {"off": "关", "sapi": "SAPI", "edge": "edge-tts",
+                    "deepseek": "DeepSeek", "custom": "自定义"}
 
     # 值 → 颜色：跟标题栏那颗感官点**用同一套**（FOCUS_LIVE / FOCUS_VISION /
     # FOCUS_AUDIO / FOCUS_OFF），这样窗上和设置页不会出现两种绿。
@@ -8824,12 +8826,16 @@ class LiveGlass:
             return "sapi", a
         if name == "voice-edge-tts.mjs":
             return "edge", a
+        if name == "voice-deepseek-tts.mjs":
+            return "deepseek", a
         return "custom", a
 
     def _voice_adapter_path(self, mode: str) -> str:
         root = Path(__file__).resolve().parents[2]
-        name = "voice-sapi-win.mjs" if mode == "sapi" else "voice-edge-tts.mjs"
-        return str(root / "examples" / name)
+        names = {"sapi": "voice-sapi-win.mjs",
+                 "edge": "voice-edge-tts.mjs",
+                 "deepseek": "voice-deepseek-tts.mjs"}
+        return str(root / "examples" / names.get(mode, "voice-edge-tts.mjs"))
 
     def _settings_rebuild(self) -> None:
         """就地重画：行数变了（展开/收起、选中态）时重新算一遍，但不关窗——
@@ -8856,6 +8862,13 @@ class LiveGlass:
             data.pop("adapter", None)
         else:
             data["adapter"] = self._voice_adapter_path(mode)
+            # deepseek：默认海星；key 留给用户填（options.apiKey 或环境变量）
+            if mode == "deepseek":
+                opts = data.get("options")
+                if not isinstance(opts, dict):
+                    opts = {}
+                opts.setdefault("voice_id", "stella")
+                data["options"] = opts
             # edge-tts 要一个装了 edge_tts 的 Python：默认借 see-window.json 的 listenPython
             if mode == "edge":
                 opts = data.get("options")
