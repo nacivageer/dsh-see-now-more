@@ -8662,7 +8662,7 @@ class LiveGlass:
                               font=f11b, tags=(f"setval_{_key}",))
 
         self._settings = {"win": win, "canvas": c, "cw": cw, "head": head,
-                          "rows": rows, "hits": hits, "mode": mode_now}
+                          "rows": rows, "hits": hits, "mode": mode_now, "drag": None}
         # 胶囊衬底跟着"展开态"走（跟「收藏/历史」一致，2026-11-19 用户要求）
         try:
             self.canvas.itemconfigure("setbtnbg", fill="#17324f")
@@ -8671,6 +8671,10 @@ class LiveGlass:
         # **只绑 canvas**：canvas 与 Toplevel 同时绑同一条 <Button-1> 会触发两次，
         # 一格跳两档（2026-11-19 实报：点一下从「视听都开」直接跳到「仅听」）。
         c.bind("<Button-1>", self._settings_click)
+        # 标题栏拖动（2026-11-19 用户要求）：无边框 Toplevel 只能自己实现
+        for w in (c, win):
+            w.bind("<B1-Motion>", self._settings_drag)
+            w.bind("<ButtonRelease-1>", self._settings_drag_end)
         win.bind("<Escape>", lambda _e: self._close_settings())
         # **不要绑 FocusOut 自动关**：无边框 Toplevel 抢不到焦点时 focus_displayof()
         # 返回 None，卡片会在打开后 160ms 自己消失（2026-11-19 实报「只闪一下」）。
@@ -8691,6 +8695,13 @@ class LiveGlass:
         if e.y < st["head"]:
             if e.x >= st["cw"] - 64:
                 self._close_settings()
+                return
+            # 标题栏按下 = 准备拖动（记录指针在窗内的偏移）
+            try:
+                st["drag"] = (e.x_root - st["win"].winfo_rootx(),
+                              e.y_root - st["win"].winfo_rooty())
+            except Exception:
+                st["drag"] = None
             return
         for y0, y1, r in st["hits"]:
             if not (y0 <= e.y <= y1):
@@ -8745,6 +8756,22 @@ class LiveGlass:
         self._settings_check_dim(True)
         if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
             print("[settings] check requested", flush=True)
+
+    def _settings_drag(self, e) -> None:
+        """按住标题栏拖卡片：`geometry("+x+y")` 只挪位置、不改尺寸。"""
+        st = self._settings
+        if not st or not st.get("drag"):
+            return
+        dx, dy = st["drag"]
+        try:
+            st["win"].geometry(f"+{e.x_root - dx}+{e.y_root - dy}")
+        except Exception:
+            pass
+
+    def _settings_drag_end(self, _e=None) -> None:
+        st = self._settings
+        if st:
+            st["drag"] = None
 
     def _settings_check_dim(self, dim: bool) -> None:
         st = getattr(self, "_settings", None)
