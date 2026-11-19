@@ -747,13 +747,14 @@ async function registerAll(ctx) {
     const scope = speakScopeNow();
     if (scope === 'off') return;
     let payload = '';
-    if (scope === 'notify') payload = '有新消息';
+    if (scope === 'notify') payload = '我发了【新】消息。';
     else if (scope === 'reaction') {
       if (!loopActiveNow()) return;
       const body = String(text ?? '');
       // 长消息（比如把攻略整篇搬过来）不念正文，改成一句提醒 —— 半自动滑到"仅提示"，
       // 但不放弃"陪看时有声"这条线（2026-11-20 用户定）。
-      payload = body.length > 200 ? '我发了一条很长的消息，需要你暂停看看' : body;
+      // 「长」加 `【】` 是语音重读标记（2026-11-20 定），气泡里显示为方括号。
+      payload = body.length > 200 ? '我发了很【长】的一条消息，你暂停看看吧。' : body;
     } else if (scope === 'full') {
       // 付费音色（DeepSeek 官方）下「全文」是防呆位：**自动降级成即时反应**，
       // 而不是干脆不念 —— 用户要的是"陪看时有声"，不是"配置一冲突就哑"（2026-11-20）
@@ -1548,6 +1549,14 @@ async function registerAll(ctx) {
       // （实测：peek 回了话，下一轮还在念"你还没回"）。放在这里所有 action 都覆盖到。
       const said = args.say ? String(args.say).trim().slice(0, 3000) : null;
       /**
+       * 气泡里**不显示语音标记**（2026-11-20）：`〔…〕` / `【…】` 是给朗读的重读标记，
+       * `‖` 是换气口、`~` 是拖音——它们只在合成时有用，落到气泡里就是噪音。
+       * 朗读那一路仍然用原文（标记要留给适配器）。
+       */
+      const saidShown = said
+        ? said.replace(/[〔【]([^〕】]*)[〕】]/g, '$1').replace(/[‖~]/g, '')
+        : null;
+      /**
        * 绑了会话时，**别的会话的 `say` 不许进这个窗** —— 否则窗里又会混进别处
        * 正在进行的对话。调用方会话从 `run.agent.id` 取（`ToolRunContext` 带 agent）；
        * 真拿不到就照旧写 —— 宁可多一句，也不要静默吞掉模型的话。
@@ -1557,7 +1566,7 @@ async function registerAll(ctx) {
       const sayAllowed = Boolean(said)
         && (!boundNow || !callerSession || callerSession === boundNow);
       if (sayAllowed) {
-        try { appendSpoken('assistant', said); } catch { /* 写不进不影响看屏幕 */ }
+        try { appendSpoken('assistant', saidShown ?? said); } catch { /* 写不进不影响看屏幕 */ }
         clearInterjected();
       } else if (said) {
         log(`别的会话（${callerSession}）的 say 没写进窗：这个窗绑的是 ${boundNow}`);
