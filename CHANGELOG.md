@@ -2,6 +2,39 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.17] - 2026-11-19
+
+### Added — 声音（TTS）
+
+- Windows 两个内置适配器：`examples/voice-edge-tts.mjs`（微软在线语音，默认 `zh-CN-XiaoxiaoNeural`）、
+  `examples/voice-sapi-win.mjs`（系统 `System.Speech`，离线）；加上 `examples/voice-deepseek-tts.mjs`
+  （DeepSeek 官方 `/v1/tools/tts`，音色 `stella` / `tide`）。
+- 设置页「声音」一档：收起时一行（当前值 + ▾），点开才摊出 `关 / edge-tts / DeepSeek（海星）/ SAPI（系统）`，
+  选完自动收起。`voice.json` 是热读的，换档不用重启 DSH。
+- 【检查当前选项是否生效】多报一行「声音」：`已接上 ✓` / `✗（原因）`，DeepSeek 档还会带
+  `（key 来源：environment / stored）`。
+
+### Fixed — 声音链路
+
+- **请求前先同步凭据**：插件启动时与每次工具调用前读一次 DSH 凭据库，让设置里填的 key 立刻可见。
+- **凭据优先级**：`环境变量里的 sk-` > `凭据库里的 sk-` > `凭据库里的 ID`（ID 一律忽略）。
+  之前是无条件用库里的值覆盖 `process.env`，用户 `setx` 会被一个 36 位 Tracking ID 盖掉。
+- **错误按 spec 归属**：切过档之后，`edge-tts` 不会再背上 `DeepSeek` 的 401。
+- **检查动作自己重挂声音**：检查由定时器触发，以前会看到"旧适配器还挂着"，现在先切到位再比对。
+
+### Fixed — 设置页
+
+- 展开/收起改成**就地重画**（复用同一个 Toplevel），不再整页闪一下。
+- 胶囊按钮展开态衬底统一为 `#17324f`。
+
+### Notes
+
+- **不要填 Tracking ID。** 开放平台 key 列表里 `Tracking ID` 与 `Key` 两列相邻、Key 打码，很容易复制错；
+  Tracking ID 拿去请求会稳定 `401`。认准 `sk-` 前缀。
+- DSH 托管的那把 key 只把 ID 交给插件、secret 不落盘，所以插件仍需要自己的一份：
+  `setx DEEPSEEK_API_KEY`（改完重启 DSH）或 `voice.json` 的 `options.apiKey`（热读）。
+- `node --test`：325 通过 / 0 失败 / 3 跳过。
+
 ## [0.1.1-more.16] - 2026-11-19
 
 ### Added — 悬浮窗设置页
