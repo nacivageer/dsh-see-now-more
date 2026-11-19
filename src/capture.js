@@ -298,7 +298,10 @@ export function captureArgs({
       // `code === null` = 被我们自己 SIGKILL 的（stop / 换清晰度 / 收工）。
       // 那是正常收尾，不是失败 —— 否则每次 stop 都往 lastError 里写一条假错误。
       if (code === null) {
-        resolve({ frames: n, ms: Date.now() - t0, code });
+        // **带上 stopped 标记**：上层据此区分"我们自己停的"和"ffmpeg 自己没了"。
+        // 以前这里只 resolve，runner 分不清，于是每次正常停采都往 lastError 里写一条
+        // 「ffmpeg 退出（N 帧 / Ms）」——status 里看着像故障（2026-11-20 实报）。
+        resolve({ frames: n, ms: Date.now() - t0, code, stopped: true });
         return;
       }
       /**

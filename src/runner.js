@@ -1157,8 +1157,11 @@ export function createRunner({
       });
     run.done.then((r) => {
       if (pipeline === p) {
-        // **文件正常放完（`ended`）不是错误** —— 别写进 lastError，status 里会显示成故障
-        if (!r?.ended) lastError ??= `ffmpeg 退出（${r.frames} 帧 / ${Math.round(r.ms / 1000)}s）`;
+        // **文件正常放完（`ended`）不是错误，我们主动停的（`stopped`）也不是** ——
+        // 别写进 lastError，status 里会显示成故障（2026-11-20：每次正常停采都留一条假错误）。
+        if (!r?.ended && !r?.stopped) {
+          lastError ??= `ffmpeg 退出（${r.frames} 帧 / ${Math.round(r.ms / 1000)}s）`;
+        }
         // 文件源放完 = 这一次看完了。记下来，别让下一条 watch 又从头放一遍。
         if (s.kind === 'file') endedSource = s;
         teardown('ffmpeg-exit');
