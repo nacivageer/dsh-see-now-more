@@ -716,8 +716,30 @@ async function registerAll(ctx) {
   // 声音是可选能力，装坏了最多没声音，不能让看屏幕起不来。
   // 不 await 到阻塞启动：适配器要 import 模块、探测引擎，可能几百毫秒。
   // 启动时挂一次只是热身；真正保证"改完配置就生效"的是每次调用前的 ensureConfiguredVoice。
-  ensureConfiguredVoice({ log })
-    .then((r) => { if (!r.ok && r.reason !== 'not-configured') log(`声音没挂上：${r.reason}`); })
+  /**
+   * 把 DSH 凭据库里的 provider key 搬进插件进程环境。
+   *
+   * 为什么需要：设置 → 模型里填的 DeepSeek key 存在 `credentials` 服务里，**不会**注入
+   * 插件进程；声音适配器只认 `options.apiKey` / `DEEPSEEK_API_KEY`。以前要用户在
+   * `voice.json` 里再存一份明文（同一个 key 两处存），用户明确不接受。这里用
+   * `ctx.credentials.resolve('DEEPSEEK_API_KEY')` 读一次、写进自己的 process.env，
+   * 插件就能自动"看见"设置里那把 key（2026-11-19）。
+   */
+  const syncProviderCredential = async () => {
+    try {
+      const creds = ctx.get?.('credentials') ?? ctx.credentials;
+      if (!creds || typeof creds.resolve !== 'function') return;
+      const hit = await creds.resolve('DEEPSEEK_API_KEY');
+      const value = hit?.value;
+      if (typeof value === 'string' && value.trim()) process.env.DEEPSEEK_API_KEY = value;
+    } catch (e) {
+      log(`读 DSH 凭据失败（声音会退回 voice.json 的配置）：${e?.message ?? e}`);
+    }
+  };
+
+  syncProviderCredential()
+    .finally(() => ensureConfiguredVoice({ log }))
+    .then((r) => { if (r && !r.ok && r.reason !== 'not-configured') log(`声音没挂上：${r.reason}`); })
     .catch(() => { /* 已经在里面兜过了 */ });
   disposers.push(() => { detachAdapters().catch(() => {}); });
 
@@ -1430,6 +1452,7 @@ async function registerAll(ctx) {
 
       // **每次调用都检查一遍声音**：改了 voice.json / tts.json，下一句就生效，不用重启宿主。
       // 代价是一次 stat —— 挂载状态没变时 ensure 立刻返回，不会重复 import。
+      await syncProviderCredential();
       await ensureConfiguredVoice({ log }).catch(() => { /* 声音永远不该挡住看屏幕 */ });
 
       // **`say` 的唯一入口**，在**任何采集动作之前**处理。
