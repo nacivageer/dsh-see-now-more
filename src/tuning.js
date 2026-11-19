@@ -364,6 +364,12 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
      * 2026-11-19 加「检查是否生效」时才发现。`null` = 没配，走 runner 的默认 low。
      */
     quality: ['low', 'standard', 'high', 'ultra'].includes(raw.quality) ? raw.quality : null,
+    /**
+     * 朗读范围：`off` 关（默认，等于"只有 say 会念"）/ `notify` 只提示有新消息 /
+     * `reaction` 陪看循环在跑时念模型这次的反应（截 200 字）/ `full` 念全文。
+     * `full` 只在免费声音（edge-tts / SAPI）下生效 —— DeepSeek 官方音色按字符计费。
+     */
+    speakScope: ['off', 'notify', 'reaction', 'full'].includes(raw.speakScope) ? raw.speakScope : 'off',
     /** 设置页点「检查当前选项是否生效」的时间戳 */
     checkAt: Number(raw.checkAt) || 0,
     idleCaptureMin,

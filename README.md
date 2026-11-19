@@ -259,6 +259,17 @@ DSH 自己托管的那把 key（设置 → 模型里的「由 Harness 管理」�
 
 默认推荐仍是 **edge-tts**：免费、不需要任何凭据、现在就能出声。
 
+#### 朗读范围（`speakScope`）
+
+| 档 | 什么时候念 | 念什么 |
+|---|---|---|
+| `off`（默认） | —— | 只有 `say` 会被念，普通回复只有字 |
+| `notify` | 有新回复时 | 一句「有新消息」 |
+| `reaction` | **陪看循环在跑时** | 模型这次的反应（截前 200 字）——打游戏/看视频时的出声渠道 |
+| `full` | 任何回复 | 整条念出来；**只对免费声音生效** |
+
+`full` 撞上付费音色（DeepSeek 官方）时会**自动按 `reaction` 念**，不会静默变哑；设置页里切到 DeepSeek 那档时，如果 `speakScope` 本来是 `full`，也会顺手落成 `reaction`。
+
 macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色和语速从
 `~/.dsh/tts.json` 读（和 `dsh-watch-together` 共用同一份）：
 

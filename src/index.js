@@ -15,7 +15,7 @@ import { appendSpoken, appendChat, appendNotice, lastSaidNote, lastSaidText, cha
          chatWaiterCount, markDelivered, relaySeenHas, markRelaySeen } from './chat.js';
 import { createTitleSync } from './titles.js';
 import { ensureConfiguredVoice, detachAdapters, attachedAdapters, configuredVoiceAdapter, lastVoiceError, lastVoiceErrorSpec } from './voice.js';
-import { speechSubscribers, onSpeech } from './speech.js';
+import { speechSubscribers, onSpeech, emitSpeech } from './speech.js';
 import { describeAcoustic, describeCoverage, describeEvents, markSpeaking, soundText } from './listen.js';
 import { startLoop, HANGUP_NOTE } from './loop.js';
 import { wakeWithRetry, deliveryMode } from './timer.js';
@@ -725,6 +725,42 @@ async function registerAll(ctx) {
    * `ctx.credentials.resolve('DEEPSEEK_API_KEY')` 读一次、写进自己的 process.env，
    * 插件就能自动"看见"设置里那把 key（2026-11-19）。
    */
+  /**
+   * 朗读范围（2026-11-20 用户定的四档）：
+   * - `off`      关：只有 `say` 会被念（现状）
+   * - `notify`   只提示有新消息
+   * - `reaction` 陪看循环在跑时，念模型这次的反应（截 200 字）——打游戏/看视频时的出声渠道
+   * - `full`     念全文；**只对免费声音生效**（DeepSeek 官方音色按字符计费）
+   *
+   * 这里用 try/catch 包住 `loop` 的访问：钩子注册早于 `let loop` 的声明，极端情况下
+   * 提前触发会命中 TDZ，catch 住就当"循环没在跑"。
+   */
+  const loopActiveNow = () => {
+    try { return Boolean(loop) && loop.stopped?.() !== true; } catch { return false; }
+  };
+  const voiceLooksPaid = () => String(configuredVoiceAdapter() ?? '').toLowerCase().includes('deepseek-tts');
+  const speakAssistantReply = (text) => {
+    const scope = tuning.speakScope ?? 'off';
+    if (scope === 'off') return;
+    let payload = '';
+    if (scope === 'notify') payload = '有新消息';
+    else if (scope === 'reaction') {
+      if (!loopActiveNow()) return;
+      payload = String(text ?? '').slice(0, 200);
+    } else if (scope === 'full') {
+      // 付费音色（DeepSeek 官方）下「全文」是防呆位：**自动降级成即时反应**，
+      // 而不是干脆不念 —— 用户要的是"陪看时有声"，不是"配置一冲突就哑"（2026-11-20）
+      if (voiceLooksPaid()) {
+        payload = String(text ?? '').slice(0, 200);
+        log('朗读范围=全文 不适用于付费声音，已按「陪看即时反应」念');
+      } else {
+        payload = String(text ?? '');
+      }
+    }
+    if (!payload.trim()) return;
+    try { emitSpeech({ text: payload, state: 'due', origin: 'chat' }); } catch { /* 发声失败不影响写窗 */ }
+  };
+
   /** 声音用的 key 从哪来：'environment' | 'stored' | null（没拿到）。只用于报告。 */
   let voiceKeySource = null;
   const syncProviderCredential = async () => {
@@ -845,6 +881,7 @@ async function registerAll(ctx) {
       // 气泡现在会按文字高度长（见 window.py 的 _message_shapes），
       // 600 字的截断只会让模型"看起来只会说短句" —— 放到 3000。
       appendChat('assistant', text.length > 3000 ? `${text.slice(0, 3000)}…` : text);
+      speakAssistantReply(text);
     } catch { /* 记录失败绝不能影响会话本身 */ }
   };
   /**
@@ -1050,6 +1087,16 @@ async function registerAll(ctx) {
    * 但界面上看不出差别 —— 与其让用户猜，不如给个"现在到底用的是哪一档"的实测答案。
    */
   const PACE_NAME = { calm: '省', normal: '常规', dense: '密', 'game-economic': '游戏' };
+  const SPEAK_NAME = { off: '关', notify: '仅提示新消息', reaction: '陪看即时反应', full: '全文' };
+  /** 朗读范围那一行：`full` 撞上付费音色时明确说"不生效"，别让人以为转了没反应。 */
+  const speakScopeLine = (t) => {
+    const scope = t.speakScope ?? 'off';
+    const downgraded = scope === 'full' && voiceLooksPaid();
+    return `朗读范围：${SPEAK_NAME[scope] ?? scope}`
+      + (downgraded
+        ? ' ⚠（付费音色下自动按「陪看即时反应」念，不会念全文）'
+        : ' ✓');
+  };
   let lastCheckAt = (() => { try { return readTuning().checkAt || 0; } catch { return 0; } })();
   const checkWatcher = setInterval(async () => {
     let t = null;
@@ -1098,7 +1145,8 @@ async function registerAll(ctx) {
         (PACE_NAME[runPace] ?? runPace) + (t.gameMode ? '（游戏模式覆盖中）' : ''), okPace)
       + '\n' + line('清晰度', cfgQ, runQ, cfgQ === runQ)
       + '\n' + line('排布容差', cfgS, runS, cfgS === runS)
-      + '\n' + voiceLine;
+      + '\n' + voiceLine
+      + '\n' + speakScopeLine(t);
     try { appendNotice(text, boundSessionNow() ?? ''); } catch { /* 写不进也不能影响别的 */ }
     log(`检查选项：${text.split('\n').join(' | ')}`);
   }, 1500);
@@ -2220,6 +2268,7 @@ async function registerAll(ctx) {
               : voice.configured
                 ? `配了 ${voice.configured} 但没挂上（${voice.reason ?? '原因未知'}）`
                 : '没配 —— 写 ~/.dsh/voice.json 的 {"adapter":"…"} 才有声音'}`
+            + `\n朗读范围：${SPEAK_NAME[tuning.speakScope ?? 'off'] ?? tuning.speakScope}`
             // 听声音（视频里的台词）：**"它不知道台词"时第一个要看的就是这一行**
             + `\n听声音：${listenLine(s.listen)}`
             // 留底（黑听抬头 P2-A）：帧数 / 内存 / 采集是否还活着

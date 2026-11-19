@@ -8485,6 +8485,11 @@ class LiveGlass:
                      ("deepseek", "DeepSeek（海星）"), ("sapi", "SAPI（系统）"))
     VOICE_LABELS = {"off": "关", "sapi": "SAPI", "edge": "edge-tts",
                     "deepseek": "DeepSeek", "custom": "自定义"}
+    # 朗读范围（写 see-now.json，重启生效）：关 / 只提示 / 陪看即时反应 / 全文
+    SPEAK_OPTIONS = (("off", "关"), ("notify", "仅提示新消息"),
+                     ("reaction", "陪看即时反应"), ("full", "全文"))
+    SPEAK_LABELS = {"off": "关", "notify": "仅提示新消息",
+                    "reaction": "陪看即时反应", "full": "全文"}
 
     # 值 → 颜色：跟标题栏那颗感官点**用同一套**（FOCUS_LIVE / FOCUS_VISION /
     # FOCUS_AUDIO / FOCUS_OFF），这样窗上和设置页不会出现两种绿。
@@ -8602,6 +8607,16 @@ class LiveGlass:
         if getattr(self, "_voice_menu", False):
             for _val, _label in self.VOICE_OPTIONS:
                 rows.append({"kind": "voiceopt", "value": _val, "label": _label, "h": 44})
+        # 朗读范围：同样是收起一行、点开才摊开（2026-11-20 用户要求）
+        _scope = str(data.get("speakScope") or "off")
+        if _scope not in self.SPEAK_LABELS:
+            _scope = "off"
+        rows.append({"kind": "scope", "value": _scope,
+                     "open": bool(getattr(self, "_scope_menu", False)), "h": 56})
+        if getattr(self, "_scope_menu", False):
+            for _val, _label in self.SPEAK_OPTIONS:
+                rows.append({"kind": "scopeopt", "value": _val, "label": _label,
+                             "disabled": _val == "full" and _vmode == "deepseek", "h": 44})
         rows.append({"kind": "sep", "h": 8})
         rows.append({"kind": "hint",
                      "text": "以下选项存进 see-now.json，重启 DSH 后生效", "h": 30})
@@ -8686,6 +8701,37 @@ class LiveGlass:
                 c.create_text(cw - 26, (y0 + y1) // 2,
                               text=("▴" if r.get("open") else "▾"), anchor="e",
                               fill="#8fa0b6", font=f10, tags=("voicerow",))
+            elif kind == "scope":
+                sv = r["value"]
+                c.create_text(36, (y0 + y1) // 2, text="朗读范围", anchor="w",
+                              fill="#dfe9f6", font=f11, tags=("scoperow",))
+                c.create_text(cw - 46, (y0 + y1) // 2,
+                              text=self.SPEAK_LABELS.get(sv, sv), anchor="e",
+                              fill=("#8fd3ff" if sv != "off" else "#77859a"),
+                              font=f11b, tags=("scoperow",))
+                c.create_text(cw - 26, (y0 + y1) // 2,
+                              text=("▴" if r.get("open") else "▾"), anchor="e",
+                              fill="#8fa0b6", font=f10, tags=("scoperow",))
+            elif kind == "scopeopt":
+                dis = bool(r.get("disabled"))
+                sel = r["value"] == _scope and not dis
+                v = r["value"]
+                c.create_rectangle(16, y0 + 2, cw - 16, y1 - 2,
+                                   fill=("#16202c" if sel else ""), outline="",
+                                   tags=(f"scopeband_{v}",))
+                c.create_rectangle(16, y0 + 3, 20, y1 - 3,
+                                   fill=("#8fd3ff" if sel else ""), outline="",
+                                   tags=(f"scopebar_{v}",))
+                c.create_text(36, (y0 + y1) // 2, text=r["label"], anchor="w",
+                              fill=("#5a6675" if dis else ("#8fd3ff" if sel else "#b9c6d6")),
+                              font=(f11b if sel else f11), tags=(f"scopelabel_{v}",))
+                if dis:
+                    c.create_text(cw - 30, (y0 + y1) // 2, text="需免费声音", anchor="e",
+                                  fill="#5a6675", font=f10, tags=(f"scopenote_{v}",))
+                else:
+                    c.create_text(cw - 30, (y0 + y1) // 2, text=("✓" if sel else ""),
+                                  anchor="e", fill="#8fd3ff", font=f11b,
+                                  tags=(f"scopecheck_{v}",))
             elif kind == "voiceopt":
                 sel = r["value"] == _vmode
                 v = r["value"]
@@ -8774,6 +8820,12 @@ class LiveGlass:
                 self._settings_rebuild()
             elif r["kind"] == "voiceopt":
                 self._settings_pick_voice(r["value"])
+            elif r["kind"] == "scope":
+                self._scope_menu = not bool(getattr(self, "_scope_menu", False))
+                self._settings_rebuild()
+            elif r["kind"] == "scopeopt":
+                if not r.get("disabled"):
+                    self._settings_pick_scope(r["value"])
             elif r["kind"] == "checkbtn":
                 self._settings_check()
             elif r["kind"] == "setting":
@@ -8842,11 +8894,22 @@ class LiveGlass:
         关掉重开会整页闪一下（2026-11-19 实报）。"""
         self._settings_paint()
 
+    def _settings_pick_scope(self, value: str) -> None:
+        """朗读范围写进 see-now.json（重启生效），收起展开项并重画。"""
+        self._settings_write("speakScope", value)
+        self._scope_menu = False
+        self._settings_rebuild()
+
     def _settings_pick_voice(self, value: str) -> None:
         """声音单选：写 ~/.dsh/voice.json（热读，下一句就换），收起展开项并重建卡片。"""
         cur, _ = self._voice_mode()
         if value != cur:
             self._voice_apply(value)
+        # 防呆：切到付费音色时，「全文」自动落成「陪看即时反应」（2026-11-20 用户要求）
+        if value == "deepseek":
+            data = self._settings_read()
+            if str(data.get("speakScope") or "off") == "full":
+                self._settings_write("speakScope", "reaction")
         self._voice_menu = False
         self._settings_rebuild()
 
