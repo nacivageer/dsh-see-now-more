@@ -232,7 +232,7 @@ DeepSeek 那档要开放平台的 key（`platform.deepseek.com` 申请，和 DSH
 { "adapter": "C:/…/examples/voice-deepseek-tts.mjs", "options": { "apiKey": "sk-…", "voice_id": "stella" } }
 ```
 
-没填 key 时选这一档不会出声，`status` 的「声音」行与设置页的【检查当前选项是否生效】都会写明原因。
+DSH 自己托管的那把 key（设置 → 模型里的「由 Harness 管理」）**不会**交给插件 —— 插件能读到的只是它的 ID，拿去做 Bearer 会 401。所以要用这一档，得自己给一份：设 `DEEPSEEK_API_KEY`（改完要重启 DSH），或写 `options.apiKey`（热读，不用重启）。没给时 `status` 的「声音」行与设置页的【检查当前选项是否生效】都会写明原因。
 
 macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色和语速从
 `~/.dsh/tts.json` 读（和 `dsh-watch-together` 共用同一份）：

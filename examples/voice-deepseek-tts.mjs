@@ -60,7 +60,7 @@ function readVoice(env = process.env) {
 export async function attach(api, options = {}) {
   const key = resolveKey(options);
   if (!key) {
-    throw new Error('没有 DeepSeek API key（填 ~/.dsh/voice.json 的 options.apiKey 或设 DEEPSEEK_API_KEY）');
+    throw new Error('没有可用的 DeepSeek API key：设环境变量 DEEPSEEK_API_KEY（改完要重启 DSH），或填 ~/.dsh/voice.json 的 options.apiKey（热读，不用重启）');
   }
   const voiceId = String(options?.voice_id ?? '').trim() || readVoice();
   const base = String(options?.baseUrl ?? DEFAULT_BASE).replace(/\/+$/, '');
