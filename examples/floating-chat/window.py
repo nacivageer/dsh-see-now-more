@@ -1577,6 +1577,13 @@ class LiveGlass:
             n0 = len(self.feed.messages)
             if self.feed.poll():
                 new = self.feed.messages[n0:]
+                # 检查结果回来了（一条 notice）→ 把按钮恢复亮度
+                if getattr(self, "_check_pending_at", 0) and any(
+                        str(m.get("role") or "") == "notice"
+                        and int(m.get("at") or 0) >= self._check_pending_at
+                        for m in new):
+                    self._check_pending_at = 0
+                    self._settings_check_dim(False)
                 # 不在底部时来了新消息 → 亮「回到最新」（2026-11-06 用户要求 ②）
                 if (new and self._expanded is None
                         and not getattr(self, "_collapsed", False)
@@ -3287,7 +3294,7 @@ class LiveGlass:
         try:
             # 上下各留 15px（原来 11px 太薄，用户要求再高一点）
             c.create_polygon(self._rounded_points(bx0, cy - 15, bx1, cy + 15, 10, 4),
-                             fill="#000000",
+                             fill=("#17324f" if pad else "#000000"),
                              outline=(BTN_EDGE_ON if pad else BTN_EDGE), smooth=True,
                              tags=("header", "bindbtn"))
             self.text.draw((bx0 + bx1) // 2, cy, label, anchor="center",
@@ -7406,8 +7413,9 @@ class LiveGlass:
                            fill="#ffffff", size=11, bold=True, tags=("bindbar", "chrome"))
             # 设置胶囊：按字宽拉伸（见上），别再用固定宽度
             c.create_polygon(self._rounded_points(gx0, y0, gx1, y1, 27, 12),
-                             fill="#000000", outline="#ffffff", smooth=True,
-                             tags=("bindbar", "chrome", "setbtn"))
+                             fill=("#17324f" if getattr(self, "_settings", None) else "#000000"),
+                             outline="#ffffff", smooth=True,
+                             tags=("bindbar", "chrome", "setbtn", "setbtnbg"))
             self.text.draw((gx0 + gx1) // 2, (y0 + y1) // 2, set_label, anchor="center",
                            fill="#ffffff", size=11, bold=True,
                            tags=("bindbar", "chrome", "setbtn"))
@@ -8641,9 +8649,9 @@ class LiveGlass:
                 c.create_polygon(
                     self._rounded_points(bx0, by0, bx0 + bw, by0 + bh, 14, 8),
                     fill="#000000", outline="#ffffff", smooth=True,
-                    tags=("checkbtn",))
+                    tags=("checkbtn", "checkbtnbg"))
                 c.create_text(cw // 2, (y0 + y1) // 2, text=r["text"], anchor="center",
-                              fill="#ffffff", font=f11b, tags=("checkbtn",))
+                              fill="#ffffff", font=f11b, tags=("checkbtn", "checkbtnlabel"))
             elif kind == "setting":
                 _key, label, _options, names, _default = r["row"]
                 c.create_text(34, (y0 + y1) // 2, text=label, anchor="w",
@@ -8655,6 +8663,11 @@ class LiveGlass:
 
         self._settings = {"win": win, "canvas": c, "cw": cw, "head": head,
                           "rows": rows, "hits": hits, "mode": mode_now}
+        # 胶囊衬底跟着"展开态"走（跟「收藏/历史」一致，2026-11-19 用户要求）
+        try:
+            self.canvas.itemconfigure("setbtnbg", fill="#17324f")
+        except Exception:
+            pass
         # **只绑 canvas**：canvas 与 Toplevel 同时绑同一条 <Button-1> 会触发两次，
         # 一格跳两档（2026-11-19 实报：点一下从「视听都开」直接跳到「仅听」）。
         c.bind("<Button-1>", self._settings_click)
@@ -8722,10 +8735,27 @@ class LiveGlass:
                 pass
 
     def _settings_check(self) -> None:
-        """请求宿主核对一次"配置值 vs 运行值"，结果会以居中系统气泡回来。"""
+        """请求宿主核对一次"配置值 vs 运行值"，结果会以居中系统气泡回来。
+
+        点下去先把按钮压暗，等那条气泡真的出现在聊天流里再恢复（2026-11-19 用户要求），
+        否则点了没反馈，用户会以为没生效。
+        """
         self._settings_write("checkAt", int(time.time() * 1000))
+        self._check_pending_at = int(time.time() * 1000)
+        self._settings_check_dim(True)
         if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
             print("[settings] check requested", flush=True)
+
+    def _settings_check_dim(self, dim: bool) -> None:
+        st = getattr(self, "_settings", None)
+        if not st:
+            return
+        try:
+            c = st["canvas"]
+            c.itemconfigure("checkbtnbg", outline=("#5a6675" if dim else "#ffffff"))
+            c.itemconfigure("checkbtnlabel", fill=("#5a6675" if dim else "#ffffff"))
+        except Exception:
+            pass
 
     def _settings_toggle_game(self, r) -> None:
         """游戏模式开关：只写 gameMode/modeAt 式的标记，**不碰 defaultPace** ——
@@ -8764,6 +8794,10 @@ class LiveGlass:
     def _close_settings(self) -> None:
         st = getattr(self, "_settings", None)
         self._settings = None
+        try:
+            self.canvas.itemconfigure("setbtnbg", fill="#000000")
+        except Exception:
+            pass
         if not st:
             return
         try:
