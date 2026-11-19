@@ -863,6 +863,36 @@ async function registerAll(ctx) {
   disposers.push(() => stopLoop('插件卸载'));
 
   /**
+   * **悬浮窗设置页改「当前感官模式」要立刻生效**（2026-11-19 用户要求：UI 要跟真正的
+   * 采集循环挂钩，而不是只写配置等重启）。
+   *
+   * 窗口没有回调宿主的通道，只能写 `~/.dsh/see-now.json`；这里盯**文件 mtime + mode 值**：
+   *   - 只在文件真被写过、且 `mode` 这一项的值变了才动作 —— 设置页改「节奏」也会重写
+   *     同一份文件，按 mtime 就动手会把用户顺手改的模式覆盖回去；
+   *   - `both` / `vision`：只动耳朵（起 / 停），画面是 `watch` 的事，不自动开；
+   *   - `audio` / `none`：这两档的意思是「不要画面」，所以把采集与常驻循环一起停掉。
+   */
+  let lastCfgMode = (() => {
+    try { return readTuning().mode ?? null; } catch { return null; }
+  })();
+  const modeWatcher = setInterval(() => {
+    let next = null;
+    try { next = readTuning().mode ?? null; } catch { return; }
+    if (!next || next === lastCfgMode) return;
+    const prev = runner.mode?.() ?? null;
+    lastCfgMode = next;
+    if (next === prev) return;
+    runner.setMode(next);
+    if (next === 'audio' || next === 'none') {
+      stopLoop(`设置页切到 ${next}`);
+      try { runner.stop(); } catch { /* 已经停了 */ }
+    }
+    log(`设置页改感官模式：${prev} → ${next}`);
+  }, 1500);
+  modeWatcher.unref?.();
+  disposers.push(() => clearInterval(modeWatcher));
+
+  /**
    * **裸采集闲置自动收工**（2026-11-09 用户要求 S1）。
    *
    * 为什么需要它：`action:"start"` 只起采集、不建常驻循环，而收工线（`idleStopMin`）

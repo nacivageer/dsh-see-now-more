@@ -8522,7 +8522,7 @@ class LiveGlass:
         mode_now = data.get("mode", "both")
         if mode_now not in self.MODE_COLORS:
             mode_now = "both"
-        rows = [{"kind": "header", "text": "当前感官模式", "h": 40}]
+        rows = [{"kind": "header", "text": "点击选项即可变更当前感官模式", "h": 40}]
         for val, label in self.MODE_OPTIONS:
             rows.append({"kind": "mode", "value": val, "label": label, "h": 48})
         rows.append({"kind": "sep", "h": 14})
@@ -8600,7 +8600,7 @@ class LiveGlass:
                               fill=("#8fd3ff" if r["value"] is not None else "#77859a"),
                               font=f11b, tags=(f"setval_{_key}",))
         c.create_text(cw // 2, ch - hint_h // 2 + 2,
-                      text="点一行选择 · 存进 see-now.json · 重启 DSH 后生效",
+                      text="模式点了就生效 · 其余项存进 see-now.json，重启 DSH 后生效",
                       fill="#77859a", font=f10)
         self._settings = {"win": win, "canvas": c, "cw": cw, "head": head,
                           "rows": rows, "hits": hits, "mode": mode_now}
