@@ -8468,10 +8468,17 @@ class LiveGlass:
     # 「重启 DSH 后生效」，比做一个看起来即时、实际不生效的开关诚实。
     # 以后要即时生效，得走 window-outbox 那条通道 + 宿主侧接。
 
+    # 四选一（2026-11-19 用户要求：别在一个格子里循环，摊成四行、选中打勾）。
+    MODE_OPTIONS = (("both", "视听都开"), ("vision", "仅看"),
+                    ("audio", "仅听"), ("none", "无"))
+
+    # 值 → 颜色：跟标题栏那颗感官点**用同一套**（FOCUS_LIVE / FOCUS_VISION /
+    # FOCUS_AUDIO / FOCUS_OFF），这样窗上和设置页不会出现两种绿。
+    MODE_COLORS = {"both": FOCUS_LIVE, "vision": FOCUS_VISION,
+                   "audio": FOCUS_AUDIO, "none": FOCUS_OFF}
+
     SETTINGS_ROWS = (
         # key, 标题, 可选值, 显示名, 默认（None = 未写过，显示「默认」）
-        ("mode", "当前感官模式", ("both", "vision", "audio", "none"),
-         {"both": "视听都开", "vision": "仅看", "audio": "仅听", "none": "无"}, "both"),
         ("defaultPace", "节奏", ("calm", "normal", "dense"),
          {"calm": "省", "normal": "常规", "dense": "密"}, "normal"),
         ("quality", "清晰度", ("low", "standard", "high", "ultra"),
@@ -8480,15 +8487,6 @@ class LiveGlass:
          {0: "不裁", 0.1: "10%", 0.2: "20%", 0.3: "30%"}, 0),
     )
 
-    # 值 → 颜色：跟标题栏那颗感官点**用同一套**（FOCUS_LIVE / FOCUS_VISION /
-    # FOCUS_AUDIO / FOCUS_OFF），这样窗上和设置页不会出现两种绿。
-    SETTING_COLORS = {
-        "mode": {"both": FOCUS_LIVE, "vision": FOCUS_VISION,
-                 "audio": FOCUS_AUDIO, "none": FOCUS_OFF},
-    }
-
-    def _setting_color(self, key: str, value, default: str = "#8fd3ff") -> str:
-        return self.SETTING_COLORS.get(key, {}).get(value, default)
 
     def _settings_path(self) -> Path:
         return cache_dir().parent / "see-now.json"
@@ -8521,12 +8519,19 @@ class LiveGlass:
     def _open_settings(self) -> None:
         self._close_settings()
         data = self._settings_read()
-        values = [self._settings_value(r, data) for r in self.SETTINGS_ROWS]
-        # 尺寸跟着主窗走（2026-11-19 实报：340 宽太小，像一张菜单不像设置页）。
-        # 主窗 647 时卡片 560；更窄的窗口退到「窗口宽 - 24」，最小 380。
+        mode_now = data.get("mode", "both")
+        if mode_now not in self.MODE_COLORS:
+            mode_now = "both"
+        rows = [{"kind": "header", "text": "当前感官模式", "h": 34}]
+        for val, label in self.MODE_OPTIONS:
+            rows.append({"kind": "mode", "value": val, "label": label, "h": 44})
+        rows.append({"kind": "sep", "h": 14})
+        for row in self.SETTINGS_ROWS:
+            rows.append({"kind": "setting", "row": row,
+                         "value": self._settings_value(row, data), "h": 56})
+        head, hint_h = 68, 46
         cw = max(380, min(560, self._geo.width - 24))
-        head, row_h, hint_h = 68, 56, 46
-        ch = head + row_h * len(values) + hint_h
+        ch = head + sum(r["h"] for r in rows) + hint_h
         x = int(max(self._vx + 4,
                     min(self._x + (self._geo.width - cw) // 2,
                         self._vx + self._vw - cw - 4)))
@@ -8543,7 +8548,6 @@ class LiveGlass:
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=cw, height=ch)
         c.pack()
         try:
-            # 跟主窗一个调子：深色圆角面板 + 细边，四角 16
             c.create_polygon(self._rounded_points(0, 0, cw, ch, 16, 10),
                              fill="#0c1118", outline="#3a4759", width=1, smooth=True)
             c.create_line(22, head, cw - 22, head, fill="#1e2836")
@@ -8557,29 +8561,49 @@ class LiveGlass:
                       fill="#f4f9ff", font=f16b)
         c.create_text(cw - 24, head // 2 - 2, text="✕", anchor="e",
                       fill="#a9b8cc", font=f11b)
-        for i, (row, cur) in enumerate(zip(self.SETTINGS_ROWS, values)):
-            _key, label, _options, names, _default = row
-            yy = head + i * row_h
-            if i % 2 == 1:
-                c.create_rectangle(16, yy + 2, cw - 16, yy + row_h - 2,
-                                   fill="#121924", outline="")
-            c.create_text(28, yy + row_h // 2, text=label, anchor="w",
-                          fill="#dfe9f6", font=f11)
-            c.create_text(cw - 30, yy + row_h // 2,
-                          text=names.get(cur, "默认"), anchor="e",
-                          fill=(self._setting_color(_key, cur) if cur is not None else "#77859a"),
-                          font=f11b, tags=(f"setval{i}",))
+        hits = []
+        yy = head
+        for idx, r in enumerate(rows):
+            y0, y1, yy = yy, yy + r["h"], yy + r["h"]
+            kind = r["kind"]
+            if kind == "header":
+                c.create_text(28, (y0 + y1) // 2, text=r["text"], anchor="w",
+                              fill="#8fa0b6", font=f10)
+                continue
+            if kind == "sep":
+                c.create_line(22, (y0 + y1) // 2, cw - 22, (y0 + y1) // 2, fill="#1b2431")
+                continue
+            hits.append((y0, y1, r))
+            if kind == "mode":
+                sel = r["value"] == mode_now
+                c.create_rectangle(16, y0 + 2, cw - 16, y1 - 2,
+                                   fill=("#141d29" if sel else ""), outline="",
+                                   tags=(f"setband{idx}",))
+                c.create_text(34, (y0 + y1) // 2, text=r["label"], anchor="w",
+                              fill=(self.MODE_COLORS[r["value"]] if sel else "#c7d3e2"),
+                              font=(f11b if sel else f11), tags=(f"setmode{idx}",))
+                c.create_text(cw - 30, (y0 + y1) // 2, text=("✓" if sel else ""),
+                              anchor="e", fill=self.MODE_COLORS[r["value"]],
+                              font=f11b, tags=(f"setcheck{idx}",))
+            elif kind == "setting":
+                _key, label, _options, names, _default = r["row"]
+                c.create_text(34, (y0 + y1) // 2, text=label, anchor="w",
+                              fill="#dfe9f6", font=f11)
+                c.create_text(cw - 30, (y0 + y1) // 2,
+                              text=names.get(r["value"], "默认"), anchor="e",
+                              fill=("#8fd3ff" if r["value"] is not None else "#77859a"),
+                              font=f11b, tags=(f"setval{idx}",))
         c.create_text(cw // 2, ch - hint_h // 2 + 2,
-                      text="点一行切换 · 存进 see-now.json · 重启 DSH 后生效",
+                      text="点一行选择 · 存进 see-now.json · 重启 DSH 后生效",
                       fill="#77859a", font=f10)
         self._settings = {"win": win, "canvas": c, "cw": cw, "head": head,
-                          "row_h": row_h, "values": values}
+                          "rows": rows, "hits": hits, "mode": mode_now}
+        # **只绑 canvas**：canvas 与 Toplevel 同时绑同一条 <Button-1> 会触发两次，
+        # 一格跳两档（2026-11-19 实报：点一下从「视听都开」直接跳到「仅听」）。
         c.bind("<Button-1>", self._settings_click)
-        win.bind("<Button-1>", self._settings_click)
         win.bind("<Escape>", lambda _e: self._close_settings())
         # **不要绑 FocusOut 自动关**：无边框 Toplevel 抢不到焦点时 focus_displayof()
         # 返回 None，卡片会在打开后 160ms 自己消失（2026-11-19 实报「只闪一下」）。
-        # 关它的三条路：✕ / Esc / 点主窗任意位置（见 `_press` 开头）。
         try:
             win.update_idletasks()
             win.lift()
@@ -8590,22 +8614,53 @@ class LiveGlass:
         st = self._settings
         if not st:
             return
-        c, cw, head, row_h = st["canvas"], st["cw"], st["head"], st["row_h"]
-        if e.y < head:
-            if e.x >= cw - 48:
+        if e.y < st["head"]:
+            if e.x >= st["cw"] - 48:
                 self._close_settings()
             return
-        i = int((e.y - head) // row_h)
-        if not 0 <= i < len(self.SETTINGS_ROWS):
+        for y0, y1, r in st["hits"]:
+            if not (y0 <= e.y <= y1):
+                continue
+            if r["kind"] == "mode":
+                self._settings_pick_mode(r["value"])
+            elif r["kind"] == "setting":
+                self._settings_cycle(r)
             return
-        _key, _label, options, names, _default = self.SETTINGS_ROWS[i]
-        cur = st["values"][i]
+
+    def _settings_pick_mode(self, value: str) -> None:
+        st = self._settings
+        if not st or value == st.get("mode"):
+            return
+        self._settings_write("mode", value)
+        st["mode"] = value
+        c = st["canvas"]
+        for idx, (_y0, _y1, r) in enumerate(st["hits"]):
+            if r["kind"] != "mode":
+                continue
+            sel = r["value"] == value
+            try:
+                c.itemconfigure(f"setband{idx}", fill=("#141d29" if sel else ""))
+                c.itemconfigure(f"setmode{idx}",
+                                fill=(self.MODE_COLORS[r["value"]] if sel else "#c7d3e2"))
+                c.itemconfigure(f"setcheck{idx}", text=("✓" if sel else ""))
+            except Exception:
+                pass
+
+    def _settings_cycle(self, r) -> None:
+        st = self._settings
+        if not st:
+            return
+        _key, _label, options, names, _default = r["row"]
+        cur = r["value"]
         nxt = options[(options.index(cur) + 1) % len(options)] if cur in options else options[0]
-        st["values"][i] = nxt
+        r["value"] = nxt
         self._settings_write(_key, nxt)
+        idx = next((i for i, (_a, _b, row) in enumerate(st["hits"]) if row is r), None)
+        if idx is None:
+            return
         try:
-            c.itemconfigure(f"setval{i}", text=names.get(nxt, str(nxt)),
-                            fill=self._setting_color(_key, nxt))
+            st["canvas"].itemconfigure(f"setval{idx}", text=names.get(nxt, str(nxt)),
+                                       fill="#8fd3ff")
         except Exception:
             pass
 
