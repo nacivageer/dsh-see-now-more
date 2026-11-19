@@ -8470,8 +8470,8 @@ class LiveGlass:
 
     SETTINGS_ROWS = (
         # key, 标题, 可选值, 显示名, 默认（None = 未写过，显示「默认」）
-        ("mode", "感官模式", ("both", "vision", "audio"),
-         {"both": "视听都开", "vision": "只看画面", "audio": "只听"}, "both"),
+        ("mode", "当前感官模式", ("both", "vision", "audio", "none"),
+         {"both": "视听都开", "vision": "仅看", "audio": "仅听", "none": "无"}, "both"),
         ("defaultPace", "节奏", ("calm", "normal", "dense"),
          {"calm": "省", "normal": "常规", "dense": "密"}, "normal"),
         ("quality", "清晰度", ("low", "standard", "high", "ultra"),
@@ -8479,6 +8479,16 @@ class LiveGlass:
         ("packStretch", "排布容差", (0, 0.1, 0.2, 0.3),
          {0: "不裁", 0.1: "10%", 0.2: "20%", 0.3: "30%"}, 0),
     )
+
+    # 值 → 颜色：跟标题栏那颗感官点**用同一套**（FOCUS_LIVE / FOCUS_VISION /
+    # FOCUS_AUDIO / FOCUS_OFF），这样窗上和设置页不会出现两种绿。
+    SETTING_COLORS = {
+        "mode": {"both": FOCUS_LIVE, "vision": FOCUS_VISION,
+                 "audio": FOCUS_AUDIO, "none": FOCUS_OFF},
+    }
+
+    def _setting_color(self, key: str, value, default: str = "#8fd3ff") -> str:
+        return self.SETTING_COLORS.get(key, {}).get(value, default)
 
     def _settings_path(self) -> Path:
         return cache_dir().parent / "see-now.json"
@@ -8557,7 +8567,7 @@ class LiveGlass:
                           fill="#dfe9f6", font=f11)
             c.create_text(cw - 30, yy + row_h // 2,
                           text=names.get(cur, "默认"), anchor="e",
-                          fill="#8fd3ff" if cur is not None else "#77859a",
+                          fill=(self._setting_color(_key, cur) if cur is not None else "#77859a"),
                           font=f11b, tags=(f"setval{i}",))
         c.create_text(cw // 2, ch - hint_h // 2 + 2,
                       text="点一行切换 · 存进 see-now.json · 重启 DSH 后生效",
@@ -8594,7 +8604,8 @@ class LiveGlass:
         st["values"][i] = nxt
         self._settings_write(_key, nxt)
         try:
-            c.itemconfigure(f"setval{i}", text=names.get(nxt, str(nxt)), fill="#8fd3ff")
+            c.itemconfigure(f"setval{i}", text=names.get(nxt, str(nxt)),
+                            fill=self._setting_color(_key, nxt))
         except Exception:
             pass
 

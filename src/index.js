@@ -1950,8 +1950,9 @@ async function registerAll(ctx) {
             + ` · ${tuning.idleStopMin > 0 ? `没开窗时 ${tuning.idleStopMin} 分钟没说话` : '空闲线已关闭'}`
             + ` · 空档阈值 ${tuning.missedGapSec} 秒`
             + `${tuning.path && tuning.maxAutonomousWakes === 8 && tuning.idleStopMin === 3 && tuning.missedGapSec === 60 ? '（默认）' : `（${tuning.path}）`}`
-            // 感官模式：三档里现在选的是哪一档 —— 不然"灯怎么是橙色"要去翻配置才知道
-            + `\n感官：${runner.mode?.() === 'vision' ? '只看（起画面、不起耳朵）' : '视听都开'}`
+            // 感官模式：四档（both / vision / audio / none）里现在选的是哪一档 ——
+            // 不然"灯怎么是橙色/灰色"要去翻配置才知道
+            + `\n当前感官模式：${({ both: '视听都开', vision: '仅看（起画面、不起耳朵）', audio: '仅听', none: '无（都不开）' })[runner.mode?.()] ?? '视听都开'}`
               + '（写回 see-now.json 的 mode，重开 DSH 沿用）'
             // 区域：只看一小块时，模型得知道自己看到的不是整屏
             + `\n区域：${regionText(s.lastSource?.region ?? loadRegion()) ?? '整屏'}`

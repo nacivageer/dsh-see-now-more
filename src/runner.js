@@ -953,7 +953,7 @@ export function createRunner({
    *
    * 初值来自 `~/.dsh/see-now.json` 的 `mode`，所以重开 DSH 后沿用上次的选择。
    */
-  let modeWanted = mode === 'vision' ? 'vision' : 'both';
+  let modeWanted = (mode === 'vision' || mode === 'none' || mode === 'audio') ? mode : 'both';
 
   /**
    * 「最后一次有人要用图」的时刻 / 正在等图的数量（2026-11-09 空闲自动收工用，见 idle.js）。
@@ -967,7 +967,7 @@ export function createRunner({
 
   /** 切模式并把耳朵的状态同步过去（`see_now({mode})` 与 `start({audio})` 都走这里）。 */
   function setMode(next) {
-    modeWanted = next === 'vision' ? 'vision' : 'both';
+    modeWanted = (next === 'vision' || next === 'none' || next === 'audio') ? next : 'both';
     applyAudioMode();
     return modeWanted;
   }
@@ -981,18 +981,21 @@ export function createRunner({
    * 中途切回 vision 就停手。
    */
   function applyAudioMode(attempt = 0) {
-    if (modeWanted === 'vision') {
-      if (listener.state().enabled) listener.stop('只要视觉，关掉耳朵');
+    const wantAudio = modeWanted === 'both' || modeWanted === 'audio';
+    if (!wantAudio) {
+      if (listener.state().enabled) {
+        listener.stop(modeWanted === 'none' ? '感官模式=都不开' : '只要视觉，关掉耳朵');
+      }
       return;
     }
     listener.start()
       .then((r) => {
         if (r?.ok) return;
-        if (attempt < 2 && modeWanted !== 'vision') {
+        if (attempt < 2 && (modeWanted === 'both' || modeWanted === 'audio')) {
           const wait = 600 * (attempt + 1);
           log(`听声音没开（${r?.reason ?? '未知'}），${wait}ms 后重试`);
           const t = setTimeout(() => {
-            if (modeWanted !== 'vision') applyAudioMode(attempt + 1);
+            if (modeWanted === 'both' || modeWanted === 'audio') applyAudioMode(attempt + 1);
           }, wait);
           t.unref?.();
           return;
@@ -1005,6 +1008,10 @@ export function createRunner({
   async function start({ src = { kind: 'screen' }, opts = {}, quality: q = null, audio = null } = {}) {
     noteUse();
     if (audio === true || audio === false) modeWanted = audio ? 'both' : 'vision';
+    // 从「都不开」/「仅听」被显式叫起来看画面：当前态分别是「仅看」「视听都开」
+    // （只改内存，不写回配置 —— 重启后仍然回到用户在设置页选的那档）。
+    if (modeWanted === 'none') modeWanted = 'vision';
+    else if (modeWanted === 'audio') modeWanted = 'both';
     if (running) {
       // 已经在看时改主意也要立刻生效：以前这里直接 return，`audio:false` 得先 stop 再看一次
       applyAudioMode();

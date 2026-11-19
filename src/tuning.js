@@ -313,10 +313,13 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
 
   let mode = TUNING_DEFAULTS.mode;
   if (raw.mode !== undefined) {
-    if (raw.mode === 'both' || raw.mode === 'vision') mode = raw.mode;
+    // 四档都写配置（2026-11-19 悬浮窗设置页）：both / vision / audio / none。
+    // `audio` 以前被当成"一次性动作"拒绝写盘，现在它就是「仅听」那一档的持久值。
+    if (raw.mode === 'both' || raw.mode === 'vision'
+        || raw.mode === 'audio' || raw.mode === 'none') mode = raw.mode;
     else {
-      warnings.push('mode 只能是 "both"（视听都开）/ "vision"（只看）'
-        + '；"audio"（只听）是一次性动作、不写配置，已用默认 both');
+      warnings.push('mode 只能是 "both"（视听都开）/ "vision"（仅看）/ "audio"（仅听）/ "none"（都不开）'
+        + '，已用默认 both');
     }
   }
 
