@@ -725,6 +725,8 @@ async function registerAll(ctx) {
    * `ctx.credentials.resolve('DEEPSEEK_API_KEY')` 读一次、写进自己的 process.env，
    * 插件就能自动"看见"设置里那把 key（2026-11-19）。
    */
+  /** 声音用的 key 从哪来：'environment' | 'stored' | null（没拿到）。只用于报告。 */
+  let voiceKeySource = null;
   const syncProviderCredential = async () => {
     try {
       const creds = ctx.get?.('credentials') ?? ctx.credentials;
@@ -737,9 +739,16 @@ async function registerAll(ctx) {
       // 为什么不能无条件覆盖：DSH 的凭据库本身就是"存储值压过环境变量"的语义，而它存的是
       // App-managed key 的 **ID**（36 位，形如 07f5be1c-…）；以前这里直接把它写进
       // process.env，等于把用户刚 setx 的真 key 盖掉（2026-11-19 实报）。
-      if (isSecret(envNow)) return;
-      if (isSecret(value)) process.env.DEEPSEEK_API_KEY = value;
-      else if (value) log('DSH 凭据里存的是 key 的 ID 而不是 secret（App-managed）；声音要用的话请设 DEEPSEEK_API_KEY 环境变量');
+      if (isSecret(envNow)) { voiceKeySource = 'environment'; return; }
+      if (isSecret(value)) {
+        process.env.DEEPSEEK_API_KEY = value;
+        voiceKeySource = 'stored';
+        return;
+      }
+      if (value) {
+        voiceKeySource = null;
+        log('DSH 凭据里存的是 key 的 ID 而不是 secret（App-managed）；声音要用的话请设 DEEPSEEK_API_KEY 环境变量');
+      }
     } catch (e) {
       log(`读 DSH 凭据失败（声音会退回 voice.json 的配置）：${e?.message ?? e}`);
     }
@@ -1080,6 +1089,7 @@ async function registerAll(ctx) {
       ? '声音：关 ✓'
       : (mine
         ? `声音：${vName} 已接上 ✓`
+          + (voiceKeySource && vName.includes('deepseek') ? `（key 来源：${voiceKeySource}）` : '')
         : `声音：${vName} ✗（${vErr
           || (others.length ? `当前还挂着 ${others.join('、')}` : '未接上')}`
           + `${!vErr && rawErr ? `；最近错误：${rawErr}` : ''}）`);
@@ -2202,6 +2212,8 @@ async function registerAll(ctx) {
             // 声音单独一行：听不到声音时第一个要看的就是这里
             + `\n声音：${voice.speakers > 0
               ? `已接上 ${voice.adapters.join(', ') || '适配器'}（${voice.speakers} 个会出声的订阅者）`
+                + (voiceKeySource && voice.adapters.some((a) => String(a).includes('deepseek'))
+                  ? `（key 来源：${voiceKeySource}）` : '')
               : voice.configured
                 ? `配了 ${voice.configured} 但没挂上（${voice.reason ?? '原因未知'}）`
                 : '没配 —— 写 ~/.dsh/voice.json 的 {"adapter":"…"} 才有声音'}`
