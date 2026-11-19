@@ -31,7 +31,6 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { splitEmphasis } from '../src/speech.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -64,39 +63,56 @@ const PS_SCRIPT = [
   '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
   'if ($env:DSH_SAY_VOICE) { try { $s.SelectVoice($env:DSH_SAY_VOICE) } catch { } }',
   'try { $s.Rate = [int]$env:DSH_SAY_RATE } catch { }',
-  // SpeakSsml 才支持 <emphasis>（重读）；纯文本走 Speak 会被当标记念出来
+  // SpeakSsml 才支持 <prosody>（重读）；纯文本走 Speak 会被当标记念出来
   'if ($env:DSH_SAY_SSML) { $s.SpeakSsml($env:DSH_SAY_SSML) } else { $s.Speak($env:DSH_SAY_TEXT) }',
 ].join('; ');
 
 /**
- * 语音标记 → SSML（2026-11-20 重写）：
+ * 语音标记 → SSML（2026-11-20，对齐 edge 档）：
  *
- * - `**顺**` → `<prosody rate="+0%" volume="loud">顺</prosody>`，其余部分各套一段
- *   `<prosody rate="+10%">`：**非重点快 10%、重点回到原速**，跟 edge 那套对比一样，
- *   但 SAPI 是一次合成，所以能精确落到「顺」而不切断「顺时针」——edge 做不到的那件事。
+ * - `〔顺〕` / `【顺】` → `<prosody rate="+0%" volume="loud">顺</prosody>`，其余部分各套一段
+ *   `<prosody rate="+10%">`：**非重点快 10%、重读段回到原速**。SAPI 是一次合成，三段
+ *   prosody 都能单独设（edge 受「最多 2 段」限制），所以能精确落到「顺」而不切断「顺时针」。
  *   （实测 `rate="+10%"` 有效：同一句 5.42s → 4.87s。）
  * - `‖` → `<break time="200ms"/>`：换气口，SAPI 自己就能精确插。
  * - `X~` → 把 X 套进 `<prosody rate="x-slow">`：拖音。
+ * - `**加粗**` 只管气泡排版，这里先剥掉。
  */
 export function toSsml(text, { baseRate = '+10%', strongRate = '+0%', strongVolume = 'loud' } = {}) {
   const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  // 标记与 edge 档一致（2026-11-20）：`〔…〕` = 重读段（SAPI 也是一次合成，能精确到字），
-  // `**加粗**` 只管气泡排版，这里先剥掉；`‖` = 换气口（<break>）；`X~` = 拖音。
   const plain = String(text).replace(/\*\*/g, '');
   const body = plain.split('‖').map((chunk) => {
-    const m = /〔([^〕]+)〕/.exec(chunk);
+    const m = /[〔【]([^〕】]+)[〕】]/.exec(chunk);
     const slowTilde = (s) => esc(s).replace(/([^，。、！？；：…\s])~/g, '<prosody rate="x-slow">$1</prosody>');
     if (!m) return `<prosody rate="${baseRate}">${slowTilde(chunk)}</prosody>`;
-    const i = chunk.indexOf('〔');
-    const j = chunk.indexOf('〕');
-    const pre = chunk.slice(0, i);
-    const emph = chunk.slice(i + 1, j);
-    const suf = chunk.slice(j + 1);
+    const pre = chunk.slice(0, m.index);
+    const emph = m[1];
+    const suf = chunk.slice(m.index + m[0].length);
     return (pre ? `<prosody rate="${baseRate}">${slowTilde(pre)}</prosody>` : '')
       + `<prosody rate="${strongRate}" volume="${strongVolume}">${esc(emph)}</prosody>`
       + (suf ? `<prosody rate="${baseRate}">${slowTilde(suf)}</prosody>` : '');
   }).join('<break time="200ms"/>');
   return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN">${body}</speak>`;
+}
+
+/**
+ * 一条 `say` → 交给 SAPI 的两份文本：纯文本回退（`Speak`）与 SSML（`SpeakSsml`）。
+ *
+ * 为什么要先过这一遍：SSML 只在有标记时生成 —— 以前的触发条件只有 `**` / `‖` / `~`，
+ * 于是单独一个 `〔顺〕` 不触发 SSML，重读静默失效（2026-11-20 修）。情绪前缀
+ * `【急】/【柔】` 在这里剥掉并换成语速（SAPI 没有 edge 那套音量/音高预设）。
+ */
+export function prepareSpeech(text) {
+  const src = String(text ?? '').trim();
+  const emo = /^【(急|柔)】/.exec(src);
+  const body = src.replace(/^【(急|柔)】/, '');
+  const baseRate = emo ? { 急: '+15%', 柔: '-8%' }[emo[1]] : '+10%';
+  // `**` 不进 SSML 触发条件：加粗只排版，剥掉即可；情绪前缀要触发（语速得生效）
+  const needsSsml = Boolean(emo) || /(‖|~|[〔【])/.test(body);
+  return {
+    text: body.replace(/[〔【]([^〕】]*)[〕】]/g, '$1').replace(/‖/g, '，').replace(/~/g, '').replace(/\*\*/g, ''),
+    ssml: needsSsml ? toSsml(body, { baseRate }) : '',
+  };
 }
 export async function attach(api, options = {}) {
   if (process.platform !== 'win32') {
@@ -114,6 +130,7 @@ export async function attach(api, options = {}) {
   let alive = true;
 
   const speakOne = (ev) => {
+    const speech = prepareSpeech(ev.text);
     let child;
     try {
       child = spawn('powershell.exe',
@@ -123,8 +140,8 @@ export async function attach(api, options = {}) {
           windowsHide: true,
           env: {
             ...process.env,
-            DSH_SAY_TEXT: ev.text.replace(/\*\*(.+?)\*\*/g, '$1').replace(/‖/g, '，').replace(/~/g, ''),
-            DSH_SAY_SSML: /\*\*.+?\*\*|‖|~/.test(ev.text) ? toSsml(ev.text) : '',
+            DSH_SAY_TEXT: speech.text,
+            DSH_SAY_SSML: speech.ssml,
             DSH_SAY_VOICE: cfg.voice || '',
             DSH_SAY_RATE: String(rate),
           },

@@ -57,6 +57,20 @@ function readVoice(env = process.env) {
   return v === 'stella' || v === 'tide' ? v : DEFAULT_VOICE;
 }
 
+/**
+ * 送进合成接口前的文本（2026-11-20）：DeepSeek 的接口不收 SSML，`say` 里的语音标记
+ * 在这里全部剥掉 —— 重读 / 换气 / 拖音这一档不生效，只剩正文；`**加粗**` 也只剥掉，
+ * 不再折成「，…，」停顿（加粗只负责气泡排版）。
+ */
+export function textForTts(text) {
+  return String(text ?? '')
+    .replace(/^【(急|柔)】/, '')
+    .replace(/[〔【]([^〕】]*)[〕】]/g, '$1')
+    .replace(/‖/g, '，')
+    .replace(/~/g, '')
+    .replace(/\*\*/g, '');
+}
+
 export async function attach(api, options = {}) {
   const key = resolveKey(options);
   if (!key) {
@@ -79,9 +93,9 @@ export async function attach(api, options = {}) {
       const res = await fetch(`${base}/v1/tools/tts`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        // DeepSeek 的合成接口不收 SSML：加粗只能靠**停顿**表达（前后加逗号 + 破折号）
+        // DeepSeek 的合成接口不收 SSML：标记先剥掉（见 textForTts），剩下的正文直接合成
         body: JSON.stringify({
-          text: String(ev.text).replace(/\*\*(.+?)\*\*/g, '，$1，'),
+          text: textForTts(ev.text),
           voice_id: voiceId,
           format: 'wav',
         }),

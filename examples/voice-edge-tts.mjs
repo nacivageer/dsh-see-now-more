@@ -18,18 +18,20 @@
  * 流程：先 `edge-tts` 合成一个临时 mp3，再由 `ffplay -nodisp -autoexit` 播放。
  * ffplay 起来的那一刻才发 `spoken`（展示层"字跟着声音走"），念完删临时文件。
  *
- * **加粗怎么念**：默认只放慢 12%（0.1.1-more.18 的行为），可以在 `options.emphasis` 里调：
+ * **语音标记怎么念**（2026-11-20 定，细节见 README「念出来之前」）：
+ * `〔…〕` / `【…】` = 重读段（走 edge 原生 SSML，见 `edge-ssml-synth.py`）、`‖` = 换气口、
+ * `~` = 拖音、开头 `【急】/【柔】` = 情绪；`**加粗**` 只管气泡排版，进语音前剥掉。
+ * 这些都可以在 `options.emphasis` 里调（热读），例如：
  *
  * ```json
  * { "adapter": "C:/.../examples/voice-edge-tts.mjs",
- *   "options": { "python": "...", "emphasis": { "rate": "-12%", "pitch": "+15Hz", "pauseMs": 150 } } }
+ *   "options": { "python": "...", "emphasis": { "baseRate": "+10%", "strongPitch": "+15Hz" } } }
  * ```
  */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { splitEmphasis } from '../src/speech.js';
 import { join } from 'node:path';
 
 export const adapterName = 'edge-tts';
@@ -70,19 +72,13 @@ export async function attach(api, options = {}) {
   const ffplay = String(options?.ffplay ?? process.env.DSH_FFPLAY ?? 'ffplay');
   const cfg = readTtsConfig();
 
-  // **加粗怎么念**：全部可调。默认值（2026-11-20 定）：
-  // 非重点略微**加快**、重点放慢 20% + 音量抬一档、**不碰音高**、**不自动加停顿**。
-  // 依据一（音色）：`--rate` 与 atempo 都不改音色（谱包络距离 0.0001 / 0.0012），
-  //   而 `--pitch` 移调会改（+2 个半音 → 0.044，40 倍）——"像换了个人"就是它。
-  // 依据二（对比）：真人重读不是"只把重点拉长"，是**把非重点压缩**再拉长重点
-  //   （格 2026-11-20 的听感：「先别急着」该快、「输出」该重）。所以句内其它段
-  //   不给 +0%，而是给一个略快的 baseRate —— 对比自己就出来了，不用逐句调。
-  // 依据三（气口）：`|` 是**换气口**，不是逗号——150ms 左右，短到不把后半句切成独立一句。
-  //   加粗段后面**不**自动插停顿（pauseMs 默认 0），否则「最辉煌｜的成就」会断词。
-  //   { "rate": "-20%", "baseRate": "+8%", "pitch": "+0Hz", "volume": "+20%",
-  //     "pauseMs": 0, "breathMs": 200 }
-  // edge-tts 不支持 SSML，所以只能按段合成再拼接；参数分别落在每段的 `--rate` /
-  // `--pitch` / `--volume` 和段后的静音上。
+  // **语音标记的参数**（2026-11-20 定，见 README「念出来之前」）：
+  // 重读段走 `rate` / `volume` / `strongPitch`，其余部分用 `baseRate`（默认 +10%）——
+  // 真人重读不是"只把重点拉长"，是**把非重点压缩**，对比靠 baseRate 自己出来
+  // （格 2026-11-20 的听感：「先别急着」该快、「输出」该重）。
+  // `‖` 换气口压到 `breathMs`；`~` 拖音整句放慢；`【急】/【柔】` 只补没显式写的键。
+  // **加粗进语音前剥掉**；按词切段的旧参数（pauseMs / absorbMax / maxStrongChars 等）
+  // 在 .19 之后已不参与朗读，保留只为兼容旧配置。
   const emp = {
     rate: typeof options?.emphasis?.rate === 'string' ? options.emphasis.rate : '+0%',
     baseRate: typeof options?.emphasis?.baseRate === 'string' ? options.emphasis.baseRate : '+10%',
@@ -186,19 +182,19 @@ export async function attach(api, options = {}) {
     const job = { play: null, file, parts: [] };
     synth = job;
 
-    // **加粗 = emp.rate / emp.pitch / emp.volume**；`‖` = 换气口（breathMs）。
+    // **重读段 = emp.rate / strongPitch / emp.volume**；`‖` = 换气口（breathMs）。
     // 注意：`|` 会在 `stripForSpeech` 里被换成空格（表格那条规则），所以气口用 `‖`。
     // 换气口**不切段**：先把 `‖` 换成逗号让引擎自己吐一口气，合成完再把内部静音
     // 压到 breathMs —— 切段会让后半句"重新开口"（句尾下落 + 新的起音），
     // 就没有"弹簧按一下又弹回来"的连贯感了（格 2026-11-20 的判据）。
     const hadBreath = String(ev.text).includes('‖');
     // **情绪前缀**（2026-11-20）：`【急】哇，小心！` / `【柔】唉，没事的。`
-    // 急 = 气口短、重点更快更响（像倒吸一口气后冲出来）；柔 = 气口长、整句更慢更轻。
-    // 情绪短句本来就要"断"，所以带了前缀就不走"短句不切段"那条。
+    // 只改语速/音量（走 SSML），不再靠切段：急 = 非重读段 +15%、重读段音量 +25%；
+    // 柔 = 非重读段 -8%、重读段音量 -15%。用户显式写了的键优先。
     const emoMatch = /^【(急|柔)】/.exec(String(ev.text).trim());
     const emo = emoMatch ? {
-      急: { baseRate: '+15%', baseVolume: '+10%', volume: '+25%', gapMs: 140 },
-      柔: { baseRate: '-8%', baseVolume: '-10%', volume: '-15%', gapMs: 320 },
+      急: { baseRate: '+15%', baseVolume: '+10%', volume: '+25%' },
+      柔: { baseRate: '-8%', baseVolume: '-10%', volume: '-15%' },
     }[emoMatch[1]] : null;
     if (emo) {
       for (const [k, v] of Object.entries(emo)) {
@@ -206,7 +202,6 @@ export async function attach(api, options = {}) {
         const userSet = typeof options?.emphasis?.[k] !== 'undefined';
         if (v !== undefined && !userSet) emp[k] = v;
       }
-      emp.shortUtteranceMax = 0;     // 情绪句要保留那个气口
     }
     // **语音标记**（2026-11-20 定）：`〔…〕` = 重读段、`‖` = 换气口、`~` = 拖音、
     // `【急】/【柔】` = 情绪；`**加粗**` 只管气泡排版，进语音前先剥掉。
