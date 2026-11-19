@@ -8488,6 +8488,24 @@ class LiveGlass:
     )
 
 
+    def _live_mode(self) -> str | None:
+        """当前实际在用的模式（focus.json）。读不到 / 过期就当没有。"""
+        try:
+            d = json.loads((cache_dir() / "focus.json").read_text(encoding="utf-8-sig"))
+        except Exception:
+            return None
+        at = int(d.get("at") or 0)
+        if at and (time.time() * 1000 - at) > 8000:
+            return None
+        v, a = bool(d.get("vision")), bool(d.get("audio"))
+        if v and a:
+            return "both"
+        if v:
+            return "vision"
+        if a:
+            return "audio"
+        return "none"
+
     def _settings_path(self) -> Path:
         return cache_dir().parent / "see-now.json"
 
@@ -8519,7 +8537,9 @@ class LiveGlass:
     def _open_settings(self) -> None:
         self._close_settings()
         data = self._settings_read()
-        mode_now = data.get("mode", "both")
+        # 选中项要跟**当前实际在用的**一致：focus.json 是宿主每秒写一次的真相，
+        # 配置里的 mode 只是"下次启动用什么"（2026-11-19 用户要求）。
+        mode_now = self._live_mode() or data.get("mode", "both")
         if mode_now not in self.MODE_COLORS:
             mode_now = "both"
         rows = [{"kind": "header", "text": "点击选项即可变更当前感官模式", "h": 40}]
@@ -8618,6 +8638,10 @@ class LiveGlass:
 
     def _settings_click(self, e) -> None:
         st = self._settings
+        if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
+            print(f"[settings] click {e.x},{e.y} have={bool(st)}"
+                  + (f" hits={[(a, b, r.get('kind'), r.get('value')) for a, b, r in st['hits']]}" if st else ""),
+                  flush=True)
         if not st:
             return
         if e.y < st["head"]:
@@ -8635,10 +8659,17 @@ class LiveGlass:
 
     def _settings_pick_mode(self, value: str) -> None:
         st = self._settings
-        if not st or value == st.get("mode"):
+        if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
+            print(f"[settings] pick? {value} cur={st and st.get('mode')}", flush=True)
+        if not st:
             return
+        # **同一个值也要写一次**：宿主靠 modeAt 判断"用户又点了一次"，
+        # 只看 mode 值变没变的话，点已选中的那档就是"点了没反应"（2026-11-19 实报）。
         self._settings_write("mode", value)
+        self._settings_write("modeAt", int(time.time() * 1000))
         st["mode"] = value
+        if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
+            print(f"[settings] pick {value}", flush=True)
         c = st["canvas"]
         f11 = self.fonts.get(11)
         f11b = self.fonts.get(11, True)

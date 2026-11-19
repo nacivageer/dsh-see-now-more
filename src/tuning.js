@@ -354,6 +354,8 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     missedGapSec,
     session,
     mode,
+    /** 设置页点「模式」时写的时间戳：同一个值再点一次也要重新执行（见 index.js 的 modeWatcher） */
+    modeAt: Number(raw.modeAt) || 0,
     idleCaptureMin,
     scoreNormalize,
     packStretch,

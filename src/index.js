@@ -888,7 +888,8 @@ async function registerAll(ctx) {
    */
   const applyModeLive = async (next) => {
     const prev = runner.mode?.() ?? null;
-    if (next === prev) return;
+    // **同一个值也要执行**：设置页点「视听都开」时可能配置里本来就是 both，
+    // 但用户的意思是"现在就开始看"，跳过就变成了点了没反应（2026-11-19 实报）。
     try {
       if (next === 'audio') {
         runner.setMode('audio');
@@ -922,12 +923,18 @@ async function registerAll(ctx) {
     }
   };
 
+  let lastModeAt = (() => { try { return readTuning().modeAt || 0; } catch { return 0; } })();
   const modeWatcher = setInterval(() => {
-    let next = null;
-    try { next = readTuning().mode ?? null; } catch { return; }
-    if (!next || next === lastCfgMode) return;
-    lastCfgMode = next;
-    void applyModeLive(next);
+    let t = null;
+    try { t = readTuning(); } catch { return; }
+    const mode = t.mode ?? null;
+    const at = Number(t.modeAt) || 0;
+    // 窗口每点一次都写 `modeAt`（同一个值也算一次）；手改配置没有 modeAt，
+    // 就退回按 `mode` 值变化判断。
+    if (!mode || (at === lastModeAt && mode === lastCfgMode)) return;
+    lastModeAt = at;
+    lastCfgMode = mode;
+    void applyModeLive(mode);
   }, 1500);
   modeWatcher.unref?.();
   disposers.push(() => clearInterval(modeWatcher));
