@@ -265,7 +265,7 @@ export async function attach(api, options = {}) {
       if (process.env.DSH_VOICE_DEBUG) console.error('[edge-tts] segs:', JSON.stringify(segs0.map((s) => (s.strong ? '*' : '') + s.text)));
       // 很短的整句（含情绪短句）不切段：`哇，小心！` 切成两截就成了两声，语气断了。
       const totalCjk = cjkLen(spoken);
-      if ((segs0.length <= 1 || totalCjk <= emp.shortUtteranceMax) && !hadBreath) {
+      if ((segs0.length <= 1 || totalCjk <= emp.shortUtteranceMax) && !hadBreath && !spoken.includes('~')) {
         const r = await runSynth(spoken.replace(/\*\*/g, ''), '+0%', file);
         if (!r.ok) throw new Error('synth failed');
       } else {
@@ -274,8 +274,16 @@ export async function attach(api, options = {}) {
         for (let i = 0; i < segs0.length; i += 1) {
           const part = join(tmpdir(), `dsh-say-${stamp}-${n += 1}.mp3`);
           job.parts.push(part);
-          const r = await runSynth(segs0[i].text,
-            segs0[i].strong ? emp.rate : emp.baseRate,
+          // `~` = 拖音（2026-11-20）：`呃啊~！太~吓人了~！` 里的波浪号是"颤/拖"的提示，
+          // 念的时候去掉它，把这一段整体放慢；同一段里波浪号越多越慢（每多一个再 -8%）。
+          const tildes = (segs0[i].text.match(/~/g) ?? []).length;
+          const textForSynth = segs0[i].text.replace(/~/g, '');
+          const slow = tildes > 0;
+          const rate = slow
+            ? `-${Math.min(45, 22 + (tildes - 1) * 8)}%`
+            : (segs0[i].strong ? emp.rate : emp.baseRate);
+          const r = await runSynth(textForSynth,
+            rate,
             part,
             segs0[i].strong ? emp.pitch : '+0Hz',
             segs0[i].strong ? emp.volume : emp.baseVolume);
