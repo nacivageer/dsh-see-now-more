@@ -1416,6 +1416,24 @@ export function createRunner({
     },
     /** 挂断状态（测试和状态页用） */
     isHungUp() { return hungUp; },
+    /**
+     * 用户/模型**明确说要看见它**时解除挂断（上游 v0.2.1 #59 的出口）。
+     *
+     * 关窗立的闸是单向门：以前唯一的出口是"用户自己把窗重开过"或者下一条
+     * `watch` 显式带来源。`see_now({action:"window", show:true})` 本身就是
+     * 「我要看见它」，把它当出口才符合直觉 —— 否则它会回一句"已让悬浮窗显示出来"，
+     * 而下一条裸 `watch` 仍被 `guardReason` 拦成 `hung-up`（2026-11-19 对上游
+     * release notes 时核出来的）。
+     *
+     * 只清闸，不碰采集：开窗与起采集是 `watch` 的事。
+     */
+    clearHangUp(reason = '显式显示') {
+      if (!hungUp) return { changed: false, hungUp: false };
+      hungUp = false;
+      hungUpStamp = 0;
+      log(`解除挂断（${reason}）`);
+      return { changed: true, hungUp: false };
+    },
     /** 有没有一个"已经放完、不能自动重播"的文件源 */
     endedFile() { return endedSource ? { ...endedSource } : null; },
     /** 这一轮开过窗没有（循环判"用户关窗"用） */

@@ -436,6 +436,23 @@ export const DEFAULTS = Object.freeze({
  */
 export const REF_SCORE = 4;
 
+/**
+ * 积分阈值按哪个 fps 标定 —— **常量，不跟采集 fps 走**。
+ *
+ * 12 是设计基准（`DEFAULTS.fps`）。分数是绝对差、同一段素材的 Σscore 与 fps 无关，
+ * 所以阈值乘实际 fps 会让低帧率那条路（按窗口抓是 8fps）**更容易**攒够：
+ * 2026-11-19 用 testsrc2 30 秒量到 12fps 12 格 / 8fps 16 格（+33%），多出来的是白花的 token。
+ */
+export const INTEGRAL_BASE_FPS = 12;
+
+/**
+ * 积分阈值（`integralSeconds` → 分）。纯函数，便于对账与测试。
+ * @param {number} [integralSeconds]
+ */
+export function integralNeedFor(integralSeconds = 3) {
+  return REF_SCORE * INTEGRAL_BASE_FPS * integralSeconds;
+}
+
 export function createPipeline(opts = {}) {
   const o = { ...DEFAULTS, ...opts };
   const { width, height, fps } = o;
@@ -497,16 +514,22 @@ export function createPipeline(opts = {}) {
   };
 
   /**
-   * 积分阈值：**固定的绝对值**，不随画面变化。
+   * 积分阈值：**固定的绝对值**，不随画面变化，也**不随采集 fps 变化**。
    *
-   *     need = REF_SCORE × fps × integralSeconds
+   *     need = REF_SCORE × INTEGRAL_BASE_FPS × integralSeconds
    *
-   * REF_SCORE 是「中等强度画面每帧的变化分」（8 是标定出来的中位数，0–255 刻度）。
+   * REF_SCORE 是「中等强度画面每帧的变化分」（0–255 刻度）。
    * 于是一段中等画面要攒 integralSeconds 秒才够一个采样点；画面比它动得快就更快累够，
    * 比它静就永远累不够 —— 这才是"运动多给几帧"，而不是固定 N 秒一帧。
+   *
+   * **为什么钉在 12fps、而不是乘实际 `fps`**（2026-11-19 对上游 0.2.3 时量出来的）：
+   * 累加的是**绝对差**，同一段素材的 Σscore 基本与 fps 无关（testsrc2 30 秒：
+   * 12fps 1793 / 8fps 1542），而旧写法让阈值跟着 fps 走 —— 8fps（按窗口抓那条路）
+   * 阈值只有 12fps 的 2/3，实测同样素材、同样 30 秒：**12fps 12 格 vs 8fps 16 格（+33%）**，
+   * 多出来的全是白花的 token。改成基准 12fps 后 8fps 是 11 格，与 12fps 对齐。
    */
   function integralNeed() {
-    return REF_SCORE * fps * o.integralSeconds;
+    return integralNeedFor(o.integralSeconds);
   }
 
   function keep(entry, via) {

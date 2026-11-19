@@ -23,7 +23,7 @@ import { readTuning, tuningPath } from './tuning.js';
 import { capabilityLine } from './capability.js';
 import { shouldIdleStop } from './idle.js';
 import { isHumanMessage } from './human.js';
-import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine } from './window.js';
+import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine, openWindow } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
@@ -1623,6 +1623,8 @@ async function registerAll(ctx) {
       if (action === 'window') {
         const wants = typeof args.show === 'boolean' ? args.show : null;
         let changed = null;
+        let opened = null;
+        let resumed = null;
         if (wants !== null) {
           /**
            * **参数是反的**：`show:true` 要给窗口写 `hidden=false`。
@@ -1632,22 +1634,46 @@ async function registerAll(ctx) {
            * （2026-11-05 实报，查了很久才定位到这一行）。
            */
           changed = setWindowHidden(!wants, { log });
+          if (wants) {
+            /**
+             * 「我要看见它」是**明确要求**，得当成挂断的出口（上游 v0.2.1 #59）。
+             * 以前这里只改 hidden：关过窗之后裸 `watch` 仍被 `guardReason` 拦成
+             * `hung-up`，而返回却说"已让悬浮窗显示出来" —— 用户按提示再调 watch，
+             * 还是被拒。顺手把窗开出来，和标题栏那个按钮走同一条路。
+             */
+            resumed = runner.clearHangUp?.('window show:true') ?? null;
+            if (!windowAlive()) opened = await openWindow({ log });
+          }
           log(`悬浮窗${wants ? '显示' : '隐藏'}${changed.changed ? '' : '（本来就是）'}`);
         }
         const r = windowReport();
+        const openFailed = Boolean(opened && opened.ok === false);
         const head = wants === null
           ? '悬浮窗现在是这样：'
           : wants
-            ? (changed?.error ? `没改成显示（${changed.error}），现状：` : '已让悬浮窗显示出来。')
+            ? (changed?.error
+              ? `没改成显示（${changed.error}），现状：`
+              : openFailed
+                ? `没开成窗（${opened.reason ?? '没给原因'}），现状：`
+                : opened?.ok
+                  ? (opened.already ? '窗本来就开着（已确认显示）。' : '悬浮窗已开出来。')
+                  : '已让悬浮窗显示出来。')
             : (changed?.error ? `没改成隐藏（${changed.error}），现状：` : '已把悬浮窗藏起来（采集照常，只是看不见）。');
         return {
           text: `${head}\n${windowLine(r)}`
+            + (resumed?.changed ? '\n（上次「关窗」立的挂断已解除，下一次 `watch` 可以重新开。）' : '')
             + (r.alive ? '' : '\n窗没开着 —— 下一次 `watch` 会重新开一个。')
             + (r.alive && r.hidden && wants !== false
               ? '\n**用户现在看不到任何东西**：要么 `see_now({action:"window", show:true})`，'
                 + '要么就别再用 `say` 说话，等他主动问。'
               : ''),
-          meta: { ok: changed ? !changed.error : true, window: r, changed: changed?.changed ?? false },
+          meta: {
+            ok: (changed ? !changed.error : true) && !openFailed,
+            window: r,
+            changed: changed?.changed ?? false,
+            resumed: resumed?.changed ?? false,
+            opened: opened ? { ok: opened.ok !== false, reason: opened.reason ?? null, already: Boolean(opened.already) } : null,
+          },
         };
       }
 
