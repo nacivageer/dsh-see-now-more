@@ -8481,6 +8481,7 @@ class LiveGlass:
                     ("audio", "仅听（使用黑听抬头机制）"), ("none", "无"))
     # 声音：写 ~/.dsh/voice.json，**热读**（下一次工具调用就换，不用重启 DSH）
     VOICE_MODES = ("off", "edge", "sapi")
+    VOICE_OPTIONS = (("off", "关"), ("edge", "edge-tts（在线）"), ("sapi", "SAPI（系统）"))
     VOICE_LABELS = {"off": "关", "sapi": "SAPI", "edge": "edge-tts", "custom": "自定义"}
 
     # 值 → 颜色：跟标题栏那颗感官点**用同一套**（FOCUS_LIVE / FOCUS_VISION /
@@ -8561,9 +8562,14 @@ class LiveGlass:
         # 放在提示**上面**：提示里的"以下选项"只指节奏/清晰度/排布，不含它。
         rows.append({"kind": "gmode", "on": bool(data.get("gameMode")), "h": 54})
         rows.append({"kind": "sep", "h": 8})
-        # 声音也是即时项（voice.json 热读），所以放在「重启生效」那行提示**上面**
+        # 声音是即时项（voice.json 热读），放在「重启生效」那行提示**上面**。
+        # 收起时只占一行、点开才把三档摊在它下面（2026-11-19 用户要"小展开列表"）
         _vmode, _vadapter = self._voice_mode()
-        rows.append({"kind": "voice", "value": _vmode, "adapter": _vadapter, "h": 56})
+        rows.append({"kind": "voice", "value": _vmode,
+                     "open": bool(getattr(self, "_voice_menu", False)), "h": 56})
+        if getattr(self, "_voice_menu", False):
+            for _val, _label in self.VOICE_OPTIONS:
+                rows.append({"kind": "voiceopt", "value": _val, "label": _label, "h": 44})
         rows.append({"kind": "sep", "h": 8})
         rows.append({"kind": "hint",
                      "text": "以下选项存进 see-now.json，重启 DSH 后生效", "h": 30})
@@ -8643,11 +8649,31 @@ class LiveGlass:
             elif kind == "voice":
                 vm = r["value"]
                 c.create_text(36, (y0 + y1) // 2, text="声音", anchor="w",
-                              fill="#dfe9f6", font=f11)
-                c.create_text(cw - 30, (y0 + y1) // 2,
+                              fill="#dfe9f6", font=f11,
+                              tags=("voicerow",))
+                c.create_text(cw - 46, (y0 + y1) // 2,
                               text=self.VOICE_LABELS.get(vm, vm), anchor="e",
                               fill=("#8fd3ff" if vm != "off" else "#77859a"),
-                              font=f11b, tags=("voiceval",))
+                              font=f11b, tags=("voicerow",))
+                c.create_text(cw - 26, (y0 + y1) // 2,
+                              text=("▴" if r.get("open") else "▾"), anchor="e",
+                              fill="#8fa0b6", font=f10, tags=("voicerow",))
+            elif kind == "voiceopt":
+                sel = r["value"] == _vmode
+                v = r["value"]
+                c.create_rectangle(16, y0 + 2, cw - 16, y1 - 2,
+                                   fill=("#16202c" if sel else ""), outline="",
+                                   tags=(f"voiceband_{v}",))
+                c.create_rectangle(16, y0 + 3, 20, y1 - 3,
+                                   fill=("#8fd3ff" if sel else ""), outline="",
+                                   tags=(f"voicebar_{v}",))
+                c.create_text(36, (y0 + y1) // 2, text=r["label"], anchor="w",
+                              fill=("#8fd3ff" if sel else "#b9c6d6"),
+                              font=(f11b if sel else f11),
+                              tags=(f"voicelabel_{v}",))
+                c.create_text(cw - 30, (y0 + y1) // 2, text=("✓" if sel else ""),
+                              anchor="e", fill="#8fd3ff", font=f11b,
+                              tags=(f"voicecheck_{v}",))
             elif kind == "gmode":
                 on = bool(r["on"])
                 c.create_text(36, (y0 + y1) // 2, text="游戏模式", anchor="w",
@@ -8726,7 +8752,10 @@ class LiveGlass:
             elif r["kind"] == "gmode":
                 self._settings_toggle_game(r)
             elif r["kind"] == "voice":
-                self._settings_cycle_voice(r)
+                self._voice_menu = not bool(getattr(self, "_voice_menu", False))
+                self._settings_rebuild()
+            elif r["kind"] == "voiceopt":
+                self._settings_pick_voice(r["value"])
             elif r["kind"] == "checkbtn":
                 self._settings_check()
             elif r["kind"] == "setting":
@@ -8786,10 +8815,20 @@ class LiveGlass:
         name = "voice-sapi-win.mjs" if mode == "sapi" else "voice-edge-tts.mjs"
         return str(root / "examples" / name)
 
-    def _settings_cycle_voice(self, r) -> None:
-        """关 → edge-tts → SAPI → 关（微软在线音色放第一个）。写 ~/.dsh/voice.json（**热读**，不用重启）。"""
-        cur = r["value"] if r["value"] in self.VOICE_MODES else "off"
-        nxt = self.VOICE_MODES[(self.VOICE_MODES.index(cur) + 1) % len(self.VOICE_MODES)]
+    def _settings_rebuild(self) -> None:
+        """关掉再开一张卡：行数变了（展开/收起、选中态）时最省事、也不会留旧图元。"""
+        self._close_settings()
+        self._open_settings()
+
+    def _settings_pick_voice(self, value: str) -> None:
+        """声音单选：写 ~/.dsh/voice.json（热读，下一句就换），收起展开项并重建卡片。"""
+        cur, _ = self._voice_mode()
+        if value != cur:
+            self._voice_apply(value)
+        self._voice_menu = False
+        self._settings_rebuild()
+
+    def _voice_apply(self, mode: str) -> None:
         path = self._voice_path()
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -8797,12 +8836,12 @@ class LiveGlass:
                 data = {}
         except Exception:
             data = {}
-        if nxt == "off":
+        if mode == "off":
             data.pop("adapter", None)
         else:
-            data["adapter"] = self._voice_adapter_path(nxt)
+            data["adapter"] = self._voice_adapter_path(mode)
             # edge-tts 要一个装了 edge_tts 的 Python：默认借 see-window.json 的 listenPython
-            if nxt == "edge":
+            if mode == "edge":
                 opts = data.get("options")
                 if not isinstance(opts, dict):
                     opts = {}
@@ -8817,14 +8856,6 @@ class LiveGlass:
                     data["options"] = opts
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-        r["value"] = nxt
-        st = self._settings
-        try:
-            c = st["canvas"]
-            c.itemconfigure("voiceval", text=self.VOICE_LABELS.get(nxt, nxt),
-                            fill=("#8fd3ff" if nxt != "off" else "#77859a"))
-        except Exception:
-            pass
 
     def _settings_check(self) -> None:
         """请求宿主核对一次"配置值 vs 运行值"，结果会以居中系统气泡回来。
