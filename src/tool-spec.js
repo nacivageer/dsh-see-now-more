@@ -95,7 +95,8 @@ export function seeNowToolSpec() {
       say: {
         type: 'string',
         description: '用户此刻唯一看得见也听得见的话：一条气泡 + 朗读一次。一次说 2–3 句，'
-          + '别为了补一句再调一次。',
+          + '别为了补一句再调一次。**加粗**的地方会被重读（气泡里也是粗体）：想让人听到'
+          + '强调就加粗一处，别整句加。',
       },
       seconds: {
         type: 'integer',

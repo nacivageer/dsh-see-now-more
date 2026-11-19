@@ -259,6 +259,20 @@ DSH 自己托管的那把 key（设置 → 模型里的「由 Harness 管理」�
 
 默认推荐仍是 **edge-tts**：免费、不需要任何凭据、现在就能出声。
 
+#### 念出来之前：先抹 Markdown，加粗会被重读（2026-11-20 加）
+
+气泡里照旧按 Markdown 渲染，但**念的时候不读符号**：代码块整段换成「（这里有一段代码）」、
+行内 `code` 去掉反引号、链接只留文字、标题/列表/引用的前缀去掉 —— 否则 `**加粗**` 会被念成
+「星号星号……星号星号」（用户 2026-11-20 实报）。
+
+**加粗 = 强调**：念到加粗处会重读，三档实现不同。edge-tts 按加粗切段分别合成（加粗段 `--rate=-12%`）
+再拼回去，SAPI 用 `SpeakSsml` + `<emphasis level="strong">`，DeepSeek 官方接口不收 SSML、只能靠
+「，…，」停顿代替。目前只是放慢 12%，听得出区别、但还不算"重"，这块还在磨
+（下一步是加音高 / 在加粗段前后插短静音）。
+
+代价是**段数**：edge 每段一次网络往返，一句话切得太碎会明显变慢。所以重读只跟加粗走，
+`say` 里偶一处足够，别整句加粗。
+
 #### 朗读范围（`speakScope`）
 
 | 档 | 什么时候念 | 念什么 |
@@ -355,7 +369,7 @@ macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色�
 | `action` | `watch`（默认，阻塞取图）/ `peek` / `listen`（只留耳朵）/ `lift`（配 `since` 取那一刻的帧）/ `start` / `stop` / `status` / `window` / `region` / `bloodbar` |
 | `show` | 配 `action:"window"`：`true` 把悬浮窗叫回来，`false` 藏起来，不传只报状态 |
 | `region` | 只看屏幕上一块：`"x,y,w,h"`（屏幕物理像素），或 `"off"` 取消。**一般不用手填** —— 说"框这块"让它自己框，见下 |
-| `say` | **唯一能进悬浮窗、能被念出来的通道**。普通回复不进气泡，但会被记进小窗的对话记录 |
+| `say` | **唯一能进悬浮窗、能被念出来的通道**。普通回复不进气泡，但会被记进小窗的对话记录；里面**加粗**的部分会被重读（见「念出来之前」） |
 | `quality` | `low`（默认）/ `standard` / `high` / `ultra`，每张 token 见「有多省」。改它会重启采集（~0.6s），并立刻返回当前这一帧 |
 | `pace` | 节奏：`calm` / `normal`（默认）/ `dense` / `game-economic`。见下 |
 | `scene` | `true` = 逐场景模式：一张图只装一个画面、铺满。见下 |
@@ -474,9 +488,9 @@ see_now({ action: "watch", source: "window", window: "窗口标题里的一段" 
 
 ## 自己的节奏：`~/.dsh/see-now.json`
 
-有三件事是"每次会话都一样的偏好"，不该让模型每次传参：多久自己收工、
-默认用哪一档节奏。写进这个文件（**改完重开 DSH 生效**，不进 profile，
-`dsh plugin update` 不会覆盖）：
+这些是"每次会话都一样的偏好"，不该让模型每次传参：多久自己收工、默认用哪一档节奏、
+哪些回复要被念出来。写进这个文件（**不用重开 DSH**：`speakScope` 每条回复都重读、下一句就生效，
+其余字段在下一轮采集/唤醒时生效；不进 profile，`dsh plugin update` 不会覆盖）：
 
 ```json
 {
@@ -484,7 +498,8 @@ see_now({ action: "watch", source: "window", window: "窗口标题里的一段" 
   "idleStopMin": 10,
   "defaultPace": "calm",
   "speechPacing": true,
-  "showPriceChip": true
+  "showPriceChip": true,
+  "speakScope": "off"
 }
 ```
 
@@ -495,6 +510,7 @@ see_now({ action: "watch", source: "window", window: "窗口标题里的一段" 
 | `defaultPace` | `normal` | 新会话/重开采集时的默认节奏：`calm` / `normal` / `dense` / `game-economic`。调用里显式传 `pace` 仍然优先 |
 | `speechPacing` | `true` | 按上一句的估计时长排下一轮（中文约 5 字/秒）。`"guard"` = 只在长句时推迟、不比旧节奏密；`false` = 退回固定间隔 |
 | `showPriceChip` | `true` | 悬浮窗底栏的「高峰期 / 半价期」标签；`false` 关掉。它由 `window.py` 自己算，**不依赖 `dsh-price-period`**（那个是 DSH 标题栏的独立插件） |
+| `speakScope` | `off` | 哪些回复会被念出来：`off` / `notify` / `reaction` / `full`，语义同上一节「朗读范围」；设置页改的就是这一项 |
 
 **为什么要 `speechPacing`**：固定间隔是从"叫醒那一刻"起算的（calm 30s / normal 15s / dense 8s / 逐场景 4s），
 跟上一句说了多久没关系。现在默认改成**跟随上一句**：上一句 3 秒，下一轮最早 3.8 秒后（有 3 秒地板，防连珠炮）；
@@ -556,6 +572,7 @@ src/
   index.js      工具注册与路由
   tool-spec.js  `see_now` 的契约（description / parameters / 体积预算）
 py/listen.py   抓系统回环 → 16k 单声道 → 按静音断句（听声音的 Python 侧，listen.js 起它）
+examples/voice-*.mjs  三个 Windows 声音适配器（edge-tts / SAPI / DeepSeek 官方）
 examples/floating-chat/   悬浮窗（Tk）+ mic.py（麦克风）
 test/                     单测（node --test；含版本号/工具契约/CHANGELOG 一致性守卫）
 ```
