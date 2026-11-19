@@ -307,6 +307,11 @@ DSH 自己托管的那把 key（设置 → 模型里的「由 Harness 管理」�
 可覆盖的参数就三个（`~/.dsh/voice.json` 的 `options`，热读）：`baseRate`（默认 `+0%`）、
 `baseVolume`（默认 `+0%`）、`breathMs`（默认 200）。
 
+> **改 `~/.dsh/see-now.json` 别写成带 BOM 的 UTF-8**（2026-11-20 踩过）：PowerShell 5.1 的
+> `Set-Content -Encoding UTF8` 会加 BOM，这里和窗口那边都用 `json.load` 读它，遇到 BOM 直接抛异常——
+> 表现是**窗口丢绑定（标题退回「DSH」）＋朗读静默（`speakScope` 退回 `off`）**，看不出是配置坏了。
+> 一律用 `[System.IO.File]::WriteAllText($p, $json, (New-Object System.Text.UTF8Encoding $false))`。
+
 边界：换气口那条裁剪作用于**全句内部所有静音**，句子里本来就有的逗号也会被压到同一长度。
 字级重读（「第二~阶段」那种只拖一个字）和音素层（「xin」里 i 尖、n 弱）edge 都不暴露，
 属能力边界——按词的切分试过能量谷 / 音节核 / 谱通量三种检测，四字词上都不稳；真要做得换引擎
