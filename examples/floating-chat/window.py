@@ -8522,9 +8522,9 @@ class LiveGlass:
         mode_now = data.get("mode", "both")
         if mode_now not in self.MODE_COLORS:
             mode_now = "both"
-        rows = [{"kind": "header", "text": "当前感官模式", "h": 34}]
+        rows = [{"kind": "header", "text": "当前感官模式", "h": 40}]
         for val, label in self.MODE_OPTIONS:
-            rows.append({"kind": "mode", "value": val, "label": label, "h": 44})
+            rows.append({"kind": "mode", "value": val, "label": label, "h": 48})
         rows.append({"kind": "sep", "h": 14})
         for row in self.SETTINGS_ROWS:
             rows.append({"kind": "setting", "row": row,
@@ -8577,14 +8577,20 @@ class LiveGlass:
             if kind == "mode":
                 sel = r["value"] == mode_now
                 c.create_rectangle(16, y0 + 2, cw - 16, y1 - 2,
-                                   fill=("#141d29" if sel else ""), outline="",
-                                   tags=(f"setband{idx}",))
-                c.create_text(34, (y0 + y1) // 2, text=r["label"], anchor="w",
-                              fill=(self.MODE_COLORS[r["value"]] if sel else "#c7d3e2"),
-                              font=(f11b if sel else f11), tags=(f"setmode{idx}",))
+                                   fill=("#16202c" if sel else ""), outline="",
+                                   tags=(f"modeband_{r['value']}",))
+                # 左边那条 4px 色条：选中才有颜色，切换时只改 fill（每行都建，别按需建，
+                # 否则换选后旧条留在原地、新行没有条）
+                c.create_rectangle(16, y0 + 3, 20, y1 - 3,
+                                   fill=(self.MODE_COLORS[r["value"]] if sel else ""),
+                                   outline="", tags=(f"modebar_{r['value']}",))
+                c.create_text(36, (y0 + y1) // 2, text=r["label"], anchor="w",
+                              fill=(self.MODE_COLORS[r["value"]] if sel else "#b9c6d6"),
+                              font=(f11b if sel else f11),
+                              tags=(f"modelabel_{r['value']}",))
                 c.create_text(cw - 30, (y0 + y1) // 2, text=("✓" if sel else ""),
                               anchor="e", fill=self.MODE_COLORS[r["value"]],
-                              font=f11b, tags=(f"setcheck{idx}",))
+                              font=f11b, tags=(f"modecheck_{r['value']}",))
             elif kind == "setting":
                 _key, label, _options, names, _default = r["row"]
                 c.create_text(34, (y0 + y1) // 2, text=label, anchor="w",
@@ -8592,7 +8598,7 @@ class LiveGlass:
                 c.create_text(cw - 30, (y0 + y1) // 2,
                               text=names.get(r["value"], "默认"), anchor="e",
                               fill=("#8fd3ff" if r["value"] is not None else "#77859a"),
-                              font=f11b, tags=(f"setval{idx}",))
+                              font=f11b, tags=(f"setval_{_key}",))
         c.create_text(cw // 2, ch - hint_h // 2 + 2,
                       text="点一行选择 · 存进 see-now.json · 重启 DSH 后生效",
                       fill="#77859a", font=f10)
@@ -8634,15 +8640,18 @@ class LiveGlass:
         self._settings_write("mode", value)
         st["mode"] = value
         c = st["canvas"]
-        for idx, (_y0, _y1, r) in enumerate(st["hits"]):
-            if r["kind"] != "mode":
-                continue
-            sel = r["value"] == value
+        f11 = self.fonts.get(11)
+        f11b = self.fonts.get(11, True)
+        for val, _label in self.MODE_OPTIONS:
+            sel = val == value
             try:
-                c.itemconfigure(f"setband{idx}", fill=("#141d29" if sel else ""))
-                c.itemconfigure(f"setmode{idx}",
-                                fill=(self.MODE_COLORS[r["value"]] if sel else "#c7d3e2"))
-                c.itemconfigure(f"setcheck{idx}", text=("✓" if sel else ""))
+                c.itemconfigure(f"modeband_{val}", fill=("#16202c" if sel else ""))
+                c.itemconfigure(f"modebar_{val}",
+                                fill=(self.MODE_COLORS[val] if sel else ""))
+                c.itemconfigure(f"modelabel_{val}",
+                                fill=(self.MODE_COLORS[val] if sel else "#b9c6d6"),
+                                font=(f11b if sel else f11))
+                c.itemconfigure(f"modecheck_{val}", text=("✓" if sel else ""))
             except Exception:
                 pass
 
@@ -8655,11 +8664,8 @@ class LiveGlass:
         nxt = options[(options.index(cur) + 1) % len(options)] if cur in options else options[0]
         r["value"] = nxt
         self._settings_write(_key, nxt)
-        idx = next((i for i, (_a, _b, row) in enumerate(st["hits"]) if row is r), None)
-        if idx is None:
-            return
         try:
-            st["canvas"].itemconfigure(f"setval{idx}", text=names.get(nxt, str(nxt)),
+            st["canvas"].itemconfigure(f"setval_{_key}", text=names.get(nxt, str(nxt)),
                                        fill="#8fd3ff")
         except Exception:
             pass
