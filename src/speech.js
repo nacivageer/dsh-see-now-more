@@ -28,8 +28,9 @@ export function stripForSpeech(text) {
   t = t.replace(/```[\s\S]*?```/g, '（这里有一段代码）');
   t = t.replace(/`([^`]+)`/g, '$1');
   t = t.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1');
-  t = t.replace(/\*\*([^*]+)\*\*/g, '$1');
-  t = t.replace(/__([^_]+)__/g, '$1');
+  // **加粗** 留着：适配器要拿它做"重读/放慢"（2026-11-20 用户要求）。
+  // 下划线式粗体统一折成 ** 形式，省得每种适配器各认一套。
+  t = t.replace(/__([^_]+)__/g, '**$1**');
   t = t.replace(/~~([^~]+)~~/g, '$1');
   t = t.replace(/^\s{0,3}#{1,6}\s*/gm, '');
   t = t.replace(/^\s{0,3}[-*+]\s+/gm, '');
@@ -37,6 +38,25 @@ export function stripForSpeech(text) {
   t = t.replace(/\|/g, ' ');
   t = t.replace(/\n{3,}/g, '\n\n');
   return t.trim();
+}
+
+/**
+ * 把带 `**…**` 的文本切成 [{text, strong}] 片段，供适配器做"加粗处放慢/重读"。
+ * 没有加粗时返回单个片段，调用方可以走快路径。
+ */
+export function splitEmphasis(text) {
+  const src = String(text ?? '');
+  const out = [];
+  const re = /\*\*(.+?)\*\*/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    if (m.index > last) out.push({ text: src.slice(last, m.index), strong: false });
+    out.push({ text: m[1], strong: true });
+    last = m.index + m[0].length;
+  }
+  if (last < src.length) out.push({ text: src.slice(last), strong: false });
+  return out.filter((seg) => seg.text.trim());
 }
 
 /** 只认这四种；写错了按 `due` 处理（容错方向要护住"会念"） */

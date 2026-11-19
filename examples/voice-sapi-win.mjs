@@ -31,6 +31,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { splitEmphasis } from '../src/speech.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -63,8 +64,18 @@ const PS_SCRIPT = [
   '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
   'if ($env:DSH_SAY_VOICE) { try { $s.SelectVoice($env:DSH_SAY_VOICE) } catch { } }',
   'try { $s.Rate = [int]$env:DSH_SAY_RATE } catch { }',
-  '$s.Speak($env:DSH_SAY_TEXT)',
+  // SpeakSsml 才支持 <emphasis>（重读）；纯文本走 Speak 会被当标记念出来
+  'if ($env:DSH_SAY_SSML) { $s.SpeakSsml($env:DSH_SAY_SSML) } else { $s.Speak($env:DSH_SAY_TEXT) }',
 ].join('; ');
+
+/** **加粗** → `<emphasis level="strong"><prosody rate="slow">…</prosody></emphasis>` */
+function toSsml(text) {
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const body = splitEmphasis(text).map((seg) => (seg.strong
+    ? `<emphasis level="strong"><prosody rate="slow">${esc(seg.text)}</prosody></emphasis>`
+    : esc(seg.text))).join(' ');
+  return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN">${body}</speak>`;
+}
 
 export async function attach(api, options = {}) {
   if (process.platform !== 'win32') {
@@ -91,7 +102,8 @@ export async function attach(api, options = {}) {
           windowsHide: true,
           env: {
             ...process.env,
-            DSH_SAY_TEXT: ev.text,
+            DSH_SAY_TEXT: ev.text.replace(/\*\*(.+?)\*\*/g, '$1'),
+            DSH_SAY_SSML: /\*\*(.+?)\*\*/.test(ev.text) ? toSsml(ev.text) : '',
             DSH_SAY_VOICE: cfg.voice || '',
             DSH_SAY_RATE: String(rate),
           },

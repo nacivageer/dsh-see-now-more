@@ -79,7 +79,12 @@ export async function attach(api, options = {}) {
       const res = await fetch(`${base}/v1/tools/tts`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: ev.text, voice_id: voiceId, format: 'wav' }),
+        // DeepSeek 的合成接口不收 SSML：加粗只能靠**停顿**表达（前后加逗号 + 破折号）
+        body: JSON.stringify({
+          text: String(ev.text).replace(/\*\*(.+?)\*\*/g, '，$1，'),
+          voice_id: voiceId,
+          format: 'wav',
+        }),
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => '');

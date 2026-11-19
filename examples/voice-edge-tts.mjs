@@ -20,8 +20,9 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
+import { splitEmphasis } from '../src/speech.js';
 import { join } from 'node:path';
 
 export const adapterName = 'edge-tts';
@@ -73,53 +74,74 @@ export async function attach(api, options = {}) {
   let synth = null;     // 正在合成/播放的那一条：{ synth, play, file }
   let alive = true;
   let seq = 0;
+  const job_synth = new Set();
 
   const cleanup = (file) => { try { unlinkSync(file); } catch { /* 已经没了 */ } };
 
-  const startOne = (ev) => {
-    const file = join(tmpdir(), `dsh-say-${process.pid}-${Date.now()}-${(seq += 1)}.mp3`);
+  const runSynth = (text, rate, file) => new Promise((resolve) => {
     let child;
     try {
-      child = spawn(python, ['-m', 'edge_tts', '--voice', cfg.voice, '--text', ev.text,
-        '--write-media', file], { stdio: 'ignore', windowsHide: true });
+      // `--rate=-12%` 必须用等号：写成 `--rate -12%` 时 argparse 会把 -12% 当选项
+      child = spawn(python, ['-m', 'edge_tts', '--voice', cfg.voice, `--rate=${rate}`,
+        '--text', text, '--write-media', file], { stdio: 'ignore', windowsHide: true });
     } catch {
+      resolve({ ok: false });
       return;
     }
-    const job = { synth: child, play: null, file };
+    job_synth.add(child);
+    child.on('close', (code) => { job_synth.delete(child); resolve({ ok: code === 0 }); });
+    child.on('error', () => { job_synth.delete(child); resolve({ ok: false }); });
+  });
+
+  const startOne = async (ev) => {
+    const stamp = `${process.pid}-${Date.now()}-${(seq += 1)}`;
+    const file = join(tmpdir(), `dsh-say-${stamp}.mp3`);
+    const job = { play: null, file, parts: [] };
     synth = job;
 
-    child.on('close', (code) => {
-      if (!alive) { cleanup(file); return; }
-      if (code !== 0) {
-        // 合成失败（多半是断网）：这句算跳过，别让展示层一直等
-        try { api.emitSpeech({ text: ev.text, at: ev.at ?? null, state: 'skipped' }); } catch { /* 没人听 */ }
-        if (synth === job) synth = null;
-        cleanup(file);
-        return;
+    // **加粗 = 放慢**（-12%）：edge-tts 不支持 SSML，只能按段合成再拼接。
+    // 没有加粗时走单段快路径。
+    const segs = splitEmphasis(ev.text);
+    try {
+      if (segs.length <= 1) {
+        const r = await runSynth(ev.text, '+0%', file);
+        if (!r.ok) throw new Error('synth failed');
+      } else {
+        for (let i = 0; i < segs.length; i += 1) {
+          const part = join(tmpdir(), `dsh-say-${stamp}-${i}.mp3`);
+          job.parts.push(part);
+          const r = await runSynth(segs[i].text, segs[i].strong ? '-12%' : '+0%', part);
+          if (!r.ok) throw new Error('synth failed');
+        }
+        const list = join(tmpdir(), `dsh-say-${stamp}.txt`);
+        job.parts.push(list);
+        writeFileSync(list, job.parts.slice(0, -1).map((f) => `file '${f.replace(/\\/g, '/')}'`).join('\n'));
+        const concat = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
+          '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', file],
+        { stdio: 'ignore', windowsHide: true });
+        if (concat.status !== 0) throw new Error('concat failed');
       }
+      if (!alive) throw new Error('detached');
       let play;
       try {
         play = spawn(ffplay, ['-nodisp', '-autoexit', '-loglevel', 'quiet', file],
           { stdio: 'ignore', windowsHide: true });
       } catch {
-        if (synth === job) synth = null;
-        cleanup(file);
-        return;
+        throw new Error('play failed');
       }
       job.play = play;
-      // ffplay 起来 = 马上出声
       try { api.emitSpoken({ text: ev.text, at: ev.at }); } catch { /* 上报失败不影响念 */ }
       const done = () => {
+        for (const f of [file, ...job.parts]) cleanup(f);
         if (synth === job) synth = null;
-        cleanup(file);
       };
       play.on('close', done);
       play.on('error', done);
-    });
-    child.on('error', () => {
+    } catch {
+      try { api.emitSpeech({ text: ev.text, at: ev.at ?? null, state: 'skipped' }); } catch { /* 没人听 */ }
+      for (const f of [file, ...job.parts]) cleanup(f);
       if (synth === job) synth = null;
-      cleanup(file);
-    });
+    }
   };
 
   const off = api.onSpeech((ev) => {
@@ -136,10 +158,11 @@ export async function attach(api, options = {}) {
   return () => {
     alive = false;
     try { off?.(); } catch { /* 已经退订 */ }
+    for (const c of [...job_synth]) { try { c.kill(); } catch { /* 已经没了 */ } }
+    job_synth.clear();
     if (synth) {
-      try { synth.synth?.kill(); } catch { /* 已经没了 */ }
       try { synth.play?.kill(); } catch { /* 已经没了 */ }
-      cleanup(synth.file);
+      for (const f of [synth.file, ...(synth.parts ?? [])]) cleanup(f);
       synth = null;
     }
   };
