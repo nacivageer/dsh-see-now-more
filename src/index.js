@@ -2212,7 +2212,10 @@ async function registerAll(ctx) {
             // 声音单独一行：听不到声音时第一个要看的就是这里
             + `\n声音：${voice.speakers > 0
               ? `已接上 ${voice.adapters.join(', ') || '适配器'}（${voice.speakers} 个会出声的订阅者）`
-                + (voiceKeySource && voice.adapters.some((a) => String(a).includes('deepseek'))
+                // 注意：整条路径里就带 "deepseek-harness"，所以只能比**文件名**，
+                // 否则 SAPI / edge-tts 也会被标上 key 来源（2026-11-19 实报）
+                + (voiceKeySource && voice.adapters.some(
+                  (a) => String(a).split(/[\\/]/).pop().includes('deepseek-tts'))
                   ? `（key 来源：${voiceKeySource}）` : '')
               : voice.configured
                 ? `配了 ${voice.configured} 但没挂上（${voice.reason ?? '原因未知'}）`
