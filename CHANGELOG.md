@@ -2,6 +2,18 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.22] - 2026-11-20
+
+### Fixed — 【关联变更】的预填对齐 DSH 主窗当前会话
+
+- 预填改为读 **DSH 主窗当前打开的会话**（Electron Local Storage 的 `dsh.sessions.current`，
+  见 `examples/floating-chat/session_hint.py`），不再猜「绑定之后新建的会话」。2026-11-20
+  实报：主窗开的是 `b5a28c79`，输入框却预填了一个从没用过的空会话 `4c36066b`。
+- 兜底（DSH 没开 / 读不到）仍按「最新未绑定会话」，但**空会话不算**：一条 user 消息都没有的
+  会话以前永远最新，现在跳过。顺带修了多帧日志只解第一帧的问题（要 `read_across_frames=True`
+  才看得到消息）。
+- 新增 `test/session-hint.test.mjs`（5 条）。
+
 ## [0.1.1-more.21] - 2026-11-20
 
 ### Fixed — SAPI / DeepSeek 的语音标记不再失配
