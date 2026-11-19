@@ -875,19 +875,59 @@ async function registerAll(ctx) {
   let lastCfgMode = (() => {
     try { return readTuning().mode ?? null; } catch { return null; }
   })();
+
+  /**
+   * 把一档模式**真的做出来**（2026-11-19 用户要求：设置页要能"一眼开始看"）。
+   *
+   * - `both` / `vision`：起采集 + 常驻循环（绑当前会话），等于按了一次 watch；
+   *   顺手解除挂断 —— 用户点它就是明确要看。
+   * - `audio`：进"仅听"（黑听抬头）——起耳朵、停画面，循环切成 listen；
+   * - `none`：停循环 + 停采集 + 关耳朵。
+   *
+   * 每一步都可能要起进程（ffmpeg / python），所以全部 await，失败只记日志。
+   */
+  const applyModeLive = async (next) => {
+    const prev = runner.mode?.() ?? null;
+    if (next === prev) return;
+    try {
+      if (next === 'audio') {
+        runner.setMode('audio');
+        const lp = ensureLoop(null, { listen: true });
+        lp?.enterListen?.();
+        lp?.setPinned?.(false);
+        runner.stopVision('设置页切到仅听');
+        const before = runner.status();
+        const region = before.lastSource?.kind === 'screen'
+          ? before.lastSource.region ?? null
+          : loadRegion();
+        await runner.listenOnly({ region });
+        // `listenOnly()` 会把记忆态改回 both（它的注释写明了），这里再钉回「仅听」
+        runner.setMode('audio');
+        syncFocus();
+      } else if (next === 'none') {
+        runner.setMode('none');
+        stopLoop('设置页切到无');
+        try { runner.stop(); } catch { /* 已经停了 */ }
+        syncFocus();
+      } else {
+        runner.clearHangUp?.('设置页开始看');
+        runner.setMode(next);
+        await runner.start({ src: { kind: 'screen' }, audio: next === 'both' });
+        ensureLoop(boundSessionNow());
+        syncFocus();
+      }
+      log(`设置页改感官模式：${prev} → ${next}`);
+    } catch (e) {
+      log(`设置页改感官模式失败（${next}）：${e?.message ?? e}`);
+    }
+  };
+
   const modeWatcher = setInterval(() => {
     let next = null;
     try { next = readTuning().mode ?? null; } catch { return; }
     if (!next || next === lastCfgMode) return;
-    const prev = runner.mode?.() ?? null;
     lastCfgMode = next;
-    if (next === prev) return;
-    runner.setMode(next);
-    if (next === 'audio' || next === 'none') {
-      stopLoop(`设置页切到 ${next}`);
-      try { runner.stop(); } catch { /* 已经停了 */ }
-    }
-    log(`设置页改感官模式：${prev} → ${next}`);
+    void applyModeLive(next);
   }, 1500);
   modeWatcher.unref?.();
   disposers.push(() => clearInterval(modeWatcher));

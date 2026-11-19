@@ -8470,7 +8470,7 @@ class LiveGlass:
 
     # 四选一（2026-11-19 用户要求：别在一个格子里循环，摊成四行、选中打勾）。
     MODE_OPTIONS = (("both", "视听都开"), ("vision", "仅看"),
-                    ("audio", "仅听"), ("none", "无"))
+                    ("audio", "仅听（使用黑听抬头机制）"), ("none", "无"))
 
     # 值 → 颜色：跟标题栏那颗感官点**用同一套**（FOCUS_LIVE / FOCUS_VISION /
     # FOCUS_AUDIO / FOCUS_OFF），这样窗上和设置页不会出现两种绿。
