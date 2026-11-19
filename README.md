@@ -204,6 +204,26 @@ setInterval(() => {
 { "adapter": "D:/my-voice/index.mjs", "options": { "model": "D:/my/models/xxx" } }
 ```
 
+Windows 自带两个（2026-11-19 加）：
+
+| 适配器 | 引擎 | 依赖 | 特点 |
+|---|---|---|---|
+| `examples/voice-edge-tts.mjs` | 微软在线语音（`edge-tts`） | 联网 + 一个装了 `edge_tts` 的 Python（见下） | **音色最自然**，默认 `zh-CN-XiaoxiaoNeural`；断网时这句跳过 |
+| `examples/voice-sapi-win.mjs` | 系统 `System.Speech`（SAPI） | 无 | 离线可用，中文音色一般是 `Microsoft Huihui Desktop`；偏机械 |
+
+设置页的「声音」一行就是在 `关 / edge-tts / SAPI` 之间切：它改写 `~/.dsh/voice.json` 的 `adapter`，
+**下一次工具调用就换，不用重启 DSH**（`voice.json` 是热读的）。
+
+edge-tts 要一个装了包的解释器，写进 `options.python` 即可（不写则依次看 `DSH_TTS_PYTHON`、`see-window.json` 的 `listenPython`、`python`）：
+
+```json
+// ~/.dsh/voice.json
+{ "adapter": "C:/…/examples/voice-edge-tts.mjs", "options": { "python": "H:/asr-local/.venv/Scripts/python.exe" } }
+```
+
+装法：`<那个 python> -m pip install edge-tts`；可用音色 `python -m edge_tts --list-voices | findstr zh-CN`。
+播放用 `ffplay`（`ffmpeg` 自带的那个），不在 PATH 时用 `options.ffplay` 指定。
+
 macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色和语速从
 `~/.dsh/tts.json` 读（和 `dsh-watch-together` 共用同一份）：
 

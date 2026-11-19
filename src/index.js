@@ -1846,7 +1846,9 @@ async function registerAll(ctx) {
               : ''),
           meta: {
             ok: (changed ? !changed.error : true) && !openFailed,
-            window: r,
+            // `r` 里的可选字段可能是 undefined（窗刚死/刚起时），宿主序列化会报
+            // "value is not lossless JSON"；round-trip 一遍把它们清掉（2026-11-19 实报两次）
+            window: JSON.parse(JSON.stringify(r ?? null)),
             changed: changed?.changed ?? false,
             resumed: resumed?.changed ?? false,
             opened: opened ? { ok: opened.ok !== false, reason: opened.reason ?? null, already: Boolean(opened.already) } : null,

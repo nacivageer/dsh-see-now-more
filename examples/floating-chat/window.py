@@ -8479,6 +8479,9 @@ class LiveGlass:
     # 四选一（2026-11-19 用户要求：别在一个格子里循环，摊成四行、选中打勾）。
     MODE_OPTIONS = (("both", "视听都开"), ("vision", "仅看"),
                     ("audio", "仅听（使用黑听抬头机制）"), ("none", "无"))
+    # 声音：写 ~/.dsh/voice.json，**热读**（下一次工具调用就换，不用重启 DSH）
+    VOICE_MODES = ("off", "edge", "sapi")
+    VOICE_LABELS = {"off": "关", "sapi": "SAPI", "edge": "edge-tts", "custom": "自定义"}
 
     # 值 → 颜色：跟标题栏那颗感官点**用同一套**（FOCUS_LIVE / FOCUS_VISION /
     # FOCUS_AUDIO / FOCUS_OFF），这样窗上和设置页不会出现两种绿。
@@ -8558,6 +8561,10 @@ class LiveGlass:
         # 放在提示**上面**：提示里的"以下选项"只指节奏/清晰度/排布，不含它。
         rows.append({"kind": "gmode", "on": bool(data.get("gameMode")), "h": 54})
         rows.append({"kind": "sep", "h": 8})
+        # 声音也是即时项（voice.json 热读），所以放在「重启生效」那行提示**上面**
+        _vmode, _vadapter = self._voice_mode()
+        rows.append({"kind": "voice", "value": _vmode, "adapter": _vadapter, "h": 56})
+        rows.append({"kind": "sep", "h": 8})
         rows.append({"kind": "hint",
                      "text": "以下选项存进 see-now.json，重启 DSH 后生效", "h": 30})
         rows.append({"kind": "sep", "h": 8})
@@ -8633,6 +8640,14 @@ class LiveGlass:
                 c.create_text(cw - 30, (y0 + y1) // 2, text=("✓" if sel else ""),
                               anchor="e", fill=self.MODE_COLORS[r["value"]],
                               font=f11b, tags=(f"modecheck_{r['value']}",))
+            elif kind == "voice":
+                vm = r["value"]
+                c.create_text(36, (y0 + y1) // 2, text="声音", anchor="w",
+                              fill="#dfe9f6", font=f11)
+                c.create_text(cw - 30, (y0 + y1) // 2,
+                              text=self.VOICE_LABELS.get(vm, vm), anchor="e",
+                              fill=("#8fd3ff" if vm != "off" else "#77859a"),
+                              font=f11b, tags=("voiceval",))
             elif kind == "gmode":
                 on = bool(r["on"])
                 c.create_text(36, (y0 + y1) // 2, text="游戏模式", anchor="w",
@@ -8710,6 +8725,8 @@ class LiveGlass:
                 self._settings_pick_mode(r["value"])
             elif r["kind"] == "gmode":
                 self._settings_toggle_game(r)
+            elif r["kind"] == "voice":
+                self._settings_cycle_voice(r)
             elif r["kind"] == "checkbtn":
                 self._settings_check()
             elif r["kind"] == "setting":
@@ -8744,6 +8761,70 @@ class LiveGlass:
                 c.itemconfigure(f"modecheck_{val}", text=("✓" if sel else ""))
             except Exception:
                 pass
+
+    def _voice_path(self) -> Path:
+        return cache_dir().parent / "voice.json"
+
+    def _voice_mode(self) -> tuple[str, str]:
+        """当前 voice.json 指向哪个内置适配器：off / sapi / edge / custom。"""
+        try:
+            d = json.loads(self._voice_path().read_text(encoding="utf-8-sig"))
+        except Exception:
+            return "off", ""
+        a = str(d.get("adapter") or "").strip()
+        if not a:
+            return "off", ""
+        name = Path(a).name.lower()
+        if name == "voice-sapi-win.mjs":
+            return "sapi", a
+        if name == "voice-edge-tts.mjs":
+            return "edge", a
+        return "custom", a
+
+    def _voice_adapter_path(self, mode: str) -> str:
+        root = Path(__file__).resolve().parents[2]
+        name = "voice-sapi-win.mjs" if mode == "sapi" else "voice-edge-tts.mjs"
+        return str(root / "examples" / name)
+
+    def _settings_cycle_voice(self, r) -> None:
+        """关 → edge-tts → SAPI → 关（微软在线音色放第一个）。写 ~/.dsh/voice.json（**热读**，不用重启）。"""
+        cur = r["value"] if r["value"] in self.VOICE_MODES else "off"
+        nxt = self.VOICE_MODES[(self.VOICE_MODES.index(cur) + 1) % len(self.VOICE_MODES)]
+        path = self._voice_path()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = {}
+        if nxt == "off":
+            data.pop("adapter", None)
+        else:
+            data["adapter"] = self._voice_adapter_path(nxt)
+            # edge-tts 要一个装了 edge_tts 的 Python：默认借 see-window.json 的 listenPython
+            if nxt == "edge":
+                opts = data.get("options")
+                if not isinstance(opts, dict):
+                    opts = {}
+                try:
+                    win = json.loads((cache_dir().parent / "see-window.json").read_text(encoding="utf-8-sig"))
+                    py = str(win.get("listenPython") or "").strip()
+                except Exception:
+                    py = ""
+                if py and not opts.get("python"):
+                    opts["python"] = py
+                if opts:
+                    data["options"] = opts
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        r["value"] = nxt
+        st = self._settings
+        try:
+            c = st["canvas"]
+            c.itemconfigure("voiceval", text=self.VOICE_LABELS.get(nxt, nxt),
+                            fill=("#8fd3ff" if nxt != "off" else "#77859a"))
+        except Exception:
+            pass
 
     def _settings_check(self) -> None:
         """请求宿主核对一次"配置值 vs 运行值"，结果会以居中系统气泡回来。
