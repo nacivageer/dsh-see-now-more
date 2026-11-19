@@ -1034,12 +1034,16 @@ async function registerAll(ctx) {
    */
   const PACE_NAME = { calm: '省', normal: '常规', dense: '密', 'game-economic': '游戏' };
   let lastCheckAt = (() => { try { return readTuning().checkAt || 0; } catch { return 0; } })();
-  const checkWatcher = setInterval(() => {
+  const checkWatcher = setInterval(async () => {
     let t = null;
     try { t = readTuning(); } catch { return; }
     const at = Number(t.checkAt) || 0;
     if (!at || at === lastCheckAt) return;
     lastCheckAt = at;
+    // **检查动作要自己把声音切到位**：重挂平时发生在"下一次工具调用"，而检查是定时器
+    // 触发的；用户刚点完声音马上点检查，看到的会是旧适配器还挂着（2026-11-19 实报三连 ✗）。
+    try { await syncProviderCredential(); } catch { /* 读不到就用现有的 */ }
+    try { await ensureConfiguredVoice({ log }); } catch { /* 失败留给下面报 */ }
     const cfgPace = t.defaultPace ?? DEFAULT_PACE;
     const runPace = paceMode;
     const cfgQ = t.quality ?? DEFAULT_QUALITY;
@@ -1060,11 +1064,17 @@ async function registerAll(ctx) {
     // 适配器的错误安到当前这个头上（2026-11-19 实报：edge-tts ✗（没有 DeepSeek key））。
     const vErr = lastVoiceErrorSpec() === String(voiceSpec) ? lastVoiceError() : null;
     const mine = voiceSpec ? voiceAttached.includes(String(voiceSpec)) : false;
+    const others = voiceAttached
+      .filter((x) => x !== String(voiceSpec))
+      .map((x) => String(x).split(/[\\/]/).pop());
+    const rawErr = lastVoiceError();
     const voiceLine = !voiceSpec
       ? '声音：关 ✓'
       : (mine
         ? `声音：${vName} 已接上 ✓`
-        : `声音：${vName} ✗（${vErr || (voiceAttached.length ? '换上失败了，当前还挂着旧适配器' : '未接上')}）`);
+        : `声音：${vName} ✗（${vErr
+          || (others.length ? `当前还挂着 ${others.join('、')}` : '未接上')}`
+          + `${!vErr && rawErr ? `；最近错误：${rawErr}` : ''}）`);
     const text = '检查当前选项是否生效：\n'
       + line('节奏', PACE_NAME[cfgPace] ?? cfgPace,
         (PACE_NAME[runPace] ?? runPace) + (t.gameMode ? '（游戏模式覆盖中）' : ''), okPace)
