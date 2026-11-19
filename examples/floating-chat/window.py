@@ -8548,6 +8548,36 @@ class LiveGlass:
 
     def _open_settings(self) -> None:
         self._close_settings()
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.configure(bg="#000000")
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=10, height=10)
+        c.pack()
+        self._settings = {"win": win, "canvas": c, "cw": 0, "head": 68,
+                          "rows": [], "hits": [], "mode": None, "drag": None}
+        # **只绑 canvas**：canvas 与 Toplevel 同绑 <Button-1> 会一次点击跑两遍，
+        # 一格跳两档（2026-11-19 实报）。拖动另绑 Motion。
+        c.bind("<Button-1>", self._settings_click)
+        for w in (c, win):
+            w.bind("<B1-Motion>", self._settings_drag)
+            w.bind("<ButtonRelease-1>", self._settings_drag_end)
+        win.bind("<Escape>", lambda _e: self._close_settings())
+        self._settings_paint()
+
+    def _settings_paint(self) -> None:
+        """按当前状态重画卡片内容。
+
+        **复用同一个 Toplevel**：以前展开/收起是"关掉再开一张"，用户能看到整页闪一次
+        （2026-11-19 实报）。现在只 resize + 清 canvas 重画，窗口本身不动。
+        """
+        st = self._settings
+        if not st:
+            return
+        win, c = st["win"], st["canvas"]
         data = self._settings_read()
         # 选中项要跟**当前实际在用的**一致：focus.json 是宿主每秒写一次的真相，
         # 配置里的 mode 只是"下次启动用什么"（2026-11-19 用户要求）。
@@ -8587,16 +8617,12 @@ class LiveGlass:
                         self._vx + self._vw - cw - 4)))
         y = int(max(self._vy + 4,
                     min(self._y + 80, self._vy + self._vh - ch - 4)))
-        win = tk.Toplevel(self.root)
-        win.overrideredirect(True)
-        win.configure(bg="#000000")
         try:
-            win.attributes("-topmost", True)
+            win.geometry(f"{cw}x{ch}+{x}+{y}")
+            c.configure(width=cw, height=ch)
         except Exception:
             pass
-        win.geometry(f"{cw}x{ch}+{x}+{y}")
-        c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=cw, height=ch)
-        c.pack()
+        c.delete("all")
         try:
             c.create_polygon(self._rounded_points(0, 0, cw, ch, 16, 10),
                              fill="#0c1118", outline="#3a4759", width=1, smooth=True)
@@ -8702,23 +8728,13 @@ class LiveGlass:
                               fill=("#8fd3ff" if r["value"] is not None else "#77859a"),
                               font=f11b, tags=(f"setval_{_key}",))
 
-        self._settings = {"win": win, "canvas": c, "cw": cw, "head": head,
-                          "rows": rows, "hits": hits, "mode": mode_now, "drag": None}
+        st["cw"], st["head"] = cw, head
+        st["rows"], st["hits"], st["mode"] = rows, hits, mode_now
         # 胶囊衬底跟着"展开态"走（跟「收藏/历史」一致，2026-11-19 用户要求）
         try:
             self.canvas.itemconfigure("setbtnbg", fill="#17324f")
         except Exception:
             pass
-        # **只绑 canvas**：canvas 与 Toplevel 同时绑同一条 <Button-1> 会触发两次，
-        # 一格跳两档（2026-11-19 实报：点一下从「视听都开」直接跳到「仅听」）。
-        c.bind("<Button-1>", self._settings_click)
-        # 标题栏拖动（2026-11-19 用户要求）：无边框 Toplevel 只能自己实现
-        for w in (c, win):
-            w.bind("<B1-Motion>", self._settings_drag)
-            w.bind("<ButtonRelease-1>", self._settings_drag_end)
-        win.bind("<Escape>", lambda _e: self._close_settings())
-        # **不要绑 FocusOut 自动关**：无边框 Toplevel 抢不到焦点时 focus_displayof()
-        # 返回 None，卡片会在打开后 160ms 自己消失（2026-11-19 实报「只闪一下」）。
         try:
             win.update_idletasks()
             win.lift()
@@ -8816,9 +8832,9 @@ class LiveGlass:
         return str(root / "examples" / name)
 
     def _settings_rebuild(self) -> None:
-        """关掉再开一张卡：行数变了（展开/收起、选中态）时最省事、也不会留旧图元。"""
-        self._close_settings()
-        self._open_settings()
+        """就地重画：行数变了（展开/收起、选中态）时重新算一遍，但不关窗——
+        关掉重开会整页闪一下（2026-11-19 实报）。"""
+        self._settings_paint()
 
     def _settings_pick_voice(self, value: str) -> None:
         """声音单选：写 ~/.dsh/voice.json（热读，下一句就换），收起展开项并重建卡片。"""
