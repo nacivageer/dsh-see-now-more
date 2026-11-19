@@ -947,8 +947,8 @@ async function registerAll(ctx) {
    * 为什么也走"文件 + 时间戳"：窗口只能写 `see-now.json`，没有回调宿主的通道；
    * `gameModeAt` 让"同一个开关再点一次"也能被识别（跟 modeAt 一个道理）。
    *
-   * 开关时给模型发一条提醒：贴在循环会话上（`wakeWithRetry`），同时 `note()` 一份
-   * 兜底（模型正好没在跑时，下一次工具结果里也能看到）。
+   * 开关时只写 `note()`：贴在下一次工具结果里（零额外模型调用）。
+   * 早一版会 `wakeWithRetry` 投一条真消息，用户否掉了 —— 开关一次就多一轮调用。
    */
   let lastGameMode = (() => { try { return Boolean(readTuning().gameMode); } catch { return false; } })();
   let lastGameModeAt = (() => { try { return readTuning().gameModeAt || 0; } catch { return 0; } })();
@@ -980,13 +980,10 @@ async function registerAll(ctx) {
     const text = on
       ? '用户刚在悬浮窗打开了「游戏模式」：节奏临时换成 game-economic（切点门槛 80、最多 20 秒叫一次），关掉后会恢复原来的节奏。'
       : `用户刚关掉了「游戏模式」，节奏已恢复为 ${paceMode}。`;
-    try { runner.note?.(text); } catch { /* 记不住也要提醒 */ }
+    // **只贴 note、不投消息**（2026-11-19 用户定）：投消息会起一轮模型调用，
+    // 开关各一次就是两轮；note 贴在下一次工具结果里，零额外开销。
+    try { runner.note?.(text); } catch { /* 记不住也别炸 */ }
     log(`游戏模式：${on ? '开' : '关'}（节奏 ${paceMode}）`);
-    const who = boundSessionNow() ?? lastSessionId;
-    if (who) {
-      wakeWithRetry({ ctx, sessionId: who, text, steer: false })
-        .catch((e) => log(`游戏模式提醒没送到：${e?.message ?? e}`));
-    }
   }, 1500);
   gameWatcher.unref?.();
   disposers.push(() => clearInterval(gameWatcher));
