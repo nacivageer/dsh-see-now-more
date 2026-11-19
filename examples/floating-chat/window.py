@@ -134,6 +134,15 @@ from glass_geometry import (
     shapes_for,
 )
 from window_widgets import ChatFeed, Fonts, TextLayer
+try:  # 单文件拷走 window.py 时也别让整个窗起不来：读不到就退回旧的预填判据
+    from session_hint import current_session as _read_dsh_current_session
+    from session_hint import prefill as _bind_prefill
+except Exception:
+    def _read_dsh_current_session(*_a, **_k):
+        return ""
+
+    def _bind_prefill(focused, fallback=""):
+        return str(focused or fallback or "")
 
 try:  # 悬浮窗接口：插件写 window-events.jsonl，窗口回 window-outbox.jsonl
     from window_protocol import WindowProtocol
@@ -7547,12 +7556,21 @@ class LiveGlass:
                       f"img={getattr(self._last_frame, 'size', None)}", flush=True)
             self._ensure_bind_entry()
             self._bind_entry.delete(0, "end")
-            # 预填"最新未绑定会话"：开新对话时不用再回来翻一遍 ID
+            # 预填**DSH 主窗当前打开的会话**（2026-11-20 用户指出「应该对齐当前窗」）：
+            # 填的就是眼前那个，哪怕它已经是绑定会话（点确定 = 无操作）。
+            # 读不到（DSH 关了、Local Storage 里没有这个键）才退回旧判据「最新未绑定会话」。
+            _cur = ""
             try:
-                _pre = self._latest_unbound_session()
+                _cur = self._dsh_focused_session()
             except Exception as _exc:
-                _pre = ""
-                print("prefill failed:", repr(_exc), flush=True)
+                print("focused-session probe failed:", repr(_exc), flush=True)
+            _fallback = ""
+            if not _cur:
+                try:
+                    _fallback = self._latest_unbound_session()
+                except Exception as _exc:
+                    print("prefill failed:", repr(_exc), flush=True)
+            _pre = _bind_prefill(_cur, _fallback)
             if _pre:
                 self._bind_entry.insert(0, _pre)
                 self._render_bind_input()
@@ -7626,13 +7644,57 @@ class LiveGlass:
         except Exception:
             return {}
 
-    def _latest_unbound_session(self) -> str:
-        """「最新未绑定会话」的短 ID —— 给【关联变更】输入框预填。
+    @staticmethod
+    def _session_has_user(sdir: Path, max_bytes: int = 96 * 1024) -> bool:
+        """这个会话里有没有**人说过话**（至少一条 user 消息）。
 
-        场景（用户 2026-11-06）：开了一个新对话，要用【关联变更】把窗绑过去。
+        为什么要它：新开一个空会话（点「新对话」、还没发消息就关掉）也会在
+        sessions 目录里留一份只有 header 的日志；按 `createdAt` 预填时它永远最新，
+        于是【关联变更】会填进一个从没用过的会话（2026-11-20 实报）。
+        读不了就返回 True —— 宁可多一个候选，也别把真的会话全筛掉。
+        """
+        f = sdir / "session.v4.jsonl.zstd"
+        try:
+            import zstandard
+            with open(f, "rb") as fh:
+                # 会话日志是**多帧**追加（每次写盘一个 frame）：默认只读第一帧，
+                # 拿到的永远只有 header（实测 242 字节）。必须跨帧读。
+                reader = zstandard.ZstdDecompressor().stream_reader(
+                    fh, read_across_frames=True)
+                try:
+                    head = reader.read(max_bytes)
+                finally:
+                    try:
+                        reader.close()
+                    except Exception:
+                        pass
+        except Exception:
+            return True
+        return b'"role":"user"' in head or b'"role": "user"' in head
+
+    def _dsh_focused_session(self) -> str:
+        """DSH 主窗**当前打开**的会话（全 ID）；拿不到就空串。
+
+        宿主没给插件读这个状态的 API —— 渲染层把它存在 Electron 的 Local Storage
+        （`dsh.sessions.current`），读法见 `session_hint.py`。拿到之后还要在 sessions
+        目录里对得上：删掉的会话不该被预填进来，对不上就当没拿到。
+        """
+        try:
+            sid = _read_dsh_current_session()
+        except Exception:
+            return ""
+        if not sid:
+            return ""
+        full, err = self._resolve_session(sid)
+        return full if full and not err else ""
+
+    def _latest_unbound_session(self) -> str:
+        """「最新未绑定会话」的短 ID —— 给【关联变更】输入框的**兜底**预填。
+
+        首选是 `_dsh_focused_session()`（DSH 主窗当前会话）；只有读不到它时才用这里。
         判据不是"最近写过盘"（当前会话自己一直在写，永远是它最新），而是
-        **header 的 `createdAt` 比当前绑定的会话更晚** —— 也就是"之后才建的会话"。
-        子代理会话（`delegationDepth > 0`）不算，否则会把窗绑到某个子会话上。
+        **header 的 `createdAt` 比当前绑定的会话更晚** —— 也就是"之后才建的会话"；空会话
+        （一条 user 消息都没有）不算，子代理会话（`delegationDepth > 0`）也不算。
         找不到（或 header 读不了）就返回空串，保持手输。
         """
         cur = getattr(self, "_bound_full", "")
@@ -7668,6 +7730,8 @@ class LiveGlass:
         cur_created = int(self._session_header(cur_dir).get("createdAt") or 0) if cur_dir else 0
         best_ca, best_sid = 0, ""
         for _mt, sdir in items[:12]:
+            if not self._session_has_user(sdir):
+                continue
             h = self._session_header(sdir)
             if int(h.get("delegationDepth") or 0) != 0:
                 continue
