@@ -58,6 +58,25 @@ export function boundSessionForChat() {
 }
 
 /** 追加一条。`role` 只有两种：`assistant`（模型说的）和 `user`（用户打的/说的）。 */
+/**
+ * 追加一条居中「系统提示」气泡（`role: "notice"`）。
+ *
+ * 窗口把它渲染成居中文案（无头像、无时间戳），跟 `append_notice()` 那条流是同一份
+ * `chat.jsonl`。给"用户操作后要有可见落点"的场景用 —— 例如游戏模式开关。
+ * 带的 `sid` 决定它只出现在哪个会话里（窗口按 sid 过滤）。
+ */
+export function appendNotice(text, sid = '', env = process.env) {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  const entry = { role: 'notice', text: t, at: Date.now() };
+  if (sid) entry.sid = String(sid);
+  try {
+    mkdirSync(chatDir(env), { recursive: true });
+    appendFileSync(chatFile(env), JSON.stringify(entry) + '\n', 'utf8');
+  } catch { return null; }
+  return entry;
+}
+
 export function appendChat(role, text, env = process.env) {  const t = String(text ?? '').trim();
   if (!t) return null;
   const file = chatFile(env);

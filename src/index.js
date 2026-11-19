@@ -11,7 +11,7 @@ import { resolveFfmpeg } from './binaries.js';
 import { parseRegion } from './layout.js';
 import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC, TOOL_NAME, ACTION_VALUES } from './tool-spec.js';
 import { interjectNote, noteInterjected, replyReminder, clearInterjected } from './interject.js';
-import { appendSpoken, appendChat, lastSaidNote, lastSaidText, chatDir, chatWatcherShared,
+import { appendSpoken, appendChat, appendNotice, lastSaidNote, lastSaidText, chatDir, chatWatcherShared,
          chatWaiterCount, markDelivered, relaySeenHas, markRelaySeen } from './chat.js';
 import { createTitleSync } from './titles.js';
 import { ensureConfiguredVoice, detachAdapters, attachedAdapters, configuredVoiceAdapter, lastVoiceError } from './voice.js';
@@ -983,6 +983,17 @@ async function registerAll(ctx) {
     // **只贴 note、不投消息**（2026-11-19 用户定）：投消息会起一轮模型调用，
     // 开关各一次就是两轮；note 贴在下一次工具结果里，零额外开销。
     try { runner.note?.(text); } catch { /* 记不住也别炸 */ }
+    // 窗口里也要看得见：写一条居中系统气泡（跟「关联会话已成功」同一条流）
+    const PACE_CN = { calm: '省', normal: '常规', dense: '密', 'game-economic': '游戏' };
+    const pc = PACES[paceMode] ?? {};
+    const label = PACE_CN[paceMode] ?? paceMode;
+    try {
+      appendNotice(
+        `${on ? '游戏模式已开启' : '游戏模式已关闭'}：节奏 ${on ? '→' : '恢复为'} `
+        + `${label}（切点门槛 ${pc.cutAbs ?? '?'} / 最多 ${pc.wakeGapSec ?? '?'} 秒一次）`,
+        boundSessionNow() ?? '',
+      );
+    } catch { /* 写不进窗口流也不能影响开关 */ }
     log(`游戏模式：${on ? '开' : '关'}（节奏 ${paceMode}）`);
   }, 1500);
   gameWatcher.unref?.();
