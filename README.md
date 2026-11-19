@@ -234,6 +234,24 @@ DeepSeek 那档要开放平台的 key（`platform.deepseek.com` 申请，和 DSH
 
 DSH 自己托管的那把 key（设置 → 模型里的「由 Harness 管理」）**不会**交给插件 —— 插件能读到的只是它的 ID，拿去做 Bearer 会 401。所以要用这一档，得自己给一份：设 `DEEPSEEK_API_KEY`（改完要重启 DSH），或写 `options.apiKey`（热读，不用重启）。没给时 `status` 的「声音」行与设置页的【检查当前选项是否生效】都会写明原因。
 
+#### 为什么设置页里没有「填 key」的输入框
+
+这是刻意的取舍，不是漏做：
+
+- **DSH 自己托管的那把 key 拿不到。** 设置 → 模型里写着「由 Harness 管理」的那把，插件通过
+  `ctx.credentials.resolve('DEEPSEEK_API_KEY')` 只读到它的 **ID**（36 位、对应平台上的 Tracking ID），
+  不是 secret；拿这个 ID 当 Bearer 去请求 `/v1/tools/tts` 会直接 `401`（本项目实测过）。
+- **做输入框就等于把 key 明文落盘。** 设置页要存它，只能写进 `voice.json`（或另做一套记录 + 中转文件），
+  两者都会在磁盘上留下明文；而 `voice.json` 还可能被备份、同步、或随手贴进 issue。
+- **所以默认让它留在系统环境变量里。** `setx DEEPSEEK_API_KEY "sk-…"` 写的是 `HKCU\Environment`：
+  同样是明文，但**不进插件的配置文件、不进仓库、不进会话记录**，也是这类工具最常见的位置。
+- **代价写在明面上**：换 key 要重启 DSH；没设时选这一档不会出声，
+  `status` 的「声音」行与设置页的【检查当前选项是否生效】会直接报原因。
+
+`options.apiKey` 作为"不想重启"的后门保留（热读），但文档不推荐它——用不用由你权衡。
+
+默认推荐仍是 **edge-tts**：免费、不需要任何凭据、现在就能出声。
+
 macOS 自带一个：`examples/voice-say-mac.mjs`，走系统的 `say`，音色和语速从
 `~/.dsh/tts.json` 读（和 `dsh-watch-together` 共用同一份）：
 
