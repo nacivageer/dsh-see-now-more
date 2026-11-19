@@ -730,8 +730,16 @@ async function registerAll(ctx) {
       const creds = ctx.get?.('credentials') ?? ctx.credentials;
       if (!creds || typeof creds.resolve !== 'function') return;
       const hit = await creds.resolve('DEEPSEEK_API_KEY');
-      const value = hit?.value;
-      if (typeof value === 'string' && value.trim()) process.env.DEEPSEEK_API_KEY = value;
+      const value = typeof hit?.value === 'string' ? hit.value.trim() : '';
+      const isSecret = (v) => /^sk-[A-Za-z0-9]/.test(v);
+      const envNow = String(process.env.DEEPSEEK_API_KEY ?? '').trim();
+      // **优先级：用户环境变量里的真 key > 凭据库里的真 key > 凭据库里的 id**
+      // 为什么不能无条件覆盖：DSH 的凭据库本身就是"存储值压过环境变量"的语义，而它存的是
+      // App-managed key 的 **ID**（36 位，形如 07f5be1c-…）；以前这里直接把它写进
+      // process.env，等于把用户刚 setx 的真 key 盖掉（2026-11-19 实报）。
+      if (isSecret(envNow)) return;
+      if (isSecret(value)) process.env.DEEPSEEK_API_KEY = value;
+      else if (value) log('DSH 凭据里存的是 key 的 ID 而不是 secret（App-managed）；声音要用的话请设 DEEPSEEK_API_KEY 环境变量');
     } catch (e) {
       log(`读 DSH 凭据失败（声音会退回 voice.json 的配置）：${e?.message ?? e}`);
     }
