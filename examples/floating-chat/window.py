@@ -892,6 +892,9 @@ class LiveGlass:
         self._bind_ok_rect = None
         self._bind_input_rect = None
         self._bind_btn_rect = None
+        # 【本插件设置】：关联变更行最右那颗胶囊的命中矩形 + 设置卡句柄（2026-11-19）
+        self._bind_settings_rect = None
+        self._settings = None
         # 底部「历史记录」：按钮 rect + 弹窗句柄（弹窗是独立 Toplevel，不参与玻璃渲染）
         self._history_rect = None
         self._hist = None
@@ -7358,12 +7361,24 @@ class LiveGlass:
         self._bind_entry.bind("<Escape>", lambda _e: self._hide_bind_bar())
 
     def _draw_bind_bar(self) -> None:
-        """标题栏上方那行：输入栏 + 【确定变更】（样式仿下方输入栏与发送按钮）。"""
+        """标题栏上方那行：输入栏 + 【确定变更】+【本插件设置】（样式仿下方输入栏与发送按钮）。
+
+        右侧排布（2026-11-19 用户指定「设置胶囊放【确定变更】右边」）：
+            输入栏 | 确定变更（110 宽） | 10px | 本插件设置（104 宽） | 36px 右边距
+        窄窗（480）时输入栏只剩 ~172px，占位文案会自己截断，不影响按钮。
+        """
         c = self.canvas
         w = self._geo.width
-        # 底部那颗「发送」是 98 宽装两个字；这里四个字要更宽，否则右边会被裁掉
-        x0, y0, x1, y1 = 36, 4, w - 174, 58
-        sx0, sy0, sx1, sy1 = w - 162, 4, w - 36, 58
+        # 右边距 36 → 设置胶囊 104 → 间隔 10 → 确定变更 110 → 间隔 12 → 输入栏
+        gx1 = w - 36
+        gx0 = gx1 - 104
+        sx1 = gx0 - 10
+        sx0 = sx1 - 110
+        x1 = sx0 - 12
+        x0 = 36
+        y0, y1 = 4, 58
+        sy0, sy1 = y0, y1
+        self._bind_settings_rect = (gx0, y0, gx1, y1)
         try:
             c.create_polygon(self._rounded_points(x0, y0, x1, y1, 27, 12),
                              fill="#060708", outline="#ffffff", smooth=True,
@@ -7373,6 +7388,12 @@ class LiveGlass:
                              tags=("bindbar", "chrome"))
             self.text.draw((sx0 + sx1) // 2, (sy0 + sy1) // 2, "确定变更", anchor="center",
                            fill="#ffffff", size=11, bold=True, tags=("bindbar", "chrome"))
+            c.create_polygon(self._rounded_points(gx0, y0, gx1, y1, 27, 12),
+                             fill="#000000", outline="#ffffff", smooth=True,
+                             tags=("bindbar", "chrome", "setbtn"))
+            self.text.draw((gx0 + gx1) // 2, (y0 + y1) // 2, "本插件设置", anchor="center",
+                           fill="#ffffff", size=11, bold=True,
+                           tags=("bindbar", "chrome", "setbtn"))
         except Exception:
             return
         self._bind_input_rect = (x0, y0, x1, y1)
@@ -8422,6 +8443,154 @@ class LiveGlass:
                 self._save_image_ui(src)
 
         self._menu_popup(x_root, y_root, items, pick)
+
+    # ---- 本插件设置（2026-11-19：入口是「关联变更」行最右那颗胶囊）----
+    #
+    # 为什么直接写 `~/.dsh/see-now.json`：这些键都在插件 apply 时读一次
+    # （`readTuning()`），窗口没法把它们「即时推给宿主」——写了就明确告诉用户
+    # 「重启 DSH 后生效」，比做一个看起来即时、实际不生效的开关诚实。
+    # 以后要即时生效，得走 window-outbox 那条通道 + 宿主侧接。
+
+    SETTINGS_ROWS = (
+        # key, 标题, 可选值, 显示名, 默认（None = 未写过，显示「默认」）
+        ("mode", "感官模式", ("both", "vision", "audio"),
+         {"both": "视听都开", "vision": "只看画面", "audio": "只听"}, "both"),
+        ("defaultPace", "节奏", ("calm", "normal", "dense"),
+         {"calm": "省", "normal": "常规", "dense": "密"}, "normal"),
+        ("quality", "清晰度", ("low", "standard", "high", "ultra"),
+         {"low": "低", "standard": "标准", "high": "高", "ultra": "超高"}, None),
+        ("packStretch", "排布容差", (0, 0.1, 0.2, 0.3),
+         {0: "不裁", 0.1: "10%", 0.2: "20%", 0.3: "30%"}, 0),
+    )
+
+    def _settings_path(self) -> Path:
+        return cache_dir().parent / "see-now.json"
+
+    def _settings_read(self) -> dict:
+        try:
+            raw = self._settings_path().read_text(encoding="utf-8-sig")
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _settings_write(self, key: str, value) -> None:
+        data = self._settings_read()
+        data[key] = value
+        try:
+            p = self._settings_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, p)
+        except Exception as exc:
+            print("settings write failed:", repr(exc), flush=True)
+
+    def _settings_value(self, row, data: dict):
+        key, _label, options, _names, default = row
+        cur = data.get(key, default)
+        return cur if cur in options else default
+
+    def _open_settings(self) -> None:
+        self._close_settings()
+        data = self._settings_read()
+        values = [self._settings_value(r, data) for r in self.SETTINGS_ROWS]
+        cw, head, row_h, hint_h = 340, 52, 42, 30
+        ch = head + row_h * len(values) + hint_h
+        x = int(max(self._vx + 4,
+                    min(self._x + (self._geo.width - cw) // 2,
+                        self._vx + self._vw - cw - 4)))
+        y = int(max(self._vy + 4,
+                    min(self._y + 110, self._vy + self._vh - ch - 4)))
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.configure(bg="#000000")
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        win.geometry(f"{cw}x{ch}+{x}+{y}")
+        c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=cw, height=ch)
+        c.pack()
+        try:
+            c.create_polygon(self._rounded_points(0, 0, cw, ch, 12, 8),
+                             fill="#0f1319", outline="#2a3546", smooth=True)
+        except Exception:
+            c.configure(bg="#0f1319")
+        f10 = self.fonts.get(10)
+        f12 = self.fonts.get(12, True)
+        c.create_text(18, head // 2, text="本插件设置", anchor="w", fill="#f2f8ff", font=f12)
+        c.create_text(cw - 20, head // 2, text="✕", anchor="e", fill="#9fb0c8", font=f10)
+        c.create_line(14, head, cw - 14, head, fill="#1f2a38")
+        for i, (row, cur) in enumerate(zip(self.SETTINGS_ROWS, values)):
+            _key, label, _options, names, _default = row
+            yy = head + i * row_h
+            if i % 2 == 1:
+                c.create_rectangle(12, yy + 2, cw - 12, yy + row_h - 2,
+                                   fill="#141a23", outline="")
+            c.create_text(20, yy + row_h // 2, text=label, anchor="w",
+                          fill="#dfe9f6", font=f10)
+            c.create_text(cw - 22, yy + row_h // 2,
+                          text=names.get(cur, "默认"), anchor="e",
+                          fill="#8fd3ff" if cur is not None else "#77859a",
+                          font=f10, tags=(f"setval{i}",))
+        c.create_text(cw // 2, ch - hint_h // 2,
+                      text="点一行切换 · 存进 see-now.json · 重启 DSH 后生效",
+                      fill="#77859a", font=self.fonts.get(9))
+        self._settings = {"win": win, "canvas": c, "cw": cw, "head": head,
+                          "row_h": row_h, "values": values}
+        c.bind("<Button-1>", self._settings_click)
+        win.bind("<Button-1>", self._settings_click)
+        win.bind("<Escape>", lambda _e: self._close_settings())
+        win.bind("<FocusOut>", lambda _e: self.root.after(160, self._settings_focus_lost))
+        try:
+            win.update_idletasks()
+            win.lift()
+            win.focus_force()
+        except Exception:
+            pass
+
+    def _settings_focus_lost(self) -> None:
+        st = self._settings
+        if not st:
+            return
+        try:
+            if st["win"].focus_displayof() is None:
+                self._close_settings()
+        except Exception:
+            pass
+
+    def _settings_click(self, e) -> None:
+        st = self._settings
+        if not st:
+            return
+        c, cw, head, row_h = st["canvas"], st["cw"], st["head"], st["row_h"]
+        if e.y < head:
+            if e.x >= cw - 48:
+                self._close_settings()
+            return
+        i = int((e.y - head) // row_h)
+        if not 0 <= i < len(self.SETTINGS_ROWS):
+            return
+        _key, _label, options, names, _default = self.SETTINGS_ROWS[i]
+        cur = st["values"][i]
+        nxt = options[(options.index(cur) + 1) % len(options)] if cur in options else options[0]
+        st["values"][i] = nxt
+        self._settings_write(_key, nxt)
+        try:
+            c.itemconfigure(f"setval{i}", text=names.get(nxt, str(nxt)), fill="#8fd3ff")
+        except Exception:
+            pass
+
+    def _close_settings(self) -> None:
+        st = getattr(self, "_settings", None)
+        self._settings = None
+        if not st:
+            return
+        try:
+            st["win"].destroy()
+        except Exception:
+            pass
 
     def _menu_popup(self, x_root, y_root, items, on_pick) -> None:
         """通用右键弹层（图片菜单 / 气泡菜单共用）。
@@ -9607,8 +9776,9 @@ class LiveGlass:
     # ---- 关闭 / 隐藏 ----
 
     def _close(self, _e=None):
-        # 预览窗是独立 Toplevel：主窗关掉时必须一起走，否则留一张图挂在桌面上
+        # 预览窗 / 设置卡都是独立 Toplevel：主窗关掉时必须一起走，否则留一张图/一块面板挂在桌面上
         self._close_viewer()
+        self._close_settings()
         if self._pad:
             # Esc 先收输入行，不要一按就把窗关了
             self._hide_bind_bar()
@@ -9785,6 +9955,11 @@ class LiveGlass:
             r = getattr(self, "_bind_ok_rect", None)
             if r is not None and r[0] <= e.x <= r[2] and r[1] <= e.y <= r[3]:
                 self._confirm_bind()
+                return
+            # 【本插件设置】在这条行的最右边（2026-11-19 用户指定）
+            r = getattr(self, "_bind_settings_rect", None)
+            if r is not None and r[0] <= e.x <= r[2] and r[1] <= e.y <= r[3]:
+                self._open_settings()
                 return
             r = getattr(self, "_bind_input_rect", None)
             if r is not None and r[0] <= e.x <= r[2] and r[1] <= e.y <= r[3]:
