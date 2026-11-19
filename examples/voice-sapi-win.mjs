@@ -80,23 +80,24 @@ const PS_SCRIPT = [
  */
 export function toSsml(text, { baseRate = '+10%', strongRate = '+0%', strongVolume = 'loud' } = {}) {
   const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const body = String(text).split('‖').map((chunk) => {
-    // 先切加粗，再对非加粗部分处理 `X~`
-    return splitEmphasis(chunk).map((seg) => {
-      if (seg.strong) {
-        // 段内再强一层：`〔顺〕` → 更慢 + 更响（2026-11-20：整段是重点，但某一个字要再压一层）
-        const inner = esc(seg.text)
-          .replace(/〔(.+?)〕/g, '<prosody rate="-10%" volume="loud">$1</prosody>');
-        return `<prosody rate="${strongRate}" volume="${strongVolume}">${inner}</prosody>`;
-      }
-      const plain = esc(seg.text)
-        .replace(/([^，。、！？；：…\s])~/g, '<prosody rate="x-slow">$1</prosody>');
-      return `<prosody rate="${baseRate}">${plain}</prosody>`;
-    }).join('');
+  // 标记与 edge 档一致（2026-11-20）：`〔…〕` = 重读段（SAPI 也是一次合成，能精确到字），
+  // `**加粗**` 只管气泡排版，这里先剥掉；`‖` = 换气口（<break>）；`X~` = 拖音。
+  const plain = String(text).replace(/\*\*/g, '');
+  const body = plain.split('‖').map((chunk) => {
+    const m = /〔([^〕]+)〕/.exec(chunk);
+    const slowTilde = (s) => esc(s).replace(/([^，。、！？；：…\s])~/g, '<prosody rate="x-slow">$1</prosody>');
+    if (!m) return `<prosody rate="${baseRate}">${slowTilde(chunk)}</prosody>`;
+    const i = chunk.indexOf('〔');
+    const j = chunk.indexOf('〕');
+    const pre = chunk.slice(0, i);
+    const emph = chunk.slice(i + 1, j);
+    const suf = chunk.slice(j + 1);
+    return (pre ? `<prosody rate="${baseRate}">${slowTilde(pre)}</prosody>` : '')
+      + `<prosody rate="${strongRate}" volume="${strongVolume}">${esc(emph)}</prosody>`
+      + (suf ? `<prosody rate="${baseRate}">${slowTilde(suf)}</prosody>` : '');
   }).join('<break time="200ms"/>');
   return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN">${body}</speak>`;
 }
-
 export async function attach(api, options = {}) {
   if (process.platform !== 'win32') {
     throw new Error('`System.Speech` 只在 Windows 上可用（macOS 用 voice-say-mac.mjs）');
