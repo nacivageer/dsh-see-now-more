@@ -14,7 +14,7 @@ import { interjectNote, noteInterjected, replyReminder, clearInterjected } from 
 import { appendSpoken, appendChat, appendNotice, lastSaidNote, lastSaidText, chatDir, chatWatcherShared,
          chatWaiterCount, markDelivered, relaySeenHas, markRelaySeen } from './chat.js';
 import { createTitleSync } from './titles.js';
-import { ensureConfiguredVoice, detachAdapters, attachedAdapters, configuredVoiceAdapter, lastVoiceError } from './voice.js';
+import { ensureConfiguredVoice, detachAdapters, attachedAdapters, configuredVoiceAdapter, lastVoiceError, lastVoiceErrorSpec } from './voice.js';
 import { speechSubscribers, onSpeech } from './speech.js';
 import { describeAcoustic, describeCoverage, describeEvents, markSpeaking, soundText } from './listen.js';
 import { startLoop, HANGUP_NOTE } from './loop.js';
@@ -521,6 +521,7 @@ function voiceState() {
     speakers,
     // 配了但没挂上：把最后一次失败原因带出来，否则只能猜"是不是没重启"
     reason: speakers > 0 ? null : (lastVoiceError() ?? null),
+        // 注：状态行的 reason 只在上层判断用，不按 spec 过滤（保持现状）
   };
 }
 
@@ -1033,7 +1034,9 @@ async function registerAll(ctx) {
     // "你选的这档已接上"（2026-11-19 实报：检查说已接上，其实没 key）。
     const voiceAttached = attachedAdapters().map(String);
     const vName = voiceSpec ? String(voiceSpec).split(/[\\/]/).pop() : '';
-    const vErr = lastVoiceError();
+    // 错误要跟 spec 对上：`lastVoiceError` 是全局最后一条，切过档之后会把上一个
+    // 适配器的错误安到当前这个头上（2026-11-19 实报：edge-tts ✗（没有 DeepSeek key））。
+    const vErr = lastVoiceErrorSpec() === String(voiceSpec) ? lastVoiceError() : null;
     const mine = voiceSpec ? voiceAttached.includes(String(voiceSpec)) : false;
     const voiceLine = !voiceSpec
       ? '声音：关 ✓'

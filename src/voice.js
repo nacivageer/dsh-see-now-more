@@ -110,9 +110,16 @@ function trackedApi(api, subscriptions) {
  * 或者适配器 `attach` 里探测引擎时抛了。
  */
 let lastError = null;
+/** 上一次失败属于哪个 spec —— 不记这个，切到别的适配器后会把旧错误安到新适配器头上。 */
+let lastErrorSpec = null;
 
 export function lastVoiceError() {
   return lastError;
+}
+
+/** 上一次失败是哪个 spec 的（跟 `lastVoiceError()` 配对用）。 */
+export function lastVoiceErrorSpec() {
+  return lastErrorSpec;
 }
 
 /**
@@ -135,14 +142,14 @@ export async function loadVoiceAdapter(spec, { log = () => {}, options = null } 
     } catch (e) {
       const reason = `import failed: ${String(e?.message ?? e).slice(0, 200)}`;
       log(`[voice] ${raw}: ${reason}`);
-      lastError = reason; return { ok: false, reason };
+      lastError = reason; lastErrorSpec = raw; return { ok: false, reason };
     }
 
     const attach = mod?.attach ?? mod?.default;
     if (typeof attach !== 'function') {
       const reason = 'module does not export attach(api) (or a default function)';
       log(`[voice] ${raw}: ${reason}`);
-      lastError = reason; return { ok: false, reason };
+      lastError = reason; lastErrorSpec = raw; return { ok: false, reason };
     }
 
     const subscriptions = new Set();
@@ -157,7 +164,7 @@ export async function loadVoiceAdapter(spec, { log = () => {}, options = null } 
       // 模块没有自报名字时用路径末段 —— `attach.name` 永远是 "attach"，没有信息量
       const name = String(mod?.adapterName ?? raw).split(/[\\/]/).filter(Boolean).pop() || raw;
       log(`[voice] adapter attached: ${name}`);
-      lastError = null;                       // 成功了就别再报旧错
+      lastError = null; lastErrorSpec = null;                       // 成功了就别再报旧错
       return { ok: true, name };
     } catch (e) {
       // attach 可能已经订阅后才抛。只返回失败还不够：那些订阅还挂在总线上，
@@ -167,7 +174,7 @@ export async function loadVoiceAdapter(spec, { log = () => {}, options = null } 
       }
       const reason = `attach failed: ${String(e?.message ?? e).slice(0, 200)}`;
       log(`[voice] ${raw}: ${reason}`);
-      lastError = reason; return { ok: false, reason };
+      lastError = reason; lastErrorSpec = raw; return { ok: false, reason };
     }
   })();
 
