@@ -39,3 +39,9 @@ test('windowLine：没开过 / 被环境变量关掉', () => {
   assert.match(windowLine({ ...base, pid: null, alive: false, heartbeatAgeSec: null }), /没开过/);
   assert.match(windowLine({ ...base, disabled: true }), /DSH_SEE_NO_WINDOW/);
 });
+
+test('windowLine：刚开、还没心跳 = 启动中，不是「没在画」', () => {
+  const line = windowLine({ ...base, starting: true, heartbeatAgeSec: null, heartbeatStale: null });
+  assert.match(line, /启动中/);
+  assert.doesNotMatch(line, /没在画/);
+});

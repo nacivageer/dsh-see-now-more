@@ -24,6 +24,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,7 +36,12 @@ export const PACKAGED = join(HERE, '..', 'examples', 'floating-chat', 'window.py
 const REL = join('examples', 'floating-chat', 'window.py');
 
 function readJson(p) {
-  try { return JSON.parse(readFileSync(p, 'utf8')) ?? {}; } catch { return {}; }
+  /**
+   * **BOM 必须剥掉**：PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会带 BOM，
+   * `JSON.parse` 遇到它直接抛，`catch` 把它变成"配置不存在" —— 用户改了 `python`，
+   * 插件却按没配过处理，静默走 PATH 回退（2026-11-19 当场踩到）。
+   */
+  try { return JSON.parse(readFileSync(p, 'utf8').replace(/^\uFEFF/, '')) ?? {}; } catch { return {}; }
 }
 
 function seeConfig() {
@@ -63,6 +69,18 @@ function heartbeatPath() {
 
 /** 心跳多久算过期。窗口 1 秒写一次，6 秒足够容忍一次 GC 或短暂卡顿。 */
 export const HEARTBEAT_STALE_SEC = 6;
+
+/**
+ * 刚开窗的宽限秒数：这段时间**只认 pid，不认心跳**。
+ *
+ * 为什么需要（2026-11-19 实见）：窗口启动要先 import numpy/PIL、建 Tk、抓背景，
+ * 十秒以上很常见；这段时间它还没开始写心跳，`windowAlive()` 就判"死了"，看屏幕的
+ * 常驻循环数够拍数后自己 `window-stalled` 停掉 —— 用户刚把窗开出来，采集就没了。
+ *
+ * 判据取 pid 文件的 mtime（`pidStamp()`）：成功开窗才写它，所以"刚写过 pid"=
+ * "刚开窗"。超过宽限还不见心跳才回到原来的判法。
+ */
+export const WINDOW_START_GRACE_SEC = 20;
 
 /**
  * 窗口的**可见性**配置（`~/.dsh/watch-window.json` 的 `hidden`）。
@@ -128,9 +146,14 @@ export function windowReport({ env = process.env } = {}) {
     heartbeatAgeSec = Math.max(0, Math.round((Date.now() - statSync(heartbeatPath()).mtimeMs) / 1000));
   } catch { /* 老窗口不写心跳 */ }
   const hidden = windowHidden(env);
+  const pidAlive = windowPidAlive();
+  const sinceOpenSec = pidAlive ? Math.round((Date.now() - pidStamp()) / 1000) : null;
   return {
     pid,
-    alive: windowPidAlive(),
+    alive: pidAlive,
+    /** 刚开、还在启动（这段时间没有心跳是正常的，见 WINDOW_START_GRACE_SEC） */
+    starting: pidAlive && sinceOpenSec !== null && sinceOpenSec < WINDOW_START_GRACE_SEC,
+    sinceOpenSec,
     heartbeatAgeSec,
     heartbeatStale: heartbeatAgeSec === null ? null : heartbeatAgeSec > HEARTBEAT_STALE_SEC,
     hidden,
@@ -152,9 +175,13 @@ export function windowLine(r = windowReport()) {
    */
   const vis = !r.alive
     ? '没在跑'
-    : r.heartbeatStale
-      ? '进程在但没在画（心跳过期）'
-      : r.hidden ? '**藏起来的（用户看不见）**' : '显示中';
+    : r.hidden
+      ? '**藏起来的（用户看不见）**'
+      : r.starting
+        ? '启动中（还没开始画）'
+        : r.heartbeatStale
+          ? '进程在但没在画（心跳过期）'
+          : '显示中';
   return `窗口：${proc} · ${hb} · ${vis}`;
 }
 
@@ -240,9 +267,61 @@ const TK_PROBE = 'import tkinter';
  */
 export function hasTkinter(python) {
   const r = spawnSync(python, ['-c', TK_PROBE], {
-    timeout: 8000, windowsHide: true, stdio: 'ignore',
+    timeout: 8000, windowsHide: true, stdio: 'ignore', env: process.env,
   });
   return r?.status === 0;
+}
+
+/**
+ * 窗要的四个包：tkinter / mss / numpy / PIL（pillow）。
+ *
+ * 顺序跟 `window.py` 的预检一致；名字用 import 名，缺了报给用户的是 pip 名。
+ */
+const WINDOW_MODULES = [
+  ['tkinter', 'tkinter'],
+  ['mss', 'mss'],
+  ['numpy', 'numpy'],
+  ['PIL', 'Pillow'],
+];
+
+/**
+ * 一个解释器能不能跑窗 —— **四个包都真 import 一遍**才算。
+ *
+ * 为什么不能只看 tkinter（2026-11-19 实报）：DSH 换托管 runtime 以后，钉在
+ * `~/.dsh/see-window.json` 的那个 python 有 tkinter 却没有 mss。`hasTkinter` 放它
+ * 过去，`window.py` 一启动就弹一个**阻塞的 MessageBox** 再退出；插件的 700ms 存活
+ * 判定等到的是"进程还在"，于是写 pid、当成功，**不再换下一个候选** —— 机器上明明
+ * 有能用的 Python（3.14 装了 mss），用户看到的却只有报错框。
+ *
+ * 结果写临时文件而不是 stdout：`pythonw.exe` 没有控制台，pipe 上拿不拿得到东西不稳。
+ *
+ * @returns {{ok:boolean, missing:string[], reason?:string}} missing 用 pip 包名
+ */
+export function probePython(python, { timeoutMs = 15000, env = process.env } = {}) {
+  const out = join(tmpdir(), `dsh-see-probe-${process.pid}-${Date.now()}.txt`);
+  const pairs = WINDOW_MODULES.map(([mod, pkg]) => `("${mod}", "${pkg}")`).join(', ');
+  const code = [
+    'import sys',
+    'miss = []',
+    `for mod, pkg in (${pairs}):`,
+    '    try:',
+    '        __import__(mod)',
+    '    except Exception:',
+    '        miss.append(pkg)',
+    'open(sys.argv[1], "w", encoding="utf-8").write(",".join(miss))',
+  ].join('\n');
+  const r = spawnSync(python, ['-c', code, out], {
+    timeout: timeoutMs, windowsHide: true, stdio: 'ignore', env,
+  });
+  let raw = null;
+  try { raw = readFileSync(out, 'utf8'); } catch { /* 没写出结果 */ }
+  try { unlinkSync(out); } catch { /* 没有就算了 */ }
+  if (raw === null) {
+    const why = r?.error?.code ?? r?.error?.message ?? (r?.status === null ? 'timeout' : r?.status);
+    return { ok: false, missing: ['(解释器跑不起来)'], reason: String(why) };
+  }
+  const missing = raw.trim() ? raw.trim().split(',') : [];
+  return { ok: missing.length === 0, missing };
 }
 
 /**
@@ -306,6 +385,8 @@ export function windowPidAlive() {
  */
 export function windowAlive() {
   if (!windowPidAlive()) return false;
+  // 刚开窗：给它启动时间，别拿"还没开始写心跳"当死（见 WINDOW_START_GRACE_SEC）
+  if ((Date.now() - pidStamp()) / 1000 < WINDOW_START_GRACE_SEC) return true;
   try {
     const hb = statSync(heartbeatPath());
     if ((Date.now() - hb.mtimeMs) / 1000 > HEARTBEAT_STALE_SEC) return false;
@@ -317,7 +398,8 @@ export function windowAlive() {
  * 开窗（幂等）。
  *
  * 三步都要做，少一步就会得到一个"看起来成功、其实早就退了"的窗：
- *   1. 真跑一次 `import tkinter` 验解释器（managed python 没有，会立刻退）
+ *   1. 先探四个包（tkinter/mss/numpy/PIL）—— 只看 tkinter 不够：缺 mss 时 window.py
+ *      会弹一个阻塞的 MessageBox，把 700ms 的存活判定骗成"开窗成功"（2026-11-19 实报）
  *   2. spawn 之后等 700ms，看它有没有自己退出（脚本报错退出也是退）
  *   3. **确认活着才写 pid** —— 否则 pid 文件指向死进程，`windowAlive()` 永远 false
  *
@@ -353,7 +435,12 @@ export async function openWindow({ force = false, log = () => {}, settleMs = 700
   /** 所有候选解释器上缺的包（去重后一次性报出来）—— 必须声明在循环外，否则末尾拼 reason 时看不到 */
   const missing = new Set();
   for (const python of pythonCandidates()) {
-    if (!hasTkinter(python)) { tried.push(`${python}（无 tkinter）`); continue; }
+    const probe = probePython(python);
+    if (!probe.ok) {
+      for (const m of probe.missing) missing.add(m);
+      tried.push(`${python}（缺 ${probe.missing.join('/')}）`);
+      continue;
+    }
 
     let errFd = 'ignore';
     try { errFd = openSync(logPath(), 'a'); } catch { /* 打不开日志就丢掉 */ }
