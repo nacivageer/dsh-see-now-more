@@ -1028,14 +1028,18 @@ async function registerAll(ctx) {
     // 声音单独报：它是"选中了但没接上"最典型的一项（DeepSeek 缺 key、SAPI 缺组件、
     // edge-tts 缺 python），这三条都不该让用户自己去猜（2026-11-19 用户要求）。
     const voiceSpec = configuredVoiceAdapter();
-    const voiceAdapters = attachedAdapters();
+    // **必须按 spec 精确比对**：只看"总线上有没有适配器"会撒谎 —— 切到 DeepSeek 后
+    // 旧的 edge-tts 可能还挂着（重挂发生在下一次工具调用），于是把别人的名字当成
+    // "你选的这档已接上"（2026-11-19 实报：检查说已接上，其实没 key）。
+    const voiceAttached = attachedAdapters().map(String);
     const vName = voiceSpec ? String(voiceSpec).split(/[\\/]/).pop() : '';
     const vErr = lastVoiceError();
+    const mine = voiceSpec ? voiceAttached.includes(String(voiceSpec)) : false;
     const voiceLine = !voiceSpec
       ? '声音：关 ✓'
-      : (voiceAdapters.length
+      : (mine
         ? `声音：${vName} 已接上 ✓`
-        : `声音：${vName} ✗（${vErr || '未接上'}）`);
+        : `声音：${vName} ✗（${vErr || (voiceAttached.length ? '换上失败了，当前还挂着旧适配器' : '未接上')}）`);
     const text = '检查当前选项是否生效：\n'
       + line('节奏', PACE_NAME[cfgPace] ?? cfgPace,
         (PACE_NAME[runPace] ?? runPace) + (t.gameMode ? '（游戏模式覆盖中）' : ''), okPace)
