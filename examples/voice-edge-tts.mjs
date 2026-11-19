@@ -206,7 +206,10 @@ export async function attach(api, options = {}) {
       }
       emp.shortUtteranceMax = 0;     // 情绪句要保留那个气口
     }
-    const spoken = String(ev.text).replace(/^【(急|柔)】/, '').replace(/‖/g, '，');
+    // **加粗只管排版，不进语音**（格 2026-11-20）：排版的重音和口语的重音标准不一样，
+    // 按 `**` 切词会让接缝落在词中间、重音落错字。语音只认 `‖`（气口）与 `~`（拖音），
+    // 其余交给引擎自己的韵律。
+    const spoken = String(ev.text).replace(/^【(急|柔)】/, '').replace(/‖/g, '，').replace(/\*\*/g, '');
     const chunks = [spoken];
     try {
       // **切段后别把标点甩到段首**：`‖` 变成逗号后常常正好落在段首（`\|再翻滚`），
@@ -266,7 +269,7 @@ export async function attach(api, options = {}) {
       // 很短的整句（含情绪短句）不切段：`哇，小心！` 切成两截就成了两声，语气断了。
       const totalCjk = cjkLen(spoken);
       if ((segs0.length <= 1 || totalCjk <= emp.shortUtteranceMax) && !hadBreath && !spoken.includes('~')) {
-        const r = await runSynth(spoken.replace(/\*\*/g, ''), '+0%', file);
+        const r = await runSynth(spoken, emp.baseRate, file);
         if (!r.ok) throw new Error('synth failed');
       } else {
         const clips = [];
