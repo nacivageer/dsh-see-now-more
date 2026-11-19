@@ -137,7 +137,7 @@ setInterval(() => {
 
 > 麦克风这条路的未知状态不会被 `status` 报出来：`status` 只覆盖窗口 / 循环 / 听声音。
 > 性能参考（12fps → 800×450）：`ddagrab` 0.28 核、`gdigrab` 0.45 核、OBS 虚拟摄像头 0.13 核；
-> 全部测量条件与 macOS 开发期记录见 [docs/实测.md](./docs/实测.md)。
+> 全部测量条件与**上游的 macOS 早期记录（本仓未复验）**见 [docs/实测.md](./docs/实测.md)。
 
 ## 黑听抬头：它往哪走
 
@@ -574,6 +574,6 @@ Copyright © 2026 SAOS-3624（上游 `dsh-see-now` / `dsh-watch-together`）
 
 - [INSTALL.md](./INSTALL.md) —— 给 AI 读的安装单（前置检查 / 期望输出 / 失败分支）
 - [docs/机制.md](./docs/机制.md) —— 变化分、黑听抬头、听声音的延迟与调参、token 成本、血条判读、按窗口抓、语音标记与参数
-- [docs/实测.md](./docs/实测.md) —— 采集开销、变化分刻度、macOS 开发期记录
+- [docs/实测.md](./docs/实测.md) —— 采集开销、变化分刻度、macOS 早期记录（上游，本仓未复验）
 - [docs/决策记录.md](./docs/决策记录.md) —— 做什么 / 不做什么 / 发版六步 / 代码地图 / key 与工具契约的口径
 - [CHANGELOG.md](./CHANGELOG.md) —— 逐条改动（开发期记，比较啰嗦）
