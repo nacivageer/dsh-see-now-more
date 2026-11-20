@@ -62,6 +62,14 @@ test('开关默认关：没配置、配置里 false、env=1 才算开', () => {
   assert.equal(pointerEnabled({ DSH_HOME: tmpdir(), DSH_SEE_POINTER: '1' }), true);
 });
 
+test('开关是热读：改完文件下一轮就生效（不用重启 DSH）', () => {
+  const env = tmpEnv({ pointer: { enabled: false } });
+  assert.equal(pointerEnabled(env), false);
+  writeFileSync(join(env.DSH_HOME, 'see-now.json'),
+    JSON.stringify({ pointer: { enabled: true } }), 'utf8');
+  assert.equal(pointerEnabled(env), true);
+});
+
 test('没开时 pointAndWait 直接拒，且不去找 python', async () => {
   const r = await pointAndWait({ x: 10, y: 10, label: '点这里' }, { env: tmpEnv(null) });
   assert.equal(r.ok, false);

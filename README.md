@@ -457,7 +457,7 @@ see_now({ action: "watch", source: "window", window: "窗口标题里的一段" 
 see_now({ action: "pointer", x: 960, y: 540, label: "点这里", wait: "click" })
 ```
 
-**默认是关的**，先在 `~/.dsh/see-now.json` 里打开（改完重启 DSH；开发期可 `DSH_SEE_POINTER=1` 只开一个进程）：
+**默认是关的**，先在 `~/.dsh/see-now.json` 里打开（下一轮调用就生效，不用重启；开发期可 `DSH_SEE_POINTER=1` 只开一个进程）：
 
 ```json
 { "pointer": { "enabled": true } }

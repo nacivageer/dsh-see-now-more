@@ -2061,7 +2061,7 @@ async function registerAll(ctx) {
         if (!r.ok) {
           const why = {
             disabled: '`pointer` 默认是关的，要用户先把 `~/.dsh/see-now.json` 里的 '
-              + '`"pointer": { "enabled": true }` 打开（改完重启 DSH 生效）。别自己改他的配置文件。',
+              + '`"pointer": { "enabled": true }` 打开（下一轮调用就生效，不用重启 DSH）。别自己改他的配置文件。',
             'rate-limited': '一分钟内已经指了 6 次，先停一下——连续指会变成刷屏。',
             'bad-args': `参数不对：${r.detail}`,
             'out-of-screen': `那个坐标不在主屏里：${r.detail}`,
