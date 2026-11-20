@@ -12,7 +12,7 @@
   - 画得出：屏上数到 1540 个 `#FF3B30` 像素，圈顶在 y=239（圆心 300、半径 60，物理像素，与声明一致）
   - 人工点验（session-4c36066b）：`inside:true`（cursor (1891,1114)，距圆心 45px）/ `inside:false`（cursor (1746,1099)，圈在 (500,500)）/ Esc → `ok:false, reason:"cancelled"`
   - 契约对齐：`cancelled` 原先回 `ok:true`，已按 `region` 的约定改为 `ok:false, reason:"cancelled"`；复跑 `node --test` 全绿（顺手修了 `coverage-ledger` 分钟边界的浮点严格相等）
-更新：2026-11-20 18:11 CST
+更新：2026-11-20 22:44 CST
 
 ## 现状依据（已核，2026-11-20）
 
@@ -88,7 +88,7 @@
 
 **默认关**是硬要求：`~/.dsh/see-now.json` 的 `pointer.enabled` 缺省 `false`；开发期可用 `DSH_SEE_POINTER=1` 临时开。双条件取「配置开 **且** 调用必须带 `label` 与坐标」——不接受空白圈、不接受「画在所有窗口最上层但什么都不说」。
 
-## 验收（可观察，七条）
+## 验收（可观察，八条）
 
 1. **默认不画**：`pointer.enabled` 缺省时跑 `node scripts/pointer-smoke.mjs --x 960 --y 540 --label 测试` → 输出 `pointer 未启用`，0.5 s 内退出，前后 `Get-Process python` 数量不变。
 2. **画得出**：开启后同一命令 → 屏幕中心出现一个圈 + 标签，`docs/verify-pointer.png` 存截图。
@@ -97,6 +97,7 @@
 5. **收得干净**：任一结束方式后没有残留 python 进程、屏幕上没有残留圈；`Esc` 能中途取消并返回 `cancelled`。
 6. **契约不破**：`node --test` 全绿——含 `tool-spec.test.mjs` 的体积预算（≤7,500 字符）、「每个 action 有分支」「每个参数有 description」，以及 `version.test.mjs` 的三处同值。
 7. **协同（真实使用链）**：用户切在别的会话时，`say` 的指令先进悬浮窗（气泡 + 朗读）、圈同时在屏幕上可见、点击回传发起会话。前提是悬浮窗绑的是发起会话（`see-now.json` 的 `session`）——跨会话的 `say` 会被拦。
+8. **先校准再指**：两张图之间的变换用**地物锚点**（海岸线拐点、湖泊、道路交叉、建筑轮廓），不用文字标签；两点定缩放+平移、第三点验残差。指目标前先在**已知地物**上画一个测试圈、用 `crop` 抓屏确认圈落对了；`pointer` 的 `inside/outside` 只当「用户点没点」，不当位置判据。
 
 ## 不做什么
 
@@ -160,6 +161,7 @@
 - 2026-11-20 18:08 真机验收（session-4c36066b）：宿主已加载 `.23`，工具表里有 `pointer`；临时打开 `pointer.enabled`（热读，未重启即生效），`wait:"none"` 返回 `signal:"none"`，`wait:"click"`（radius 200）点中圈心 → `inside:true`（1.4s）；配置已恢复原样。发现提示文案「改完重启 DSH」不实，改为「下一轮调用就生效」并补热读单测（main 领先 tag，`.23` 的 Release 正文不含这条修正）。
 - 2026-11-20 18:11 复验（session-4c36066b）：`pointer` 与 `say` 同一次调——气泡 + 朗读先落悬浮窗（窗已绑本会话），4.8s 点中圈心 → `inside:true`；`say` 在动作之前统一处理，跨会话的 `say` 会被拦。配置已恢复原样。
 - 2026-11-20 22:20 攻略地图对照实测（session-4c36066b）：切到目标区域后，`watch` 整屏 → `crop` 对照攻略 → `pointer`；圈中标点后用户点圈里确认。教训：整屏 gdigrab 会被 DSH 主窗遮挡，定位游戏画面前先最小化主窗；WGC 的 `source:"window"` 要 `windows-capture`，本机未装（`status` 里血条窗口抓 ✗），这次只能整屏抓。
+- 2026-11-20 22:44 补验收第 8 条（先校准再指）：定位游戏画面先用窗口 rect / `source:"window"` 抓图（避免被主窗压住），地物锚点定缩放/平移、第三点验残差，先在已知地物画测试圈用 `crop` 验证，再指目标；`inside/outside` 只当「用户点没点」。
 
 
 
