@@ -330,7 +330,7 @@ macOS 不在计划里（见「适用范围」）。`examples/voice-say-mac.mjs` 
 
 | 参数 | 说明 |
 |---|---|
-| `action` | `watch`（默认，阻塞取图）/ `peek` / `listen`（只留耳朵）/ `lift`（配 `since` 取那一刻的帧）/ `start` / `stop` / `status` / `window` / `region` / `bloodbar` / `pointer`（指一个坐标并等信号，默认关） |
+| `action` | `watch`（默认，阻塞取图）/ `peek` / `listen`（只留耳朵）/ `lift`（配 `since` 取那一刻的帧）/ `start` / `stop` / `status` / `window` / `region` / `crop`（原生 1:1 截一块）/ `bloodbar` / `pointer`（指一个坐标并等信号，默认关） |
 | `show` | 配 `action:"window"`：`true` 把悬浮窗叫回来，`false` 藏起来，不传只报状态 |
 | `region` | 只看屏幕上一块：`"x,y,w,h"`（屏幕物理像素），或 `"off"` 取消。**一般不用手填** —— 说"框这块"让它自己框，见下 |
 | `say` | **唯一能进悬浮窗、能被念出来的通道**。普通回复不进气泡，但会被记进小窗的对话记录；重读用 `〔…〕` / `【…】` 标（气泡里不显示标记），**加粗只管排版**（见「念出来之前」） |
@@ -371,6 +371,21 @@ macOS 不在计划里（见「适用范围」）。`examples/voice-say-mac.mjs` 
 
 带上区域后出图规则也变了：按区域宽高比出图（竖屏就出竖屏）、每帧长边固定 = 档位长边、
 一张默认 2 帧最多 4 帧。token 会比全屏贵（帧不再被缩小）：low 档 2 帧约 345 token。
+
+### 原生截块（`action:"crop"`）
+
+`watch` 会把画面缩到画布（high 档 1260 宽，4K 屏上约 3 倍缩小），读小字、认桌面图标时不够。
+`crop` 只截 `region` 指定的一块，**1:1 不缩放**、不拼图、不落盘：
+
+```js
+see_now({ action: "crop", region: "1900,1600,260,260" })
+```
+
+- 坐标与 `region` / `pointer` 同口径（主屏物理像素）；块内 `(u,v)` 的屏幕坐标 = `region` 左上角 + `(u,v)`；
+- 一块按面积 **220 万像素**封顶（约 2000×1100）、宽高至少 32px；300×400 的块约 90 token；
+- 它是**一次性取景**，不改 `region.json`，不影响下一次 `watch`；
+- 定位时的推荐顺序：`watch` 整屏找区域 → `crop` 只裁那一块读细节 → 算坐标 → `pointer` 画圈。
+  不要先截整屏再盲扫。
 
 ### 四档节奏（`pace`）
 

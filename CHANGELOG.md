@@ -2,6 +2,17 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.24] - 2026-11-20
+
+### Added — `action:"crop"`：原生 1:1 截一块
+
+- `see_now({action:"crop", region:"x,y,w,h"})` 直接返回主屏物理像素的 1:1 PNG 块：不缩放、不拼图、不落盘。
+  给「读小字 / 认桌面图标 / 定位后再画圈」用——块内 `(u,v)` 的屏幕坐标 = `region` 左上角 + `(u,v)`。
+- 实现走已有的 ffmpeg gdigrab 区域路径（`-offset_x / -offset_y / -video_size`），不新增 Python 依赖；
+  一块按面积 220 万像素封顶（约 1.3k token），不改 `region.json`。
+- 文档：README / `docs/机制.md` 补「原生截块」，并写明定位顺序：`watch` 整屏找区域 → `crop`
+  只裁那块读细节 → 算坐标 → `pointer` 画圈。
+
 ## [0.1.1-more.23] - 2026-11-20
 
 ### Added — `action:"pointer"`：指一个坐标并等信号（默认关）

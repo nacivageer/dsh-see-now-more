@@ -27,6 +27,7 @@ import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine, o
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { pointAndWait, pointerEnabled } from './pointer.js';
+import { captureCrop, validateCropRegion } from './crop.js';
 import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
 import { readBloodbarOnce, readBloodbarWindowOnce } from './bloodbar-capture.js';
 import { todayCounts } from './lift/log.js';
@@ -498,7 +499,7 @@ async function attachAndReturn(ctx, sheet, extra = {}) {
  * 和 `attachAndReturn` 的区别：那边是管线拼好的 sheet（有帧清单、要生成正文），
  * 这里就是一张已经编码好的图 —— 正文由调用方给，因为"那一帧是哪一刻"只有它知道。
  */
-async function attachPng(ctx, png, text, meta = {}) {
+async function attachPng(ctx, png, text, meta = {}, name = 'see-now-lift') {
   const svc = serviceOf(ctx, 'attachments');
   if (!svc?.saveImage) {
     return { text: '拿到帧了，但宿主没有 attachments 服务，交不上去。', meta: { ok: false, ...meta } };
@@ -506,7 +507,7 @@ async function attachPng(ctx, png, text, meta = {}) {
   const ref = await svc.saveImage.call(svc, {
     data: png,
     mediaType: 'image/png',
-    name: `see-now-lift-${Date.now()}.png`,
+    name: `${name}-${Date.now()}.png`,
   });
   return { images: [ref], text, meta: { ...meta, bytes: png.length } };
 }
@@ -2042,6 +2043,38 @@ async function registerAll(ctx) {
             + '换一块：再调一次 `see_now({action:"region"})`；不要了：`see_now({action:"region", region:"off"})`。',
           meta: { ok: true, region: r.region },
         };
+      }
+
+      /**
+       * 原生 1:1 截块（`action:"crop"`）。
+       *
+       * `watch` 会把帧缩到画布（4K 屏上 high 档 1260 宽 ≈ 3 倍缩小），读小字、认图标不够用。
+       * 这条只抓 region 那一块、原样出图；坐标仍按主屏物理像素——
+       * 块内 (u,v) 的屏幕坐标就是 region 左上角 + (u,v)，可以直接喂给 `pointer`。
+       */
+      if (action === 'crop') {
+        const v = validateCropRegion(args.region);
+        if (!v.ok) {
+          return { text: `crop 参数不对：${v.detail}`, meta: { ok: false, reason: v.reason, detail: v.detail } };
+        }
+        const r = await captureCrop(v.region, { log });
+        if (!r.ok) {
+          const why = {
+            'no-ffmpeg': `找不到 ffmpeg：${r.detail}`,
+            timeout: `抓这一块超时了（${r.detail}）`,
+            'ffmpeg-failed': `ffmpeg 抓这一块失败：${r.detail}`,
+          }[r.reason] ?? `没抓到（${r.reason}）：${r.detail ?? ''}`;
+          return {
+            text: why,
+            meta: { ok: false, reason: r.reason, detail: r.detail ?? null, region: v.region },
+          };
+        }
+        return attachPng(ctx, r.png,
+          `原生 1:1 截块 ${regionText(v.region)}（${r.width}×${r.height}，屏幕物理像素，没缩放）。\n`
+          + `块内 (u,v) 的屏幕坐标 = (${v.region.x}+u, ${v.region.y}+v)；`
+          + '要指回屏幕就把目标中心按这个换算好再调 `pointer`。',
+          { ok: true, region: v.region, width: r.width, height: r.height, ms: r.ms },
+          'see-now-crop');
       }
 
       /**

@@ -44,7 +44,7 @@ export const TOOL_NAME = 'see_now';
  * start / stop / status」—— 唤醒文案刚好在叫它调 `lift`。
  */
 export const ACTION_VALUES = Object.freeze([
-  'watch', 'peek', 'listen', 'lift', 'start', 'stop', 'status', 'window', 'region', 'bloodbar', 'pointer',
+  'watch', 'peek', 'listen', 'lift', 'start', 'stop', 'status', 'window', 'region', 'crop', 'bloodbar', 'pointer',
 ]);
 
 export function seeNowToolSpec() {
@@ -87,6 +87,8 @@ export function seeNowToolSpec() {
           + '- `lift` — 取 `since` 那一刻的单帧，只在仅监听时（唤醒文案会给你 `t0`）。\n'
           + '- `window` — 配合 `show` 显示或隐藏悬浮窗。\n'
           + '- `region` — 让用户拖一块框，之后 `watch` 默认只看那块。\n'
+          + '- `crop` — 按 `region:"x,y,w,h"` 截一块**原生 1:1**（主屏物理像素，不缩小），'
+          + '用来读小字 / 认图标；块内 (u,v) 的屏幕坐标 = region 左上角 + (u,v)。\n'
           + '- `bloodbar` — 让用户框**自己角色**那条常驻 UI 的血条（敌人血条只在交战时出现，别框）；'
           + '`read:true` 读一次比例。进仅监听后每秒读一次，'
           + '但读数只写进唤醒文案、`watch` 结果和 `status`，**低血不会叫醒你**。\n'
@@ -128,6 +130,7 @@ export function seeNowToolSpec() {
         type: 'string',
         description: '只抓一块矩形，格式 "x,y,w,h"（屏幕物理像素）。通常不用你填 —— 用户说"框这块"'
           + '就调 `{action:"region"}`，他拖完自动存盘，之后 `watch` 默认用它；`"off"` 取消、回整屏。'
+          + '`crop` 时**必填**：要截的那一块（一次性，不落盘）。'
           + '配 `source:"window"` 时表示窗口内的那一块（仍按屏幕像素写）。\n'
           + '限制（要如实告诉用户）：抓的是屏幕上此刻的像素，被别的窗口挡住就只看到遮挡物；'
           + '抓不到后台 / 最小化窗口；只支持主屏。带区域时帧不再缩小，token 更贵，要省就降 `quality`。',
