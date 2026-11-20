@@ -8,7 +8,8 @@ pointer.py — 在屏幕上圈一个位置，然后**停住等一个信号**，s
 参数从环境变量 `DSH_POINTER_ARGS`（JSON）来，不走命令行：
 Windows 的命令行引号能把一个中文 label 折腾掉半条命，env 里传原样字符串。
 
-退出码：0 = 有信号（click / change / timeout / none）；2 = 用户取消（Esc / 右键）；3 = 参数或环境错。
+退出码：0 = 有结果（click / change / timeout / none / cancelled；看 stdout 的 signal 字段）；
+        3 = 参数或环境错。
 
 信号语义（重要，别读成结论）：
 - `click`  = 左键按下瞬间，光标落在圈里（inside=true）还是圈外（false）
@@ -77,13 +78,15 @@ def dpi_aware():
     """先声明 DPI aware 再建窗：不然 125% 缩放下 Tk 的坐标是逻辑像素，圈会画偏。"""
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)   # PROCESS_PER_MONITOR_DPI_AWARE
+        dbg('dpi: SetProcessDpiAwareness(2) ok')
         return
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        dbg('dpi: SetProcessDpiAwareness(2) failed: %s' % e)
     try:
         ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:  # noqa: BLE001
-        pass
+        dbg('dpi: SetProcessDPIAware() ok')
+    except Exception as e:  # noqa: BLE001
+        dbg('dpi: SetProcessDPIAware() failed: %s' % e)
 
 
 def screen_size():
@@ -158,6 +161,7 @@ def run():
     radius = max(20, min(400, radius))
 
     sw, sh = screen_size()
+    dbg('screen %dx%d; x=%d y=%d radius=%d wait=%s' % (sw, sh, x, y, radius, wait))
     if not (0 <= x < sw and 0 <= y < sh):
         fail('out-of-screen', '坐标 (%d,%d) 不在主屏 %dx%d 里' % (x, y, sw, sh))
         return 3
@@ -206,10 +210,15 @@ def run():
     was_down = down(VK_LBUTTON)
 
     def finish(signal, inside=None, ratio=None, hwnd=None):
-        emit({'event': 'signal', 'signal': signal, 'inside': inside,
-              'changedRatio': ratio, 'hwnd': hwnd, 'hwndBase': base_hwnd[0],
-              'elapsedMs': int((time.monotonic() - t0) * 1000),
-              'truncated': truncated})
+        payload = {'event': 'signal', 'signal': signal, 'inside': inside,
+                   'changedRatio': ratio, 'hwnd': hwnd, 'hwndBase': base_hwnd[0],
+                   'elapsedMs': int((time.monotonic() - t0) * 1000),
+                   'truncated': truncated}
+        if DEBUG and inside is not None:
+            p = POINT()
+            u.GetCursorPos(ctypes.byref(p))
+            payload['cursor'] = {'x': p.x, 'y': p.y}
+        emit(payload)
         try:
             root.destroy()
         except Exception:  # noqa: BLE001
@@ -236,7 +245,9 @@ def run():
                 d = down(VK_LBUTTON)
                 if d and not was_down:
                     cx, cy = cursor()
-                    inside = (cx - x) ** 2 + (cy - y) ** 2 <= radius * radius
+                    dist2 = (cx - x) ** 2 + (cy - y) ** 2
+                    dbg('click at (%d,%d); dist=%.1f r=%d' % (cx, cy, dist2 ** 0.5, radius))
+                    inside = dist2 <= radius * radius
                     state['code'] = finish('click', inside=inside)
                     return
                 was_down = d

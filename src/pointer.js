@@ -141,6 +141,12 @@ function runPy(python, script, args, timeoutMs, env) {
         return;
       }
       if (msg?.event === 'signal') {
+        // 取消不算结果：与 region.js 的约定一致（ok:false + reason:'cancelled'），
+        // 让模型看到的是「这次没拿到信号」，而不是一个 signal 字段。
+        if (msg.signal === 'cancelled') {
+          finish({ result: { ok: false, reason: 'cancelled' } });
+          return;
+        }
         finish({ result: { ok: true, ...msg } });
         return;
       }
