@@ -12,7 +12,7 @@
   - 画得出：屏上数到 1540 个 `#FF3B30` 像素，圈顶在 y=239（圆心 300、半径 60，物理像素，与声明一致）
   - 人工点验（session-4c36066b）：`inside:true`（cursor (1891,1114)，距圆心 45px）/ `inside:false`（cursor (1746,1099)，圈在 (500,500)）/ Esc → `ok:false, reason:"cancelled"`
   - 契约对齐：`cancelled` 原先回 `ok:true`，已按 `region` 的约定改为 `ok:false, reason:"cancelled"`；复跑 `node --test` 全绿（顺手修了 `coverage-ledger` 分钟边界的浮点严格相等）
-更新：2026-11-20 18:08 CST
+更新：2026-11-20 18:11 CST
 
 ## 现状依据（已核，2026-11-20）
 
@@ -157,6 +157,8 @@
 - 2026-11-20 11:15 新建（等你定）；依据：subtitle-pointer 评审（BV1awWV6QEJZ）与 `region.js`/`pick_region.py` 的先例；无实现证据。
 - 2026-11-20 16:27 接手（session-4c36066b）：merge `pointer-draft`（569f9da）→ `e920ffd`；人工点验 `inside:true` / `inside:false` / Esc `cancelled`；把 `cancelled` 对齐 `region` 的约定（`ok:false, reason:"cancelled"`，原先回的是 `ok:true`）；`pointer.py` 加 `DSH_POINTER_DEBUG=1` 的点击坐标/DPI 日志（只在 stderr，不改契约）；补 README / `docs/机制.md` 第八节 / 决策记录；版本 `0.1.1-more.23`。
 - 2026-11-20 18:08 真机验收（session-4c36066b）：宿主已加载 `.23`，工具表里有 `pointer`；临时打开 `pointer.enabled`（热读，未重启即生效），`wait:"none"` 返回 `signal:"none"`，`wait:"click"`（radius 200）点中圈心 → `inside:true`（1.4s）；配置已恢复原样。发现提示文案「改完重启 DSH」不实，改为「下一轮调用就生效」并补热读单测（main 领先 tag，`.23` 的 Release 正文不含这条修正）。
+- 2026-11-20 18:11 复验（session-4c36066b）：`pointer` 与 `say` 同一次调——气泡 + 朗读先落悬浮窗（窗已绑本会话），4.8s 点中圈心 → `inside:true`；`say` 在动作之前统一处理，跨会话的 `say` 会被拦。配置已恢复原样。
+
 
 
 - 2026-11-20 11:44 等你定 → 进行中；两条拍板项已定（click 默认、开关只放配置），代码落地，`node --test` 349 通过 / 0 失败，`change` 与 `timeout` 实跑有证据；差人工点验与文档。
