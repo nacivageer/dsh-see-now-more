@@ -3,7 +3,7 @@
 状态：可验收（真机调用已过；`0.1.1-more.23` 已发并装进 profile）
 对象：给 `see_now` 加一个新动作 `pointer`——在屏幕指定坐标画一个圈/箭头（带标签），然后停住等一个信号（点击 / 那块位置换了窗口 / 超时）再返回，并把「等到的是哪一种」如实报出来。默认关，不动 `window.py`。
 归属：session-83213926-c4a7-4291-8390-59768f8df1b0（任务书）/ session-4c36066b-e5c6-465c-b878-8c8eb6f43e12（验收与发版）/ `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：等格确认收尾；热读文案修正只在 main 上（`.23` 的 Release 不含），下次发版带进 CHANGELOG
+下一步：等格确认收尾；热读文案修正只在 main 上（`.23` 的 Release 不含），下次发版带进 CHANGELOG。**后续实测（格 2026-11-20 提）**：给一张攻略地图截图，对照屏幕在对应位置画圈指出来。
 证据：
   - `node --test` → 352 tests / 349 pass / 0 fail（含 `test/pointer.test.mjs` 8 条、`tool-spec` 体积预算）
   - `DSH_SEE_POINTER=1 node scripts/pointer-smoke.mjs --x 300 --y 300 --label 点这里 --wait none` → `{"ok":true,"signal":"none"}`，exit 0
