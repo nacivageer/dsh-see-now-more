@@ -330,7 +330,7 @@ macOS 不在计划里（见「适用范围」）。`examples/voice-say-mac.mjs` 
 
 | 参数 | 说明 |
 |---|---|
-| `action` | `watch`（默认，阻塞取图）/ `peek` / `listen`（只留耳朵）/ `lift`（配 `since` 取那一刻的帧）/ `start` / `stop` / `status` / `window` / `region` / `bloodbar` |
+| `action` | `watch`（默认，阻塞取图）/ `peek` / `listen`（只留耳朵）/ `lift`（配 `since` 取那一刻的帧）/ `start` / `stop` / `status` / `window` / `region` / `bloodbar` / `pointer`（指一个坐标并等信号，默认关） |
 | `show` | 配 `action:"window"`：`true` 把悬浮窗叫回来，`false` 藏起来，不传只报状态 |
 | `region` | 只看屏幕上一块：`"x,y,w,h"`（屏幕物理像素），或 `"off"` 取消。**一般不用手填** —— 说"框这块"让它自己框，见下 |
 | `say` | **唯一能进悬浮窗、能被念出来的通道**。普通回复不进气泡，但会被记进小窗的对话记录；重读用 `〔…〕` / `【…】` 标（气泡里不显示标记），**加粗只管排版**（见「念出来之前」） |
@@ -344,6 +344,7 @@ macOS 不在计划里（见「适用范围」）。`examples/voice-say-mac.mjs` 
 | `mode` / `audio` | 三档感官：`both` 视听都开 / `vision` 只看 / `audio` 只听；`audio:true/false` 是旧开关的别名 |
 | `source` / `path` / `realtime` | 采集源：`screen`（默认整屏）/ `window`（按窗口抓，配 `window`）/ `obs` / `camera` / `file`（回放视频）。见下 |
 | `read` / `threshold` / `window` | 配 `action:"bloodbar"`：当场读一次比例 / 低血阈值（默认 0.3）/ 按窗口标题抓（可选，**默认抓屏幕**） |
+| `x` / `y` / `label` / `shape` / `wait` / `waitMs` / `radius` | 配 `action:"pointer"`：指哪、写什么、等什么信号。见下 |
 
 模型看到的这份说明有体积预算（每一步都在前缀里重发），所以 schema 里只留决策点，
 实现细节和实测数据都在 docs；预算本身见 [docs/决策记录.md](./docs/决策记录.md)。
@@ -447,6 +448,40 @@ see_now({ action: "watch", source: "window", window: "窗口标题里的一段" 
 
 判读算法与口径见 [docs/机制.md](./docs/机制.md) 第五节。
 
+### 指一个位置并等信号（`action:"pointer"`）
+
+用户说「指给我看」「点这里」「这个按钮在哪」时用：在屏幕坐标画一个圈/箭头（带标签），
+然后**停住等他操作**再返回。方向与 `watch` 相反——`watch` 把屏幕交给模型，`pointer` 把模型的话指到屏幕上。
+
+```js
+see_now({ action: "pointer", x: 960, y: 540, label: "点这里", wait: "click" })
+```
+
+**默认是关的**，先在 `~/.dsh/see-now.json` 里打开（改完重启 DSH；开发期可 `DSH_SEE_POINTER=1` 只开一个进程）：
+
+```json
+{ "pointer": { "enabled": true } }
+```
+
+没开时调用直接回「未启用」，不画、不 spawn 进程。
+
+| `wait` | 等什么 | 返回 |
+|---|---|---|
+| `click`（默认） | 用户按下左键 | `signal:"click"` + `inside:true/false`——按在圈里还是圈外；**圈外也是信息**，别当成做完了 |
+| `change` | **那个坐标上换了窗口**（`WindowFromPoint` 句柄变了） | `signal:"change"` + 前后 hwnd |
+| `none` | 不等，画完就返回 | `signal:"none"` |
+
+到点没等到是 `signal:"timeout"`；按 Esc / 右键是 `cancelled`（`ok:false, reason:"cancelled"`）。
+`change` 只说明「那儿出现了别的窗口」（菜单、对话框、新窗口），不说明用户做对了；
+翻页、滚动、视频内容变了但窗口没变，它看不到。
+
+边界：坐标是**主屏物理像素**（与 `region` 同口径，负坐标拒绝）；**D3D 独占全屏下画不出来**，先切窗口化；
+圈是鼠标穿透的，点击会落到下面的窗口上，别指在会误触的按钮上；同一会话每分钟最多 6 次；
+`label` 必填、超过 40 字截断；`waitMs` 1000–120000，`radius` 20–400。
+
+细节（为什么不碰 `window.py`、为什么不用全局热键、`change` 为什么不是像素差）见
+[docs/机制.md](./docs/机制.md) 第八节。
+
 ## 自己的节奏：`~/.dsh/see-now.json`
 
 这些是"每次会话都一样的偏好"，不该让模型每次传参：多久自己收工、默认用哪一档节奏、
@@ -502,6 +537,8 @@ see_now({ action: "watch", source: "window", window: "窗口标题里的一段" 
   字还能读，但背后不是真实画面。
 - **平台与麦克风**：只在 Windows 10 上验证；**macOS 不做**（上游代码里还有分支，未验、不承诺）。
   麦克风那条路完全没测过。详见「适用范围」。
+- **指路（`pointer`）只看主屏、只在窗口化下看得见**：D3D 独占全屏时覆盖层不出现；
+  `change` 只认窗口句柄变化，翻页 / 滚动不算；圈是鼠标穿透的，点击会落到下面的窗口上。
 
 ## 它读哪些本地文件
 
@@ -562,7 +599,7 @@ Copyright © 2026 SAOS-3624（上游 `dsh-see-now` / `dsh-watch-together`）
 ## 更多文档
 
 - [INSTALL.md](./INSTALL.md) —— 给 AI 读的安装单（前置检查 / 期望输出 / 失败分支）
-- [docs/机制.md](./docs/机制.md) —— 变化分、黑听抬头、听声音的延迟与调参、token 成本、血条判读、按窗口抓、语音标记与参数
+- [docs/机制.md](./docs/机制.md) —— 变化分、黑听抬头、听声音的延迟与调参、token 成本、血条判读、按窗口抓、语音标记与参数、指和等
 - [docs/实测.md](./docs/实测.md) —— 采集开销、变化分刻度
 - [docs/决策记录.md](./docs/决策记录.md) —— 做什么 / 不做什么 / 发版六步 / 代码地图 / key 与工具契约的口径
 - [CHANGELOG.md](./CHANGELOG.md) —— 逐条改动（开发期记，比较啰嗦）

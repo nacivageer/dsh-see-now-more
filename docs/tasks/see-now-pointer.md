@@ -1,16 +1,18 @@
 # 任务书：`see_now` 的「指 + 等」（新 action `pointer`）
 
-状态：进行中（代码写完、单测全绿；差一次人工点验 + 文档 + 发版）
+状态：进行中（人工点验通过、文档与版本已就绪；差发版 + 真机验收）
 对象：给 `see_now` 加一个新动作 `pointer`——在屏幕指定坐标画一个圈/箭头（带标签），然后停住等一个信号（点击 / 那块位置换了窗口 / 超时）再返回，并把「等到的是哪一种」如实报出来。默认关，不动 `window.py`。
-归属：session-83213926-c4a7-4291-8390-59768f8df1b0 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：格本机点一次圈（`node scripts/pointer-smoke.mjs --x 300 --y 300 --label 点这里 --wait click`），确认 `inside:true/false`；然后我补 README / docs/机制.md 一节并发 `0.1.1-more.23`
+归属：session-83213926-c4a7-4291-8390-59768f8df1b0（任务书）/ session-4c36066b-e5c6-465c-b878-8c8eb6f43e12（验收与发版）/ `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
+下一步：发 `0.1.1-more.23` → `node scripts/install-dev.mjs` → 重启 DSH 后让模型真调一次 `pointer`（确认工具枚举里有它、圈能画、与 `say` 不打架）
 证据：
   - `node --test` → 352 tests / 349 pass / 0 fail（含 `test/pointer.test.mjs` 8 条、`tool-spec` 体积预算）
   - `DSH_SEE_POINTER=1 node scripts/pointer-smoke.mjs --x 300 --y 300 --label 点这里 --wait none` → `{"ok":true,"signal":"none"}`，exit 0
   - `signal:"change"` 实测：964ms 命中，`hwndBase 66668 → hwnd 17303470`
   - `signal:"timeout"` 实测：`elapsedMs` 4048 / 6014，进程无残留
   - 画得出：屏上数到 1540 个 `#FF3B30` 像素，圈顶在 y=239（圆心 300、半径 60，物理像素，与声明一致）
-更新：2026-11-20 11:44 CST
+  - 人工点验（session-4c36066b）：`inside:true`（cursor (1891,1114)，距圆心 45px）/ `inside:false`（cursor (1746,1099)，圈在 (500,500)）/ Esc → `ok:false, reason:"cancelled"`
+  - 契约对齐：`cancelled` 原先回 `ok:true`，已按 `region` 的约定改为 `ok:false, reason:"cancelled"`；复跑 `node --test` 全绿（顺手修了 `coverage-ledger` 分钟边界的浮点严格相等）
+更新：2026-11-20 16:27 CST
 
 ## 现状依据（已核，2026-11-20）
 
@@ -153,4 +155,6 @@
 ## 日志
 
 - 2026-11-20 11:15 新建（等你定）；依据：subtitle-pointer 评审（BV1awWV6QEJZ）与 `region.js`/`pick_region.py` 的先例；无实现证据。
+- 2026-11-20 16:27 接手（session-4c36066b）：merge `pointer-draft`（569f9da）→ `e920ffd`；人工点验 `inside:true` / `inside:false` / Esc `cancelled`；把 `cancelled` 对齐 `region` 的约定（`ok:false, reason:"cancelled"`，原先回的是 `ok:true`）；`pointer.py` 加 `DSH_POINTER_DEBUG=1` 的点击坐标/DPI 日志（只在 stderr，不改契约）；补 README / `docs/机制.md` 第八节 / 决策记录；版本 `0.1.1-more.23`。
+
 - 2026-11-20 11:44 等你定 → 进行中；两条拍板项已定（click 默认、开关只放配置），代码落地，`node --test` 349 通过 / 0 失败，`change` 与 `timeout` 实跑有证据；差人工点验与文档。

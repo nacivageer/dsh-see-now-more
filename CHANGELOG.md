@@ -2,6 +2,21 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.23] - 2026-11-20
+
+### Added — `action:"pointer"`：指一个坐标并等信号（默认关）
+
+- 在屏幕坐标画一个圈/箭头 + 标签，然后停住等：`click`（左键按下，回报 `inside:true/false`）、
+  `change`（那个坐标上换了窗口，`WindowFromPoint` 句柄变化）、`none`（画完就返回）。
+  到点 `timeout`；Esc / 右键 `cancelled`（`ok:false, reason:"cancelled"`，与 `region` 的取消约定一致）。
+- **默认关**：`~/.dsh/see-now.json` 的 `pointer.enabled`，开发期 `DSH_SEE_POINTER=1`；
+  不进设置页（设置页在共用的 `window.py` 里）。
+- 实现：`examples/floating-chat/pointer.py`（一次性进程、DPI aware、鼠标穿透、`GetAsyncKeyState` 轮询）
+  + `src/pointer.js`（校验 / 额度 / 超时）+ `src/index.js` 分支 + 7 个 schema 参数
+  + `scripts/pointer-smoke.mjs` 人工验收脚本。不碰 `window.py`、不用全局热键。
+- 已知边界：只支持主屏；D3D 独占全屏下覆盖层不显示（先切窗口化）；`change` 看不到翻页 / 滚动；
+  同一会话每分钟 ≤6 次。
+
 ## [0.1.1-more.22] - 2026-11-20
 
 ### Fixed — 【关联变更】的预填对齐 DSH 主窗当前会话
