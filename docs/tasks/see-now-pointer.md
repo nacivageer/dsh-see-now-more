@@ -88,14 +88,15 @@
 
 **默认关**是硬要求：`~/.dsh/see-now.json` 的 `pointer.enabled` 缺省 `false`；开发期可用 `DSH_SEE_POINTER=1` 临时开。双条件取「配置开 **且** 调用必须带 `label` 与坐标」——不接受空白圈、不接受「画在所有窗口最上层但什么都不说」。
 
-## 验收（可观察，六条）
+## 验收（可观察，七条）
 
 1. **默认不画**：`pointer.enabled` 缺省时跑 `node scripts/pointer-smoke.mjs --x 960 --y 540 --label 测试` → 输出 `pointer 未启用`，0.5 s 内退出，前后 `Get-Process python` 数量不变。
 2. **画得出**：开启后同一命令 → 屏幕中心出现一个圈 + 标签，`docs/verify-pointer.png` 存截图。
 3. **不抢鼠标**：圈在屏时，手动点圈内另一个窗口的按钮 → 那个窗口照常响应（穿透生效）。
-4. **三种信号各自可达**：`--wait click` 点圈内 → `signal:"click", inside:true`；点圈外 → `inside:false`；`--wait change` 让圈内画面动一下 → `signal:"change", changedRatio>0.03`；`--wait-ms 3000` 不操作 → `signal:"timeout", elapsedMs≈3000`。
+4. **三种信号各自可达**：`--wait click` 点圈内 → `signal:"click", inside:true`；点圈外 → `inside:false`；`--wait change` 按「偏差」那节验：让那个坐标上换一个窗口（开菜单/对话框）→ `signal:"change"` + 前后 hwnd（不是像素差）；`--wait-ms 3000` 不操作 → `signal:"timeout", elapsedMs≈3000`。
 5. **收得干净**：任一结束方式后没有残留 python 进程、屏幕上没有残留圈；`Esc` 能中途取消并返回 `cancelled`。
 6. **契约不破**：`node --test` 全绿——含 `tool-spec.test.mjs` 的体积预算（≤7,500 字符）、「每个 action 有分支」「每个参数有 description」，以及 `version.test.mjs` 的三处同值。
+7. **协同（真实使用链）**：用户切在别的会话时，`say` 的指令先进悬浮窗（气泡 + 朗读）、圈同时在屏幕上可见、点击回传发起会话。前提是悬浮窗绑的是发起会话（`see-now.json` 的 `session`）——跨会话的 `say` 会被拦。
 
 ## 不做什么
 
@@ -148,8 +149,8 @@
 
 ### 还差什么
 
-- 人工点一次（`inside:true/false`）——屏幕上的东西只能人来确认，我不代按下鼠标。
-- `README.md` / `docs/机制.md` 补一节「指和等」；`CHANGELOG.md` 与两处版本号按发版六步走。
+- ~~人工点一次~~ 已验：脚本级 `inside:true/false`、真机 `pointer` `inside:true`、`say` + `pointer` 复验 `inside:true`（见日志 18:08 / 18:11）。
+- ~~README / 机制 / CHANGELOG / 版本~~ 已补，`0.1.1-more.23` 已发并装机。
 - 多显示器、独占全屏未验证（沿用既有边界：只主屏、独占全屏不显示）。
 
 ## 日志
