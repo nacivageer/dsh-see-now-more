@@ -212,7 +212,8 @@ test('接线：drain 处理完一段，账真的落到 $DSH_HOME/see-now/coverag
   const total = rows.reduce((n, r) => n + r.speechSec, 0);
   assert.equal(rows.reduce((n, r) => n + r.segs, 0), 1, '一段只记一次');
   assert.ok(Math.abs(total - 1.6) < 1e-6, `语音秒数应约 1.6，实际 ${total}`);
-  assert.equal(rows.reduce((n, r) => n + r.textSec, 0), 1.6);
+  assert.ok(Math.abs(rows.reduce((n, r) => n + r.textSec, 0) - 1.6) < 1e-6,
+    '跨分钟拆行后求和是浮点加法，不能用严格相等（分钟边界那几秒会 flaky）');
   assert.equal(rows.reduce((n, r) => n + r.emptySegs, 0), 0);
   // 同时确认台账文件真的是 jsonl（一行一对象）
   for (const line of readFileSync(ledgerFile(dayKey(t0), { DSH_HOME: home }), 'utf8').trim().split('\n')) {
