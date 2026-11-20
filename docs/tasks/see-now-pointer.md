@@ -159,7 +159,7 @@
 - 2026-11-20 16:27 接手（session-4c36066b）：merge `pointer-draft`（569f9da）→ `e920ffd`；人工点验 `inside:true` / `inside:false` / Esc `cancelled`；把 `cancelled` 对齐 `region` 的约定（`ok:false, reason:"cancelled"`，原先回的是 `ok:true`）；`pointer.py` 加 `DSH_POINTER_DEBUG=1` 的点击坐标/DPI 日志（只在 stderr，不改契约）；补 README / `docs/机制.md` 第八节 / 决策记录；版本 `0.1.1-more.23`。
 - 2026-11-20 18:08 真机验收（session-4c36066b）：宿主已加载 `.23`，工具表里有 `pointer`；临时打开 `pointer.enabled`（热读，未重启即生效），`wait:"none"` 返回 `signal:"none"`，`wait:"click"`（radius 200）点中圈心 → `inside:true`（1.4s）；配置已恢复原样。发现提示文案「改完重启 DSH」不实，改为「下一轮调用就生效」并补热读单测（main 领先 tag，`.23` 的 Release 正文不含这条修正）。
 - 2026-11-20 18:11 复验（session-4c36066b）：`pointer` 与 `say` 同一次调——气泡 + 朗读先落悬浮窗（窗已绑本会话），4.8s 点中圈心 → `inside:true`；`say` 在动作之前统一处理，跨会话的 `say` 会被拦。配置已恢复原样。
-- 2026-11-20 22:20 攻略地图实测（session-4c36066b）：切到 今州/中曲台地 后，`watch` 整屏 → `crop` 对照攻略 → `pointer`；圈在 (2640,1528)（撷华庄西南、小湖正下方的海岸），用户点圈里确认。教训：整屏 gdigrab 会被 DSH 主窗遮挡，定位游戏画面前先最小化主窗；WGC 的 `source:"window"` 要 `windows-capture`，本机未装（`status` 里血条窗口抓 ✗），这次只能整屏抓。
+- 2026-11-20 22:20 攻略地图对照实测（session-4c36066b）：切到目标区域后，`watch` 整屏 → `crop` 对照攻略 → `pointer`；圈中标点后用户点圈里确认。教训：整屏 gdigrab 会被 DSH 主窗遮挡，定位游戏画面前先最小化主窗；WGC 的 `source:"window"` 要 `windows-capture`，本机未装（`status` 里血条窗口抓 ✗），这次只能整屏抓。
 
 
 
