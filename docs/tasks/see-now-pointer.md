@@ -3,7 +3,7 @@
 状态：可验收（真机调用已过；`0.1.1-more.23` 已发并装进 profile）
 对象：给 `see_now` 加一个新动作 `pointer`——在屏幕指定坐标画一个圈/箭头（带标签），然后停住等一个信号（点击 / 那块位置换了窗口 / 超时）再返回，并把「等到的是哪一种」如实报出来。默认关，不动 `window.py`。
 归属：session-83213926-c4a7-4291-8390-59768f8df1b0（任务书）/ session-4c36066b-e5c6-465c-b878-8c8eb6f43e12（验收与发版）/ `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：等格确认收尾；热读文案修正只在 main 上（`.23` 的 Release 不含），下次发版带进 CHANGELOG。**后续实测（格 2026-11-20 提）**：给一张攻略地图截图，对照屏幕在对应位置画圈指出来。
+下一步：等格确认收尾；热读文案修正只在 main 上（`.23` 的 Release 不含），下次发版带进 CHANGELOG。攻略地图实测已完成（见日志 22:20）；可选：装 `windows-capture` 后用 `source:"window"` 抓游戏窗口，不受主窗遮挡。
 证据：
   - `node --test` → 352 tests / 349 pass / 0 fail（含 `test/pointer.test.mjs` 8 条、`tool-spec` 体积预算）
   - `DSH_SEE_POINTER=1 node scripts/pointer-smoke.mjs --x 300 --y 300 --label 点这里 --wait none` → `{"ok":true,"signal":"none"}`，exit 0
@@ -159,6 +159,7 @@
 - 2026-11-20 16:27 接手（session-4c36066b）：merge `pointer-draft`（569f9da）→ `e920ffd`；人工点验 `inside:true` / `inside:false` / Esc `cancelled`；把 `cancelled` 对齐 `region` 的约定（`ok:false, reason:"cancelled"`，原先回的是 `ok:true`）；`pointer.py` 加 `DSH_POINTER_DEBUG=1` 的点击坐标/DPI 日志（只在 stderr，不改契约）；补 README / `docs/机制.md` 第八节 / 决策记录；版本 `0.1.1-more.23`。
 - 2026-11-20 18:08 真机验收（session-4c36066b）：宿主已加载 `.23`，工具表里有 `pointer`；临时打开 `pointer.enabled`（热读，未重启即生效），`wait:"none"` 返回 `signal:"none"`，`wait:"click"`（radius 200）点中圈心 → `inside:true`（1.4s）；配置已恢复原样。发现提示文案「改完重启 DSH」不实，改为「下一轮调用就生效」并补热读单测（main 领先 tag，`.23` 的 Release 正文不含这条修正）。
 - 2026-11-20 18:11 复验（session-4c36066b）：`pointer` 与 `say` 同一次调——气泡 + 朗读先落悬浮窗（窗已绑本会话），4.8s 点中圈心 → `inside:true`；`say` 在动作之前统一处理，跨会话的 `say` 会被拦。配置已恢复原样。
+- 2026-11-20 22:20 攻略地图实测（session-4c36066b）：切到 今州/中曲台地 后，`watch` 整屏 → `crop` 对照攻略 → `pointer`；圈在 (2640,1528)（撷华庄西南、小湖正下方的海岸），用户点圈里确认。教训：整屏 gdigrab 会被 DSH 主窗遮挡，定位游戏画面前先最小化主窗；WGC 的 `source:"window"` 要 `windows-capture`，本机未装（`status` 里血条窗口抓 ✗），这次只能整屏抓。
 
 
 
