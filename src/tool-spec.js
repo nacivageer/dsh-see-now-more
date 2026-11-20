@@ -44,7 +44,7 @@ export const TOOL_NAME = 'see_now';
  * start / stop / status」—— 唤醒文案刚好在叫它调 `lift`。
  */
 export const ACTION_VALUES = Object.freeze([
-  'watch', 'peek', 'listen', 'lift', 'start', 'stop', 'status', 'window', 'region', 'bloodbar',
+  'watch', 'peek', 'listen', 'lift', 'start', 'stop', 'status', 'window', 'region', 'bloodbar', 'pointer',
 ]);
 
 export function seeNowToolSpec() {
@@ -90,7 +90,10 @@ export function seeNowToolSpec() {
           + '- `bloodbar` — 让用户框**自己角色**那条常驻 UI 的血条（敌人血条只在交战时出现，别框）；'
           + '`read:true` 读一次比例。进仅监听后每秒读一次，'
           + '但读数只写进唤醒文案、`watch` 结果和 `status`，**低血不会叫醒你**。\n'
-          + '- `start` / `stop` — 显式开关采集（平时 `watch` / `stop` 就够）。',
+          + '- `start` / `stop` — 显式开关采集（平时 `watch` / `stop` 就够）。\n'
+          + '- `pointer` — 在 `x,y` 画一个圈/箭头并**停住等**（默认关）：等到用户点了（`click`，'
+          + '报在圈里还是圈外）、那儿换了窗口（`change`）、或到点（`timeout`）。他要「指给我看」时用它；'
+          + '没开时直接返回未启用，别自己改他的配置。',
       },
       say: {
         type: 'string',
@@ -217,6 +220,41 @@ export function seeNowToolSpec() {
         default: 0.3,
         description: 'With `bloodbar`: 低于这个比例算「低血」（0–1，默认 0.3）。只影响报告措辞，'
           + '不触发任何叫醒。',
+      },
+      x: {
+        type: 'integer',
+        description: 'With `pointer`: 圈的横坐标，屏幕物理像素（与 `region` 同口径）。必填。',
+      },
+      y: {
+        type: 'integer',
+        description: 'With `pointer`: 圈的纵坐标，屏幕物理像素。必填；负坐标会被拒绝。',
+      },
+      label: {
+        type: 'string',
+        description: 'With `pointer`: 圈旁边写的字，≤40 字。**必填**——不许画一个没话说的圈。',
+      },
+      shape: {
+        type: 'string',
+        enum: ['circle', 'arrow', 'box'],
+        default: 'circle',
+        description: 'With `pointer`: 画什么。一次只画一个。',
+      },
+      wait: {
+        type: 'string',
+        enum: ['click', 'change', 'none'],
+        default: 'click',
+        description: 'With `pointer`: 等什么。`click`=左键按下（报圈里/圈外）；'
+          + '`change`=那个坐标上换了个窗口（菜单/对话框）；`none`=画完就返回。',
+      },
+      waitMs: {
+        type: 'integer',
+        default: 20000,
+        description: 'With `pointer`: 最多等多久（毫秒），夹在 1000–120000。到点返回 `timeout`。',
+      },
+      radius: {
+        type: 'integer',
+        default: 60,
+        description: 'With `pointer`: 圈多大、判定范围多大（像素），20–400。',
       },
     },
     output: {
