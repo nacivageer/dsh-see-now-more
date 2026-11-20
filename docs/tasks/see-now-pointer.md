@@ -1,11 +1,16 @@
 # 任务书：`see_now` 的「指 + 等」（新 action `pointer`）
 
-状态：等你定
-对象：给 `see_now` 加一个新动作 `pointer`——在屏幕指定坐标画一个圈/箭头（带标签），然后停住等一个信号（点击 / 区域画面变化 / 超时）再返回，并把「等到的是哪一种」如实报出来。默认关，不动 `window.py`。
+状态：进行中（代码写完、单测全绿；差一次人工点验 + 文档 + 发版）
+对象：给 `see_now` 加一个新动作 `pointer`——在屏幕指定坐标画一个圈/箭头（带标签），然后停住等一个信号（点击 / 那块位置换了窗口 / 超时）再返回，并把「等到的是哪一种」如实报出来。默认关，不动 `window.py`。
 归属：session-83213926-c4a7-4291-8390-59768f8df1b0 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：格拍板下面「需要拍板」两条（等信号默认值、开关放哪），然后我按「实现落点」动手
-证据：（任务书阶段，尚无实现证据；已核事实见「现状依据」）
-更新：2026-11-20 11:15 CST
+下一步：格本机点一次圈（`node scripts/pointer-smoke.mjs --x 300 --y 300 --label 点这里 --wait click`），确认 `inside:true/false`；然后我补 README / docs/机制.md 一节并发 `0.1.1-more.23`
+证据：
+  - `node --test` → 352 tests / 349 pass / 0 fail（含 `test/pointer.test.mjs` 8 条、`tool-spec` 体积预算）
+  - `DSH_SEE_POINTER=1 node scripts/pointer-smoke.mjs --x 300 --y 300 --label 点这里 --wait none` → `{"ok":true,"signal":"none"}`，exit 0
+  - `signal:"change"` 实测：964ms 命中，`hwndBase 66668 → hwnd 17303470`
+  - `signal:"timeout"` 实测：`elapsedMs` 4048 / 6014，进程无残留
+  - 画得出：屏上数到 1540 个 `#FF3B30` 像素，圈顶在 y=239（圆心 300、半径 60，物理像素，与声明一致）
+更新：2026-11-20 11:44 CST
 
 ## 现状依据（已核，2026-11-20）
 
@@ -106,11 +111,46 @@
 - **轮询成本**：50 ms 一次的 `GetAsyncKeyState` + 200 ms 一次的 mss 抓 120×120 区域，预计 < 1% 单核；用 `scripts/pointer-smoke.mjs --wait-ms 60000` 跑一分钟测一次，写进 `docs/实测.md`。
 - **与悬浮窗同屏**：圈是独立窗口，正常不冲突；若悬浮窗正在朗读，先把 `say` 说完再画（由模型侧顺序决定，不在代码里强同步）。
 
-## 需要拍板
+## 已定（2026-11-20，格：「写你觉得合适的选项就行……边做边看」）
 
-1. **`wait` 默认值**：推荐 `click`（最接近「人做完了」，且能报 `inside`）；`change` 留给「用户可能要拖拽/多步操作、没有单击」的场景。要不要额外给一个 `both`（先到者算）？我倾向**不给**——两个信号同开会让返回含糊，违反「结果要标明来源」。
-2. **开关位置**：推荐只放 `~/.dsh/see-now.json` 的 `pointer.enabled` + 开发期 env，**不动设置页**（设置页在共用 `window.py` 里，改了就越过扩展区）。若你要在设置页也能开关，就得接受碰共用文件的成本，我会先单独算一次改动面再回来问。
+1. **`wait` 默认 `click`**，不给 `both`。两个信号同开会让返回含糊，违反「结果要标明来源」。
+2. **开关只放 `~/.dsh/see-now.json` 的 `pointer.enabled` + 开发期 `DSH_SEE_POINTER=1`**，不动设置页（设置页在共用 `window.py` 里，改了就越过扩展区）。
+
+实现时又自己定了一条，写在下面「偏差」里：**`change` 改成「那个坐标上换了窗口」，不是像素差**。
+
+## 实现记录（2026-11-20）
+
+### 落地情况
+
+| 文件 | 状态 |
+|---|---|
+| `examples/floating-chat/pointer.py` | 新增 ~250 行：DPI aware、全屏透明覆盖层（`-transparentcolor` + `WS_EX_TRANSPARENT` 穿透）、画 circle/arrow/box + 标签、50ms 轮询 `GetAsyncKeyState`（左键 / Esc / 右键）、200ms 轮询 `WindowFromPoint`、stdout 一行 JSON |
+| `src/pointer.js` | 新增 ~180 行：开关（默认关）、参数校验/夹取/截断、每分钟 6 次额度、挑 python（`pythonCandidates` + `hasTkinter`）、超时兜底、结果整形 |
+| `src/index.js` | `action === 'pointer'` 分支：六种信号各一句中文，`meta` 带 `signal/inside/hwnd/elapsedMs` |
+| `src/tool-spec.js` | `ACTION_VALUES` 加 `pointer`；新增 7 个参数；体积预算仍绿（`node --test` 通过） |
+| `test/pointer.test.mjs` | 新增 8 条：参数必填/整数/负数拒绝、label 截断、枚举、上下限夹取、开关三态、未启用不 spawn、脚本路径 |
+| `scripts/pointer-smoke.mjs` | 人工点验脚本 |
+
+### 两处与原计划的偏差（都是实测改的口）
+
+1. **`change` 不用像素差，改用 `WindowFromPoint` 的句柄变化。**
+   实测：覆盖层自己全屏铺在最上层时，抓屏拿到的那块是冻结的——同进程 diff 恒 0，换一个进程也一样（先把采样拆成 `pointer_watch.py` 子进程试过，仍然恒 0）。所以「圈里画面变没变」这条路在当前架构下不可靠。
+   句柄信号更窄但可核：**那个坐标上换了个窗口**（菜单/对话框/新窗口）。它看不到「内容变了窗口没变」（翻页、滚动、视频），这一条必须写进文档，不许包装成「画面变了」。
+   顺带删掉了 `mss` 依赖与那个采样子进程——少两个活动的零件。
+2. **`clear` 参数没有实现，也没进 schema。** 原计划让它「只清当前圈」，但进程退出即清屏，没有「常驻的圈」需要清；留一个空转参数不如不留。
+
+### 踩到的两个坑（写下来省下一次重踩）
+
+- **DPI 150%**：测试用的闪窗没声明 DPI aware，`geometry('+300+300')` 实际落在 450,450、尺寸放大 1.5×——于是「明明弹了窗，采样恒 0」，白查半小时。`pointer.py` 自己在建窗前 `SetProcessDpiAwareness(2)`，所以它画的圈坐标是物理像素（实测圈顶 y=239 对得上 300−60+4）。
+- **`root.after` 链一断，`mainloop` 永远转**：定基线那一帧提前 `return` 漏了续拍，窗口挂在屏幕上不下来（当时只能去 kill 进程）。现在 `tick` 用 `try/finally` 续拍，只在 `state['code']` 还空着时续。
+
+### 还差什么
+
+- 人工点一次（`inside:true/false`）——屏幕上的东西只能人来确认，我不代按下鼠标。
+- `README.md` / `docs/机制.md` 补一节「指和等」；`CHANGELOG.md` 与两处版本号按发版六步走。
+- 多显示器、独占全屏未验证（沿用既有边界：只主屏、独占全屏不显示）。
 
 ## 日志
 
 - 2026-11-20 11:15 新建（等你定）；依据：subtitle-pointer 评审（BV1awWV6QEJZ）与 `region.js`/`pick_region.py` 的先例；无实现证据。
+- 2026-11-20 11:44 等你定 → 进行中；两条拍板项已定（click 默认、开关只放配置），代码落地，`node --test` 349 通过 / 0 失败，`change` 与 `timeout` 实跑有证据；差人工点验与文档。

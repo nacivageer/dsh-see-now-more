@@ -26,6 +26,7 @@ import { isHumanMessage } from './human.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine, openWindow } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
+import { pointAndWait, pointerEnabled } from './pointer.js';
 import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
 import { readBloodbarOnce, readBloodbarWindowOnce } from './bloodbar-capture.js';
 import { todayCounts } from './lift/log.js';
@@ -2040,6 +2041,59 @@ async function registerAll(ctx) {
             + '- 只在主屏有效；框到主屏外面会被拒绝（gdigrab 不接受负偏移）。\n'
             + '换一块：再调一次 `see_now({action:"region"})`；不要了：`see_now({action:"region", region:"off"})`。',
           meta: { ok: true, region: r.region },
+        };
+      }
+
+      /**
+       * 指 + 等（`action:"pointer"`）。
+       *
+       * 契约只新增：`see_now` 别的动作一个字段都没动。这里只做两件事——把参数交给
+       * `pointer.js`，把它的结果翻译成模型能读的一句话。
+       *
+       * **不写「已完成 / 已教会」**：三种信号分开报，等不到就报等不到。
+       */
+      if (action === 'pointer') {
+        const r = await pointAndWait({
+          x: args.x, y: args.y, label: args.label, shape: args.shape,
+          wait: args.wait, waitMs: args.waitMs, radius: args.radius,
+        }, { log });
+
+        if (!r.ok) {
+          const why = {
+            disabled: '`pointer` 默认是关的，要用户先把 `~/.dsh/see-now.json` 里的 '
+              + '`"pointer": { "enabled": true }` 打开（改完重启 DSH 生效）。别自己改他的配置文件。',
+            'rate-limited': '一分钟内已经指了 6 次，先停一下——连续指会变成刷屏。',
+            'bad-args': `参数不对：${r.detail}`,
+            'out-of-screen': `那个坐标不在主屏里：${r.detail}`,
+            'no-python': `找不到能画圈的 python（要带 tkinter）：${r.detail}`,
+            'no-script': `圈图脚本不见了：${r.detail}`,
+            cancelled: '用户按 Esc / 右键取消了，屏幕上什么都没留下。',
+          }[r.reason] ?? `没画成（${r.reason}）：${r.detail ?? ''}`;
+          return { text: why, meta: { ok: false, reason: r.reason, detail: r.detail ?? null } };
+        }
+
+        const at = `(${args.x}, ${args.y})`;
+        const secs = Math.round((r.elapsedMs ?? 0) / 100) / 10;
+        const text = {
+          click: r.inside
+            ? `圈在 ${at}，用户点了**圈里**（${secs}s）。`
+            : `圈在 ${at}，用户点了**圈外**（${secs}s）——他要点的可能不是这儿，先别当成做完了。`,
+          change: `圈在 ${at}，那儿的窗口换了一个（${secs}s，hwnd ${r.hwndBase} → ${r.hwnd}）。`
+            + '这只说明**那儿出现了别的窗口**（菜单/对话框/新窗口），不说明他做对了；'
+            + '内容变了但窗口没变的情况它看不到。',
+          timeout: `圈在 ${at}，等了 ${secs}s 没等到点击，也没看到那儿换窗口。先问一句，别假设他做完了。`,
+          none: `圈在 ${at}，画完就返回了（wait:"none"）。`,
+          cancelled: `圈在 ${at}，被用户取消了。`,
+          unknown: `圈在 ${at} 画过，但子进程没给信号就退了：${r.detail ?? ''}`,
+        }[r.signal] ?? `圈在 ${at}，结果是 ${r.signal}（${secs}s）。`;
+
+        return {
+          text,
+          meta: {
+            ok: true, signal: r.signal, painted: { x: args.x, y: args.y, shape: args.shape ?? 'circle' },
+            inside: r.inside ?? null, hwnd: r.hwnd ?? null, elapsedMs: r.elapsedMs ?? null,
+            truncated: r.truncated ?? false,
+          },
         };
       }
 
