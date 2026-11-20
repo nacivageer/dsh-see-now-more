@@ -31,6 +31,9 @@ dsh-see-now-more: 未安装  bundles 未注册
 
 - `python` 行是 `✗`：按提示用同一个解释器 `pip install Pillow mss numpy`，再跑一次 `--check`。
   可选：`pyaudiowpatch`（听声音）、`dxcam`（Windows 截图更快，没有会回退 mss）。
+- **DSH 升级后**：DSH 会整体替换它托管的 Python runtime，装在里面的包会一起消失；
+  升级完先 `--check`，缺了按上面的必须项补，可选包见 README 的「DSH 升级后要重装的依赖」表。
+  想避开就把依赖装到独立 Python，并在 `~/.dsh/see-window.json` 写 `python` / `listenPython`。
 - `ffmpeg` 行是 `✗`：DSH 桌面版自带 ffmpeg，通常在 `~/.dsh/tools/ffmpeg/bin`；
   没有就让用户确认 DSH 安装完整，不要自己下载 ffmpeg。
 

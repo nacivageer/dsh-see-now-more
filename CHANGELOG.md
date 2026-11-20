@@ -2,6 +2,16 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.25] - 2026-11-20
+
+### Docs — DSH 升级后要重装的依赖清单
+
+- README 在「适用范围」下补一节「DSH 升级后要重装的依赖」：必须 `tkinter` / `Pillow` / `mss` / `numpy`；
+  可选 `windows-capture`、`winrt-runtime` + `winrt-Windows.Media.Ocr`、`pyaudiowpatch`、`edge-tts`、
+  `dxcam`、`sounddevice`。写明「装进托管 runtime 的包会被升级带走」，以及用独立 Python +
+  `~/.dsh/see-window.json` 的 `python` / `listenPython` 避开的方式。
+- `INSTALL.md` 同步：升级后先 `--check`，缺了按表补；`ffmpeg` 是 DSH 自带二进制，不在这个名单里。
+
 ## [0.1.1-more.24] - 2026-11-20
 
 ### Added — `action:"crop"`：原生 1:1 截一块

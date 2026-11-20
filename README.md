@@ -131,13 +131,32 @@ setInterval(() => {
 | 项 | 状态 |
 |---|---|
 | 操作系统 | **Windows 10** —— 文档里的所有实测都在这一台上做的。Windows 11 用同一套 `ddagrab` / `gdigrab`，没专门验。**macOS 不在计划里**（目前没打算做；代码里保留了上游的 `avfoundation` 分支，不验证、不承诺）。Linux 没接（`x11grab` / PipeWire 待补）。 |
-| DSH 版本 | **`0.2.2-rc.5`**（2026-11 的 desktop 包；rc.5 于 2026-11-19 整套重测过一轮）。插件依赖 DSH 内部的 `sessionController` / `tools` / `attachments` 服务，还直接读 `~/.dsh/sessions` 的目录格式；升级 DSH 后坏掉是正常预期。**rc.5 起多一条：DSH 升级会整体替换它托管的 Python 运行时**，`mss`、`pyaudiowpatch` 这类装在托管运行时里的包会一起消失（表现为开窗报「缺少 mss」、黑听报「没有能用的 Python」）——改用独立 Python 并在 `~/.dsh/see-window.json` 里写 `python` / `listenPython` 可以避开。 |
+| DSH 版本 | **`0.2.2-rc.5`**（2026-11 的 desktop 包；rc.5 于 2026-11-19 整套重测过一轮）。插件依赖 DSH 内部的 `sessionController` / `tools` / `attachments` 服务，还直接读 `~/.dsh/sessions` 的目录格式；升级 DSH 后坏掉是正常预期。**rc.5 起多一条：DSH 升级会整体替换它托管的 Python 运行时**，`mss`、`pyaudiowpatch` 这类装在托管运行时里的包会一起消失（表现为开窗报「缺少 mss」、黑听报「没有能用的 Python」）——改用独立 Python 并在 `~/.dsh/see-window.json` 里写 `python` / `listenPython` 可以避开（完整清单见本节后的「DSH 升级后要重装的依赖」）。 |
 | 系统声音（听声音） | Windows 上验证过，走 WASAPI 回环，抓的是"电脑在放什么"，**不是麦克风**。mac 不做（虚拟声卡那套也不在计划里）。 |
 | 麦克风输入 | **完全没测过。** `examples/floating-chat/mic.py` 和浮窗里的「麦」按钮是上游带进来的，开发期没有可用的麦克风环境，**不知道它能不能用**。它的默认模型目录是开发机的 `D:/asr-local/models-sherpa`，换机器要传 `--models-dir`（或改 `~/.dsh/asr.json` 的 `manage.start`）。 |
 
 > 麦克风这条路的未知状态不会被 `status` 报出来：`status` 只覆盖窗口 / 循环 / 听声音。
 > 性能参考（12fps → 800×450）：`ddagrab` 0.28 核、`gdigrab` 0.45 核、OBS 虚拟摄像头 0.13 核；
 > 全部测量条件见 [docs/实测.md](./docs/实测.md)。
+
+### DSH 升级后要重装的依赖
+
+DSH 升级会整体替换它托管的 Python runtime（`resources/runtime/primary-runtime/`），
+**pip 装进那个 runtime 的包会一起消失**。升级后先跑 `node scripts/install-dev.mjs --check`，再按这张表补：
+
+| 级别 | 包 | 少了会怎样 |
+|---|---|---|
+| **必须** | `tkinter` / `Pillow` / `mss` / `numpy` | 悬浮窗、取框、画圈、截屏都不能用（`--check` 的 python 行就是这四件） |
+| 可选 | `windows-capture` | WGC 按窗口抓不可用（`source:"window"`、血条按窗口），退回整屏抓 |
+| 可选 | `winrt-runtime` + `winrt-Windows.Media.Ocr` | 血条数字 OCR 不可用，只剩比例 |
+| 可选 | `pyaudiowpatch` | 听声音不可用 |
+| 可选 | `edge-tts` | edge 语音适配器不可用 |
+| 可选 | `dxcam` | 截图回退 `mss` |
+| 可选 | `sounddevice` | 麦克风（未验证） |
+
+想躲开升级清包：把依赖装到一个**独立 Python**，再在 `~/.dsh/see-window.json` 里把
+`python` / `listenPython` 指过去（两个键分别给悬浮窗/取框/画圈和听声音用）。`ffmpeg` 不在这个名单里
+——它是 DSH 自带的二进制（`~/.dsh/tools/ffmpeg/bin`），升级一般不动。
 
 ## 黑听抬头：它往哪走
 
