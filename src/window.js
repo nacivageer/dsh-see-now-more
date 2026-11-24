@@ -395,6 +395,27 @@ export function windowAlive() {
 }
 
 /**
+ * 同一时刻只允许**一次**开窗在飞。
+ *
+ * 为什么需要（上游 #75，我们这边三条路都能踩）：pid 要 spawn 之后 700ms 才写
+ * （`openWindowOnce` 第 3 步），这段时间里谁来问都是"没窗"。而直接调开窗的有三处 ——
+ * 左上角入口的路由（`open-window.js`）、`watch` 里的 `window show`（`index.js`）、
+ * 常驻循环的 `ensureWindow()`（`runner.js`，它有自己那把锁，管不到前两条）。
+ * 两处挤进这 700ms 就各 spawn 一个：用户看到两个窗，pid 文件只记得后一个，
+ * 前一个变成我们再也收不掉的孤儿（2026-11-25 实测：并发两次 → 两个真 pythonw）。
+ *
+ * 共享同一个 promise 比加锁简单，也够用：后到的那次直接拿前一次的结果。
+ * `force` 也不例外 —— 正在开的时候"再强制开一次"只会开出第二个。
+ */
+let opening = null;
+
+export function openWindow(opts = {}) {
+  if (opening) return opening;
+  opening = openWindowOnce(opts).finally(() => { opening = null; });
+  return opening;
+}
+
+/**
  * 开窗（幂等）。
  *
  * 三步都要做，少一步就会得到一个"看起来成功、其实早就退了"的窗：
@@ -403,12 +424,14 @@ export function windowAlive() {
  *   2. spawn 之后等 700ms，看它有没有自己退出（脚本报错退出也是退）
  *   3. **确认活着才写 pid** —— 否则 pid 文件指向死进程，`windowAlive()` 永远 false
  *
+ * ⚠️ **别直接调这个函数** —— 走上面的 `openWindow()`，那里有"同时只开一次"的闸。
+ *
  * `script` 传了就**跳过 resolveScript()**，测试靠这个把自己钉在一个注定失败的脚本上 ——
  * 否则一旦那个脚本不存在，回退链会摸到真的 window.py，测试当场把窗弹到用户脸上（踩过）。
  *
  * @returns {{ok:boolean, script?:string, python?:string, from?:string, reason?:string, already?:boolean}}
  */
-export async function openWindow({ force = false, log = () => {}, settleMs = 700, script: forced = null } = {}) {
+async function openWindowOnce({ force = false, log = () => {}, settleMs = 700, script: forced = null } = {}) {
   if (process.env.DSH_SEE_NO_WINDOW === '1') return { ok: false, reason: 'disabled' };
   if (!force && windowAlive()) return { ok: true, already: true };
 

@@ -2,6 +2,30 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.26] - 2026-11-25
+
+### Fixed — 连点两下会开出两个窗（抄上游 #75 的「单飞」闸）
+
+- `src/window.js`：`openWindow()` 拆成「闸 + `openWindowOnce()`」。pid 要 spawn 之后 700ms 才写
+  （那时才敢确认它没自己退出），这 700ms 里谁来问都是"没窗"；而直接调开窗的有三条路 ——
+  左上角入口的路由（`open-window.js`）、`watch` 的 `window show`（`index.js:1963`）、
+  常驻循环的 `ensureWindow()`（它自己那把锁管不到前两条）。两处挤进这 700ms 就各 spawn 一个：
+  用户看到两个窗，pid 文件只记得后一个，前一个成了再也收不掉的孤儿。
+  现在在飞期间后到的调用**共享同一个 promise**（`force` 也不例外），结束后放开。
+- 实测（临时 `DSH_HOME` + 一个只 sleep 的假窗口脚本）：并发两次，修前起 **2 个进程**、
+  修后 **1 个**；`test/window-single-flight.test.mjs` 两条，把闸撤掉会红
+  （报「并发开窗起了 2 个进程（单飞没生效）」）。
+
+### Fixed — `chat.jsonl` 撞权限错误时，窗里这句话写不进去
+
+- `examples/floating-chat/window.py`：`append_user` / `append_notice` 的写入口抽成
+  `_append_chat_line()`。`PermissionError` 时不再直接失败，而是**整份读出 + 临时文件 +
+  `os.replace()`** 换掉 —— 新文件的 ACL 由目录继承，坏 ACL 随旧 inode 一起没了；
+  重写也失败才抛**原始**错误。失败时输入框照旧不清空，状态行补一句
+  「文件被占用或权限不足；关掉多余的窗再试」（上游 #75 同款）。
+- 验证：用假 `open` 精确打两条分支 —— append 被拒时重写成功（两行，最后一行是新的），
+  连临时文件也拒时抛的是指向 `chat.jsonl` 的原始 `PermissionError`，不是 tmp 的路径。
+
 ## [0.1.1-more.25] - 2026-11-20
 
 ### Docs — DSH 升级后要重装的依赖清单

@@ -644,14 +644,50 @@ def bound_sid_full() -> str:
         return ""
 
 
-def append_user(text: str) -> None:
+def _append_chat_line(entry: dict) -> None:
+    """往 `chat.jsonl` 追加一行；写不进去时退一步「整份重写」。
+
+    正常路径就是 append。**PermissionError 时自己修**（上游 #75，2026-11-25 抄过来）：
+    社区实报 `Permission denied: '...chat.jsonl'` —— 同一台机器上 PowerShell 能写、
+    Python 不能，典型的「文件 ACL 坏了 / 被某个带独占语义的进程攥着」。
+
+    修法不是重试 append（同一个句柄还是会被拒），而是**整份读出来 + 新行，写成临时文件
+    再 `os.replace()` 换掉**：新文件的 ACL 由目录继承，坏 ACL 随旧 inode 一起没了。
+    并发追加的风险只在失败路径上（本来这条就写不进去），可以接受。
+    """
     CHAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(entry, ensure_ascii=False) + "\n"
+    try:
+        with open(CHAT_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+        return
+    except PermissionError as exc:
+        first = exc
+    old = ""
+    try:
+        if CHAT_FILE.exists():
+            old = CHAT_FILE.read_text(encoding="utf-8")
+    except OSError:
+        old = ""                      # 读不出来只能丢掉历史，至少别把这一句也丢了
+    tmp = CHAT_FILE.with_name(f"{CHAT_FILE.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(old + line)
+        os.replace(tmp, CHAT_FILE)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise first
+
+
+def append_user(text: str) -> None:
     entry = {"role": "user", "text": text, "at": int(time.time() * 1000)}
     sid = bound_sid_full()
     if sid:
         entry["sid"] = sid
-    with open(CHAT_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    _append_chat_line(entry)
 
 
 def append_notice(text: str, sid: str = "") -> None:
@@ -663,13 +699,11 @@ def append_notice(text: str, sid: str = "") -> None:
     text = (text or "").strip()
     if not text:
         return
-    CHAT_FILE.parent.mkdir(parents=True, exist_ok=True)
     entry = {"role": "notice", "text": text, "at": int(time.time() * 1000)}
     sid = sid or bound_sid_full()
     if sid:
         entry["sid"] = sid
-    with open(CHAT_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    _append_chat_line(entry)
 
 
 def session_title(sid: str) -> str:
@@ -1694,7 +1728,9 @@ class LiveGlass:
         try:
             append_user(text)
         except Exception as exc:
-            self.feed.status = f"写不进去：{exc}"
+            # 字**不清空**：写不进去的时候，用户最需要的就是改完环境再按一次回车。
+            # `_append_chat_line` 里已经试过「换掉整份文件」这条路，还失败就真是权限/占用了。
+            self.feed.status = f"写不进去：{exc}（文件被占用或权限不足；关掉多余的窗再试）"
             self._refresh_feed()
             return "break"
         try:
