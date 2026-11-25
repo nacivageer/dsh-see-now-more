@@ -9,10 +9,11 @@
 - 状态：待开工（格 2026-11-25 说「先搁着，哪天想做单开一轮」；交接文按她要求先写）
 - 对象：给 `see_now` 加一个**用户侧**的屏幕读取总开关——关掉后 `watch` / `start` / `peek` / `region`
   一律硬拒（**连显式 `source` 也不放行**），模型侧没有任何 action 能打开它；唯一入口是悬浮窗里的设置卡。
+  配套加一个「关闭悬浮窗后默认行为」四档开关（见文末那一节，格 2026-11-25 定的档位与默认值）。
 - 归属：`C:\Users\Administrator\Documents\deepseek-harness\see-now-more`（session-d52e3d48 写）
 - 下一步：开一轮新会话照下面「落地位置」动手；动手前先 `git log --oneline -3` 核行号有没有漂。
-- 证据：本会话已核过的锚点行号见下（2026-11-25 05:00 左右）；上游对照物是本地 tag `upv0.2.7`。
-- 更新：2026-11-25 07:05 CST
+- 证据：本会话已核过的锚点行号见下（2026-11-25 05:00 左右；配套那节 08:40 核过）；上游对照物是本地 tag `upv0.2.7`。
+- 更新：2026-11-25 08:45 CST
 
 ## 一句话
 
@@ -54,7 +55,8 @@
   - `2316` status 正文最前面加一行：`总开关：开` / `总开关：**关**（你自己关的；在悬浮窗设置卡里打开）`。
   - `1016` `modeWatcher` 每 1.5 秒已经 `readTuning()` 一次，在同一拍里比 `enabled`：变了就
     `applyEnabled()`。**别把它和 `mode` 那个条件混在一个 if 里**（改节奏也会误触）。
-    关掉时顺序：`stopLoop()` → `runner.stop()`（连听觉一起停）→ **不动窗**；打开时只改状态，
+    关掉时顺序：`stopLoop()` → 画面一定停 → **不动窗**；听觉按配套那节的 `onWindowClose` 分流
+    （`stop` 一起停、`ears`/`rise` 留听、`ghost` 等同 `ears`）。打开时只改状态，
     不自动开采集（让模型/user 下一句自己决定）。
 - `examples/floating-chat/window.py:8599` `SETTINGS_ROWS` 加一行，格式照现有三行：
   ```python
@@ -84,6 +86,37 @@ region：
 
 > 用户关掉了「屏幕读取」总开关，选择器要先抓一张屏，所以也开不了。
 
+## 配套：关闭悬浮窗后默认行为（`onWindowClose`）
+
+格 2026-11-25 定：**未配置时 = 收工**（关窗同时关视觉与听觉，即现在的行为）。四档放进设置卡；
+「收工」「隐身」这类短名单看含糊，**每档旁边要有一行小字写实际功能**。
+
+| 值 | 卡片短名 | 小字（卡片上显示） | 画面 | 听觉 | 关窗后会不会自己把窗弹回来 |
+|---|---|---|---|---|---|
+| `stop` | 收工 | 停画面、停听觉；之后不会自己开窗 | 停 | 停 | 不会（挂断） |
+| `ears` | 留耳 | 停画面、保留听觉；有料时只在会话里说，不开窗 | 停 | 留 | 不会 |
+| `rise` | 可抬头 | 停画面、保留听觉；有料时自己重开窗并说明 | 停 | 留 | 会 |
+| `ghost` | 隐身 | 窗收起，画面和听觉都继续 | 继续 | 继续 | — |
+
+现状（要改的就是这里）：`src/index.js:1278` 的 `onStop` 收到 `window-closed` 就
+`runner.note(HANGUP_NOTE)` + `runner.hangUp()`（`runner.js:1421`），而 `hangUp()` 里的 `teardown()`
+会停画面、留底、血条、听觉（`runner.js:907-920`，`listener.stop('采集收工')`）。没有中间档。
+
+接线：
+
+- 配置键 `~/.dsh/see-now.json` 的 `onWindowClose`（枚举四值，默认 `stop`；写错回默认并在 `status` 报一句）。
+- `onStop` 的 `window-closed` 分支按值分流：`stop` = 现行为；`ears` / `rise` = `runner.stopVision()`
+  （只停画面，留听 + 留底），**不 `hangUp()`**；`ghost` = 什么都不停，只把"窗没了 = 挂断"这条判据摘掉。
+- **循环那边也要一起改**：`src/loop.js:832` 现在是 `if (verdict === 'closed') { stop('window-closed'); return; }`
+  ——`ears`/`rise` 要改成"停画面、循环继续"（`stopVision()` 后接着 tick），`ghost` 要完全不理会窗没了。
+  判据本身在 `windowVerdict()`（`loop.js:257`，连续几拍才认），别绕开它自己数。
+- 总开关关掉时（见上一节）：画面一定停；听觉按 `onWindowClose` 走 —— `stop` → 一起停，
+  `ears` / `rise` → 留听，`ghost` → 等同 `ears`（总开关本身就否定了"继续看"）。
+- 设置卡：`window.py:8599` 的 `SETTINGS_ROWS` 从 5 元组扩成 6 元组（多一个 hint 字典）；
+  两处解包要跟着改 —— `_settings_value`（`8652`）与 `_settings_paint` 里 `kind == "setting"` 分支（`8871`）。
+  带 hint 的行高 56 → 68，在标签下画一行 10px `#8fa0b6` 说明；点击仍走 `_settings_cycle`（`8931`）。
+- 热生效：窗口写 json → `index.js:1016` 那个 1.5 秒轮询一并读 `onWindowClose`。
+
 ## 验收（可观察，逐条）
 
 1. `node --test` 全绿（当前基线 359 项 / 356 过 / 3 skip；新增的 screen-gate 不被 skip）。
@@ -93,6 +126,11 @@ region：
 4. 设置卡点回「开」→ `watch` 能正常起来。
 5. 重启 DSH：`~/.dsh/see-now.json` 里 `enabled:false` 仍是关（读配置那条路通）。
 6. 版本三处同改 + `install-dev --check` 一致；发 `0.1.1-more.27`，Release 标 prerelease。
+7. 四档各验一次：关窗后 `see_now status` 的「窗口 / 采集 / 听觉」三态符合上表；
+   `ghost` 下关窗后 `runner.status().running === true`；`rise` 下关窗后循环仍醒、且能自己开窗
+   （`~/.dsh/see-now/relay.log` 或窗口日志里出现 `window open`）。
+8. `ears` / `ghost` 下 `say` 返回"窗没开、只有文字"的说明，不静默丢。
+9. **回归**：未配置 `onWindowClose` 时行为与 `0.1.1-more.26` 完全一致（关窗 → 全停 + 挂断）。
 
 ## 已知的坑（别踩第二遍）
 
@@ -102,7 +140,12 @@ region：
 - **`stop` 的语义不要动**：上游 0.2.7 顺手让 `stop` 关窗（#76），我们不跟——理由写在
   `CHANGELOG.md` 的 `0.1.1-more.26` 段和上面那张表里。
 - **`enabled` 写坏成字符串**要能报出来，不能静默当成开。
-- 设置卡那行是**布尔档**：`SETTINGS_ROWS` 的点击是"循环切值"，两个值就是开关；别给它加第三档。
+- 「屏幕读取」那行是**布尔档**（两个值就是开关，别加第三档）；「关窗后」那行才是四档，两行别写成一个组件。
+- **`ghost` 与挂断互斥**：循环不能一见 `windowAlive()` 为假就 `hangUp()`，先看 `onWindowClose`。
+- **`ears` 下 `say` 没有地方投**（气泡和朗读都挂在窗上）；工具结果要显式说"窗没开、只有文字"，
+  否则模型会以为用户看见了。
+- **`rise` 就是社区抱怨过的"关掉又弹出来"**——只能是用户显式选的档，绝不能当默认。
+- 小字直接画在行里（Tk canvas 没有 tooltip），行高跟着加，别指望悬浮提示。
 
 ## 边界
 
