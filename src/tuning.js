@@ -17,8 +17,30 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+/** 关掉悬浮窗之后的四档行为（`onWindowClose`）。顺序 = 卡片里的顺序。 */
+export const WINDOW_CLOSE_MODES = Object.freeze(['stop', 'ears', 'rise', 'ghost']);
+
 /** 与 loop.js 的常量保持一致；这里放默认值是为了不形成反向依赖。 */
 export const TUNING_DEFAULTS = Object.freeze({
+  /**
+   * **用户侧的「屏幕读取」总开关**，默认开。
+   *
+   * 在这之前「别看了」只有 `stop`（模型调的）和关窗；而关窗在我们这儿不算闸 ——
+   * `guardReason` 对显式来源放行，模型传个 `source` 还是能看。这一项补的是
+   * 用户自己按得下、模型解不开的那道闸。
+   *
+   * 关掉后 `watch` / `start` / `peek` / `region` 一律硬拒（**连显式 `source` 也不放行**），
+   * 且模型没有任何 action 能打开它：唯一入口是悬浮窗里的设置卡。
+   *
+   * 和「关窗挂断」的区别：挂断允许"显式传了来源"放行（用户明确说了要看什么），
+   * 这个开关连显式来源也不放行 —— 它表达的是"我不许你看屏幕"，不是"这一轮不想看"。
+   */
+  enabled: true,
+  /**
+   * 关掉悬浮窗之后默认干什么：`stop`（收工，默认）/ `ears`（留耳）/ `rise`（可抬头）/
+   * `ghost`（隐身）。未配置 = 收工 = 老行为。
+   */
+  onWindowClose: 'stop',
   maxAutonomousWakes: 8,
   idleStopMin: 3,
   defaultPace: 'normal',
@@ -232,8 +254,8 @@ function readBoundSession(raw, warnings) {
 
 /**
  * @param {{env?:NodeJS.ProcessEnv, readFile?:typeof readFileSync}} [opts]
- * @returns {{maxAutonomousWakes:number, idleStopMin:number, idleStopMs:number,
- *            defaultPace:string, session:string|null, path:string, warnings:string[]}}
+ * @returns {{enabled:boolean, onWindowClose:string, maxAutonomousWakes:number, idleStopMin:number,
+ *            idleStopMs:number, defaultPace:string, session:string|null, path:string, warnings:string[]}}
  */
 export function readTuning({ env = process.env, readFile = readFileSync } = {}) {
   const path = tuningPath(env);
@@ -249,6 +271,27 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     // ENOENT 是正常的（没配过）；其它错误要说出来，否则用户改坏了也不知道
     if (err?.code !== 'ENOENT') warnings.push(`see-now.json 读不了：${err?.message ?? err}`);
     raw = {};
+  }
+
+  /**
+   * 总开关。**只认真正的布尔** —— 写成 `"false"` 是最容易踩的坑（字符串是真值，
+   * 用户以为关掉了、实际一直开着），所以类型不对就报出来并回默认（开）。
+   */
+  let enabled = TUNING_DEFAULTS.enabled;
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled === 'boolean') enabled = raw.enabled;
+    else warnings.push(`enabled 只能是 true / false（收到 ${JSON.stringify(raw.enabled)}），已用默认 true`);
+  }
+
+  /** 关掉悬浮窗之后默认行为。写错值回默认 `stop`（= 现在这套行为），并报出来。 */
+  let onWindowClose = TUNING_DEFAULTS.onWindowClose;
+  if (raw.onWindowClose !== undefined) {
+    const want = typeof raw.onWindowClose === 'string' ? raw.onWindowClose.trim() : '';
+    if (WINDOW_CLOSE_MODES.includes(want)) onWindowClose = want;
+    else {
+      warnings.push(`onWindowClose 只能是 ${WINDOW_CLOSE_MODES.join(' / ')}`
+        + `（收到 ${JSON.stringify(raw.onWindowClose)}），已用默认 stop（收工）`);
+    }
   }
 
   const maxAutonomousWakes = clampInt(
@@ -346,6 +389,8 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
   }
 
   return {
+    enabled,
+    onWindowClose,
     maxAutonomousWakes,
     idleStopMin,
     idleStopMs: idleStopMin * 60 * 1000,

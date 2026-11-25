@@ -703,6 +703,8 @@ async function registerAll(ctx) {
     missedGapSec: tuning.missedGapSec,
     // 起手那档感官模式（see-now.json 的 mode）：只看 / 视听都开
     mode: tuning.mode,
+    // 屏幕读取总开关的初值（see-now.json 的 enabled，默认开）。之后由 applyGate 改，不重读配置
+    enabled: tuning.enabled,
     // 亮度归一 + 黑边补偿（see-now.json 的 scoreNormalize，默认开）
     scoreNormalize: tuning.scoreNormalize,
     // 排布容差（see-now.json 的 packStretch）：默认 0 = 一格都不裁，调高才换密排
@@ -952,6 +954,44 @@ async function registerAll(ctx) {
   disposers.push(() => stopLoop('插件卸载'));
 
   /**
+   * 用户侧「屏幕读取」总开关的**内存现值**（`~/.dsh/see-now.json` 的 `enabled`）。
+   *
+   * 初值在启动时读一次；之后只由 `applyGate` 改。设置卡写文件 → `modeWatcher`
+   * 每 1.5 秒比对 → 变了才调这里。**模型没有任何 action 能改它**。
+   */
+  let gateEnabled = tuning.enabled;
+  /** 「关掉悬浮窗之后默认干什么」（`onWindowClose`）。循环每拍现取，所以改完下一拍生效。 */
+  let onWindowCloseMode = tuning.onWindowClose;
+
+  /**
+   * 改「屏幕读取」总开关 —— **唯一实现**（设置卡那条路 + 启动时的配置都汇到这里）。
+   *
+   * 关掉时的顺序是定死的：`stopLoop()` → 画面一定停 → **不动窗**。
+   * 窗绝对不能关：唯一入口就在窗里（设置卡），关了等于把用户锁在门外，只能手改 JSON。
+   *
+   * 听觉按 `onWindowClose` 分流：`stop` 一起停；`ears` / `rise` 留听；`ghost` 等同 `ears`
+   * （总开关本身就否定了"继续看"，所以 ghost 在这一路退化成留耳）。
+   *
+   * 打开时**只改状态**，不自动开采集 —— 让模型 / 用户下一句自己决定。
+   */
+  const applyGate = (next) => {
+    const want = next !== false;
+    const was = runner.enabled();
+    if (want === was) return { enabled: want, wasEnabled: was };
+    const r = runner.setEnabled(want);
+    if (!want) {
+      stopLoop('用户关闭屏幕读取');
+      try {
+        if (onWindowCloseMode === 'stop') runner.stop();
+        else runner.stopVision('用户关闭屏幕读取，留耳');
+      } catch { /* 已经停了 */ }
+    }
+    log(want ? '屏幕读取总开关：开'
+      : `屏幕读取总开关：关（画面已停${onWindowCloseMode === 'stop' ? '，听觉也停' : '，听觉留着'}；窗不动）`);
+    return r;
+  };
+
+  /**
    * **悬浮窗设置页改「当前感官模式」要立刻生效**（2026-11-19 用户要求：UI 要跟真正的
    * 采集循环挂钩，而不是只写配置等重启）。
    *
@@ -1016,6 +1056,23 @@ async function registerAll(ctx) {
   const modeWatcher = setInterval(() => {
     let t = null;
     try { t = readTuning(); } catch { return; }
+    /**
+     * 总开关与「关窗后」那一档：**和下面 `mode` 分开判**。
+     *
+     * 混进同一个 `if` 会互相误触：改节奏也会重写同一份文件（`modeAt` 没变），
+     * 而 `applyModeLive` 里有停采集、换耳朵的动作 —— 用户只是点了一下「屏幕读取」，
+     * 不该顺手把他的感官模式重放一遍。
+     */
+    if (typeof t.enabled === 'boolean' && t.enabled !== gateEnabled) {
+      gateEnabled = t.enabled;
+      applyGate(t.enabled);
+    }
+    if (t.onWindowClose && t.onWindowClose !== onWindowCloseMode) {
+      onWindowCloseMode = t.onWindowClose;
+      // 换档要跟着改"能不能自己支窗"：ears / ghost 不许，stop / rise 允许
+      try { runner.setAutoOpenWindow(onWindowCloseMode !== 'ears' && onWindowCloseMode !== 'ghost'); } catch { /* 老 runner */ }
+      log(`关掉悬浮窗后默认行为：${onWindowCloseMode}`);
+    }
     const mode = t.mode ?? null;
     const at = Number(t.modeAt) || 0;
     // 窗口每点一次都写 `modeAt`（同一个值也算一次）；手改配置没有 modeAt，
@@ -1257,6 +1314,10 @@ async function registerAll(ctx) {
       ctx,
       sessionId: sid,
       getSessionId: () => lastSessionId,
+      // 关窗后那一档每拍现取（设置卡改完下一拍生效）
+      getOnWindowClose: () => onWindowCloseMode,
+      // `rise` 档用：有料时自己把窗开回来（只有这一档允许）
+      reopenWindow: () => openWindow({ log }),
       // 每拍现取窗口绑定：循环要**跟着换绑走**，不能停在起循环时的那个会话上
       // （2026-11-06 实报：换会话后循环还投旧会话，relay 又让着它 → 窗里打的话没人收）
       getTargetSession: () => boundSessionNow(),
@@ -1277,6 +1338,17 @@ async function registerAll(ctx) {
       tuning,
       onStop: (reason) => {
         if (reason === 'window-closed') {
+          /**
+           * 兜底：`ears` / `rise` / `ghost` 三档下，窗没了**不等于**不看了。
+           *
+           * 正常路径上循环根本不会停（见 `loop.js` 的窗判定），所以这里只在竞态下
+           * （比如这一拍刚好改了档）才会走到。绝不能 `hangUp()`：挂断之后
+           * `watch` 会被硬闸拦成 `hung-up`，用户选的"留耳 / 隐身"就没意义了。
+           */
+          if (onWindowCloseMode !== 'stop') {
+            try { runner.stopVision('用户关窗'); } catch { /* 已经停了 */ }
+            return;
+          }
           // 用户关窗 = 不看了。**落进待领说明**，下一次工具结果带走。
           // 不能写 chat.jsonl：窗已经关了，那条流没人看，模型也拿不到 ——
           // 实测会连写两条，而模型还在说"我还在看"。
@@ -1509,12 +1581,43 @@ async function registerAll(ctx) {
         ? { ...out, text: `${pendingModeNote}\n\n${out.text}` }
         : out;
       pendingModeNote = '';
-      return toLosslessJson(withPendingNote(noted));
+      /**
+       * **`say` 没有窗可投时必须当面说**（`ears` / `ghost` 档关窗后就是这种状态）。
+       *
+       * 气泡挂在窗上：窗没开，这句话只有会话记录里留着 —— 模型不说"用户看不到"，
+       * 用户就只会觉得"它怎么不吭声"，而模型还以为自己说过了。
+       * 判据放在 `execute` 这层：`route` 里有二十多个 return，逐个挂必然漏。
+       */
+      const said = args?.say ? String(args.say).trim() : '';
+      const sayNoWindow = said && !windowAlive()
+        ? '\n\n（**窗没开着**：这句 `say` 没有气泡可投 —— 用户看不到，只有会话记录。'
+          + '要让他看见就先把窗开回来。）'
+        : '';
+      const finalOut = sayNoWindow && noted && typeof noted.text === 'string'
+        ? { ...noted, text: `${noted.text}${sayNoWindow}` }
+        : noted;
+      return toLosslessJson(withPendingNote(finalOut));
     },
 
     async route(args = {}, run = {}) {
       let action = String(args.action ?? 'watch').toLowerCase();
-
+      /**
+       * 「屏幕读取总开关关着」的**统一拒法**。
+       *
+       * 四句话都要说到：不是故障、重试没用、**你没有权限打开它**、能打开的是用户自己。
+       * 少了第三条，模型会去翻别的 action 找绕过的路（`window show` / `region`），
+       * 而那些路也全过不去 —— 闸在 `runner` 的 `guardReason` 里，比它们都早。
+       *
+       * 注意：`say` 不在这里拦。说不出话比说错话更糟 —— 用户关了屏幕读取，
+       * 不代表他不许模型回话。
+       */
+      const disabledByUser = (detail) => ({
+        text: `用户关掉了「屏幕读取」总开关，${detail}\n`
+          + '**这不是故障**，也不要重试、更不要换参数绕开 —— 闸在你调不动的层。\n'
+          + '能打开它的只有用户自己：悬浮窗 →「本插件设置」→「屏幕读取」。\n'
+          + '想继续看就直接请他打开；在那之前别再说"我在看着你"。',
+        meta: { ok: false, reason: 'disabled-by-user', enabled: false },
+      });
       /**
        * **感官模式**（2026-11-09 用户要求「三种模式各有入口」）：
        *   mode:"both"   = 视听都开：要画面，也起耳朵
@@ -1626,6 +1729,13 @@ async function registerAll(ctx) {
       }
 
       if (action === 'watch') {
+        /**
+         * 总开关关着时**在入口就拦**：不解析 src、不碰采集、不开窗。
+         *
+         * `runner.watch()` 里还有一道 `guardReason` —— 那道是底线（任何调用路径都过不去），
+         * 这道是为了不白跑半截（srcOf 报错、region 落盘这些副作用都不该发生）。
+         */
+        if (!runner.enabled()) return disabledByUser('现在不许采集屏幕。');
         // **循环的 owner 必须在等待开始前锁定**。`runner.watch()` 会阻塞 15~40 秒，
         // 这期间任何会话的 `session/event` 都会改写 `lastSessionId`；等它返回再
         // `ensureLoop()` 现取，就会把后续唤醒投到"等待期间最后说话的那个会话"去
@@ -1729,6 +1839,11 @@ async function registerAll(ctx) {
           audio: typeof args.audio === 'boolean' ? args.audio : null,
         });
         if (!r.ok) {
+          /**
+           * 总开关是在等待中途被关掉的（入口那道判过了、`guardReason` 又拦了一次）。
+           * **排在 `hung-up` 前面**：闸比"关过窗"更硬，文案也只能给总开关那份。
+           */
+          if (r.reason === 'disabled-by-user') return disabledByUser('采集已经停了，这一轮不看了。');
           // 用户关过窗：**只有他重新要求看，才允许再开**。这一条以前只靠工具描述
           // 里的一句"别再调了"，模型不照做就会把窗重新弹出来。
           if (r.reason === 'hung-up') {
@@ -1813,10 +1928,15 @@ async function registerAll(ctx) {
         if (r.windowOpen === false) {
           // 窗压根没开起来（最常见：没有带 tkinter 的 python）。这时候 `say` 同样是石沉大海，
           // 但**不能**叫模型去 show —— show 改的是配置，解决不了"进程起不来"。
+          //
+          // `why` 为空还有另一种情形：用户关掉了窗、且「关窗后」选了 `ears` / `ghost` ——
+          // 那一档**故意不自动开窗**。这时候说"没开起来"是错的（听起来像故障），
+          // 改成"是关着的"，模型才不会去修一个没坏的东西。
           const why = runner.status().window?.reason;
           return {
             ...out,
-            text: `${out.text}\n\n**悬浮窗没开起来${why ? `（${why}）` : ''}** —— 用户看不到也听不到你的 \`say\`。`
+            text: `${out.text}\n\n${why ? `**悬浮窗没开起来（${why}）**` : '**悬浮窗是关着的**'}`
+              + ' —— 用户看不到也听不到你的 `say`。'
               + '\n别说"我在看着你"这类话；先在正文里告诉他这个情况（正文能到，`say` 到不了）。',
             meta: { ...out.meta, windowOpen: false },
           };
@@ -1832,6 +1952,11 @@ async function registerAll(ctx) {
       }
 
       if (action === 'peek') {
+        /**
+         * 总开关关着时**不能落到下面那句"手上还没有画面"**：那句把责任推给"还没攒到"，
+         * 模型于是继续等、继续 peek。两条文案必须分开。
+         */
+        if (!runner.enabled()) return disabledByUser('现在没有画面可给。');
         const s = runner.peek();
         const st = runner.status();
         // 走 peek 路线的会话也要有循环：不然模型摘完这一张就结束，没人再叫它。
@@ -1851,6 +1976,8 @@ async function registerAll(ctx) {
       }
 
       if (action === 'start') {
+        // 总开关优先于一切参数：关掉了就不解析 src、不碰采集
+        if (!runner.enabled()) return disabledByUser('起不了采集。');
         const built = srcOf(args);
         if (built.error) return { text: built.error, meta: { ok: false, reason: built.reason ?? 'bad-region' } };
         /**
@@ -1860,6 +1987,8 @@ async function registerAll(ctx) {
          */
         const audioArg = typeof args.audio === 'boolean' ? args.audio : null;
         const r = await runner.start({ src: built.src ?? { kind: 'screen' }, audio: audioArg });
+        // 总开关可能在入口判过之后、这里等之前被关掉（1.5 秒轮询）—— 那一下 source 是 null
+        if (r?.blocked === 'disabled-by-user') return disabledByUser('起不了采集。');
         // 按窗口抓的前置检查没过（找不到窗口 / 最小化）：直接说，别让它看起来像"开始了但没画面"
         if (r?.ok === false) {
           return { text: r.error ?? `没开始看（${r.reason}）。`, meta: { ok: false, reason: r.reason } };
@@ -1960,6 +2089,8 @@ async function registerAll(ctx) {
              * 还是被拒。顺手把窗开出来，和标题栏那个按钮走同一条路。
              */
             resumed = runner.clearHangUp?.('window show:true') ?? null;
+            // 用户要看见它 = 同意窗存在：留耳 / 隐身那档的"别再弹回来"到此为止
+            try { runner.setAutoOpenWindow?.(true); } catch { /* 老 runner */ }
             if (!windowAlive()) opened = await openWindow({ log });
           }
           log(`悬浮窗${wants ? '显示' : '隐藏'}${changed.changed ? '' : '（本来就是）'}`);
@@ -2009,6 +2140,15 @@ async function registerAll(ctx) {
        * 拖个框就行"，否则用户不知道那块黑罩子是哪来的。
        */
       if (action === 'region') {
+        /**
+         * **取消框选（`region:"off"`）不拦**：它不抓屏，只是把存的那块删掉 ——
+         * 关着总开关时用户/模型收个尾，没有理由拒。
+         * 取框窗要先截一张全屏给你看（`pick_region.py`），那就是"看一眼"，必须拦。
+         */
+        if (!/^(off|none|clear)$/i.test(String(args.region ?? '').trim())
+            && !runner.enabled()) {
+          return disabledByUser('选择器要先抓一张屏，所以也开不了。');
+        }
         if (/^(off|none|clear)$/i.test(String(args.region ?? '').trim())) {
           const had = loadRegion();
           clearRegion();
@@ -2322,7 +2462,13 @@ async function registerAll(ctx) {
         // 关掉留底时这里是 null，status 一行都不多（验收第 4 条）
         const liftText = liftLine(s.lift);
         return {
-          text: (s.running
+          // 总开关放第一行：用户关掉之后第一件想知道的就是"它到底还看不看"
+          text: (s.enabled === false
+            ? '总开关：关（用户自己关的；在悬浮窗 →「本插件设置」→「屏幕读取」里打开）\n'
+            : '总开关：开\n')
+            // 关窗后那一档也放前面：它决定"窗没了之后还听不听"
+            + `关窗后：${{ stop: '收工（默认）', ears: '留耳', rise: '可抬头', ghost: '隐身' }[onWindowCloseMode] ?? '收工（默认）'}\n`
+            + (s.running
             ? `在看 ${s.source?.kind === 'window' ? `窗口「${s.source.title ?? s.source.hwnd ?? '?'}」` : s.source?.kind}`
               + ` @${s.size?.[0]}×${s.size?.[1]}（${s.quality}，${s.since}s，收到 ${s.frames} 帧，留帧 ${s.stats?.kept ?? 0}，出图 ${s.stats?.sheets ?? 0}）`
               + `${s.lastError ? `\n⚠ ${s.lastError}` : ''}`

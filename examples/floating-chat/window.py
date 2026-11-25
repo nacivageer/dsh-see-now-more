@@ -8597,7 +8597,22 @@ class LiveGlass:
                    "audio": FOCUS_AUDIO, "none": FOCUS_OFF}
 
     SETTINGS_ROWS = (
-        # key, 标题, 可选值, 显示名, 默认（None = 未写过，显示「默认」）
+        # key, 标题, 可选值, 显示名, 默认（None = 未写过，显示「默认」），可选的第 6 项 = 每档小字
+        #
+        # 头两项是**安全闸**（2026-11-25 档 B）：
+        # - 「屏幕读取」是用户侧总开关：关掉后 watch / start / peek / region 一律硬拒，
+        #   模型调不动它，只有这张卡片能打开（插件 1.5 秒内读到，**不用重启**）。
+        # - 「关窗后」决定窗被关掉之后还听不听；四档的小字必须写清实际功能，
+        #   「收工 / 隐身」这种短名单看不出区别。
+        ("enabled", "屏幕读取", (True, False), {True: "开", False: "关"}, True,
+         {True: "模型能看屏幕（watch / peek / region 都可用）",
+          False: "关掉后一律拒绝；模型自己打不开，只有这里能开"}),
+        ("onWindowClose", "关窗后", ("stop", "ears", "rise", "ghost"),
+         {"stop": "收工", "ears": "留耳", "rise": "可抬头", "ghost": "隐身"}, "stop",
+         {"stop": "停画面、停听觉；之后不会自己开窗",
+          "ears": "停画面、保留听觉；有料时只在会话里说，不开窗",
+          "rise": "停画面、保留听觉；有料时自己重开窗并说明",
+          "ghost": "窗收起，画面和听觉都继续"}),
         ("defaultPace", "节奏", ("calm", "normal", "dense", "game-economic"),
          {"calm": "省", "normal": "常规", "dense": "密", "game-economic": "游戏"}, "normal"),
         ("quality", "清晰度", ("low", "standard", "high", "ultra"),
@@ -8649,7 +8664,8 @@ class LiveGlass:
             print("settings write failed:", repr(exc), flush=True)
 
     def _settings_value(self, row, data: dict):
-        key, _label, options, _names, default = row
+        # 第 6 项（每档小字）只在画的时候用，取值只看前五项
+        key, _label, options, _names, default = row[:5]
         cur = data.get(key, default)
         return cur if cur in options else default
 
@@ -8718,12 +8734,18 @@ class LiveGlass:
                 rows.append({"kind": "scopeopt", "value": _val, "label": _label,
                              "disabled": _val == "full" and _vmode == "deepseek", "h": 44})
         rows.append({"kind": "sep", "h": 8})
+        # 提示分两行：**一行放不下**（卡片最窄 380px，10 号字一行只有 ~35 个汉字），
+        # 挤成一行会被右边界直接截断（2026-11-26 格在实机上看到的就是这个）。
+        rows.append({"kind": "hint", "text": "以下选项存进 see-now.json", "h": 24})
         rows.append({"kind": "hint",
-                     "text": "以下选项存进 see-now.json，重启 DSH 后生效", "h": 30})
+                     "text": "屏幕读取 / 关窗后即时生效，其余重启 DSH 后生效", "h": 24})
         rows.append({"kind": "sep", "h": 8})
         for row in self.SETTINGS_ROWS:
+            # 带小字的行高 68（标题上层、说明下层）；两行文字只能这么排，Tk 没有 tooltip
+            has_hint = len(row) > 5 and bool(row[5])
             rows.append({"kind": "setting", "row": row,
-                         "value": self._settings_value(row, data), "h": 56})
+                         "value": self._settings_value(row, data),
+                         "h": 68 if has_hint else 56})
         # 「检查当前选项是否生效」：点了给宿主一个时间戳，结果由宿主落成居中气泡
         rows.append({"kind": "checkbtn", "text": "检查当前选项是否生效", "h": 64})
         head, hint_h = 68, 18
@@ -8868,13 +8890,26 @@ class LiveGlass:
                 c.create_text(cw // 2, (y0 + y1) // 2, text=r["text"], anchor="center",
                               fill="#ffffff", font=f11b, tags=("checkbtn", "checkbtnlabel"))
             elif kind == "setting":
-                _key, label, _options, names, _default = r["row"]
-                c.create_text(34, (y0 + y1) // 2, text=label, anchor="w",
-                              fill="#dfe9f6", font=f11)
-                c.create_text(cw - 30, (y0 + y1) // 2,
-                              text=names.get(r["value"], "默认"), anchor="e",
-                              fill=("#8fd3ff" if r["value"] is not None else "#77859a"),
-                              font=f11b, tags=(f"setval_{_key}",))
+                _key, label, _options, names, _default = r["row"][:5]
+                hints = r["row"][5] if len(r["row"]) > 5 else None
+                if hints:
+                    # 标题在上、小字在下（行高 68）。小字必须写实际功能 ——
+                    # 「收工 / 隐身」这种短名单用户看不出区别。
+                    c.create_text(34, y0 + 24, text=label, anchor="w",
+                                  fill="#dfe9f6", font=f11)
+                    c.create_text(34, y1 - 20, text=hints.get(r["value"], ""), anchor="w",
+                                  fill="#8fa0b6", font=f10)
+                    c.create_text(cw - 30, y0 + 24,
+                                  text=names.get(r["value"], "默认"), anchor="e",
+                                  fill=("#8fd3ff" if r["value"] is not None else "#77859a"),
+                                  font=f11b, tags=(f"setval_{_key}",))
+                else:
+                    c.create_text(34, (y0 + y1) // 2, text=label, anchor="w",
+                                  fill="#dfe9f6", font=f11)
+                    c.create_text(cw - 30, (y0 + y1) // 2,
+                                  text=names.get(r["value"], "默认"), anchor="e",
+                                  fill=("#8fd3ff" if r["value"] is not None else "#77859a"),
+                                  font=f11b, tags=(f"setval_{_key}",))
 
         st["cw"], st["head"] = cw, head
         st["rows"], st["hits"], st["mode"] = rows, hits, mode_now
@@ -9111,11 +9146,16 @@ class LiveGlass:
         st = self._settings
         if not st:
             return
-        _key, _label, options, names, _default = r["row"]
+        _key, _label, options, names, _default = r["row"][:5]
+        hints = r["row"][5] if len(r["row"]) > 5 else None
         cur = r["value"]
         nxt = options[(options.index(cur) + 1) % len(options)] if cur in options else options[0]
         r["value"] = nxt
         self._settings_write(_key, nxt)
+        if hints:
+            # 带小字的行：值和说明都要换，就地重画整张卡（行数不变，不闪）
+            self._settings_rebuild()
+            return
         try:
             st["canvas"].itemconfigure(f"setval_{_key}", text=names.get(nxt, str(nxt)),
                                        fill="#8fd3ff")

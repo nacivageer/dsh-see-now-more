@@ -175,7 +175,9 @@ function srcSig(s) {
 /**
  * 「这一条 watch 该不该被硬闸拦下」的**纯函数**（好测，也好读）。
  *
- * 三条规矩：
+ * 四条规矩：
+ * - **用户关了屏幕读取总开关**（`disabled`）→ 谁来说都不放行，连显式来源也不行。
+ *   这一条必须排在最前：它是"我不许你看屏幕"，不是"这一轮不想看"。
  * - 用户关过窗（`hungUp`）→ 除非他显式说了要看什么，否则不重开。
  * - 文件放完了（`fileEnded`）→ 同上，文件回放是一次性的，不能自动重播。
  * - 显式传了来源 = 用户明确要求 → 一律放行。
@@ -191,7 +193,8 @@ export function resumeFromReopen({ hungUp = false, winAlive = false, pidNow = 0,
   return Boolean(hungUp && winAlive && pidNow > pidAtHangUp);
 }
 
-export function guardReason({ hungUp = false, fileEnded = false, explicitSrc = false } = {}) {
+export function guardReason({ hungUp = false, fileEnded = false, explicitSrc = false, disabled = false } = {}) {
+  if (disabled) return 'disabled-by-user';
   if (explicitSrc) return null;
   if (hungUp) return 'hung-up';
   if (fileEnded) return 'file-ended';
@@ -209,6 +212,13 @@ export function createRunner({
    * 来自 `~/.dsh/see-now.json` 的 `mode`，所以重开 DSH 后沿用上次的选择 —— 见 `setMode()`。
    */
   mode = 'both',
+  /**
+   * 用户侧「屏幕读取」总开关的**初值**（`~/.dsh/see-now.json` 的 `enabled`，默认开）。
+   *
+   * 只在这里取初值：之后的状态由 `setEnabled()` 改，**不每拍读盘**（拿帧率换便利不划算）。
+   * 设置卡写完文件由 `index.js` 的 1.5 秒轮询调 `setEnabled()`，所以"改完立刻生效"由调用方保证。
+   */
+  enabled = true,
   /**
    * 亮度归一 + 黑边补偿（`~/.dsh/see-now.json` 的 `scoreNormalize`，默认开）。
    *
@@ -893,6 +903,30 @@ export function createRunner({
   let hungUp = false;
   /** 挂断时 pid 文件的 mtime；用来识别"用户又手动把窗开回来了" */
   let hungUpStamp = 0;
+  /**
+   * 用户侧的「屏幕读取」总开关。`false` = 用户不许看屏幕。
+   *
+   * 和 `hungUp` 的区别见 `guardReason`：这一条连"显式传了来源"也不放行，
+   * 而且**模型没有任何 action 能把它打开**（只有悬浮窗设置卡能）。
+   */
+  let screenEnabled = enabled !== false;
+  /**
+   * `watch` / `peek` 要不要自己把悬浮窗支起来（默认要）。
+   *
+   * 关掉它的只有一种情形：用户关掉了窗、并且选了 `ears` / `ghost` —— 那两档的意思是
+   * "窗收起、别的事照旧"，这时候模型一次 `watch` 就把窗弹回来，等于用户的选择没生效
+   * （社区抱怨的"关掉又弹出来"）。`rise` 不关它，那一档本来就是"有料时自己抬头"。
+   *
+   * 用户自己把窗重新打开（pid 文件被重写）时这里会复位，见 `watch` 里的解除逻辑。
+   */
+  let autoOpenWindow = true;
+  /**
+   * 下一次 `run.done` 收尾时**别关耳朵**（见 `stopVision()`）。
+   *
+   * `stopVision()` 停下采集进程后，`run.done` 会异步走到 `teardown()` ——
+   * 那条路默认把耳朵一起停掉。只停画面那几档必须在这里立个标记，让收尾跳过 `listener.stop()`。
+   */
+  let keepAudioOnStop = false;
   /** 最近一次的采集源（teardown 会把 `source` 清空，但事后判断还需要它） */
   let lastSource = null;
   /**
@@ -904,7 +938,12 @@ export function createRunner({
    */
   let endedSource = null;
 
-  function teardown(why) {
+  /**
+   * 收工。`keepAudio` 只给「只停画面、留耳」那条路用（见 `stopVision()`）：
+   * 采集进程退出后 `run.done` 会回调到这里，那时候**不能**把耳朵一并关掉，
+   * 否则「留耳 / 可抬头 / 隐身」三档刚进就哑了（2026-11-26 实机踩到）。
+   */
+  function teardown(why, { keepAudio = false } = {}) {
     if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
     run?.stop();
     run = null;
@@ -915,7 +954,8 @@ export function createRunner({
     stopLiftCapture({ clear: true });
     stopBloodbarCapture({ why: '收工' });
     // 采集收工，声音也一起停：一个抓回环的进程常驻在后台，用户是看不见的
-    listener.stop('采集收工');
+    if (keepAudio) log('收工：画面停了，耳朵留着');
+    else listener.stop('采集收工');
     if (why) log(`收工：${why}`);
   }
 
@@ -1006,6 +1046,13 @@ export function createRunner({
   }
 
   async function start({ src = { kind: 'screen' }, opts = {}, quality: q = null, audio = null } = {}) {
+    /**
+     * 总开关关掉时**连 `already` 都不回**：回"已经在看了"会让模型以为还能接着看，
+     * 于是它继续 peek，而 peek 也已经被拦住了 —— 用户看到的是"它说在看，但什么都没给"。
+     */
+    if (!screenEnabled) return { blocked: 'disabled-by-user', source: null };
+    // 新的一场开始看：上一次「只停画面」留下的标记不能带进来
+    keepAudioOnStop = false;
     noteUse();
     if (audio === true || audio === false) modeWanted = audio ? 'both' : 'vision';
     // 从「都不开」/「仅听」被显式叫起来看画面：当前态分别是「仅看」「视听都开」
@@ -1164,10 +1211,13 @@ export function createRunner({
         }
         // 文件源放完 = 这一次看完了。记下来，别让下一条 watch 又从头放一遍。
         if (s.kind === 'file') endedSource = s;
-        teardown('ffmpeg-exit');
+        const keep = keepAudioOnStop;
+        keepAudioOnStop = false;
+        teardown('ffmpeg-exit', { keepAudio: keep });
       }
     }).catch((e) => {
       lastError = `ffmpeg: ${e?.message ?? e}`;
+      keepAudioOnStop = false;
       if (pipeline === p) teardown('ffmpeg-error');
     });
     /**
@@ -1218,6 +1268,16 @@ export function createRunner({
    * 不然会拿到一个"成功"但其实早就退了的窗（pid 指向死进程）。
    */
   async function ensureWindow() {
+    /**
+     * **用户关掉的窗，不许我们自己再弹回来**（`onWindowClose` 是 `ears` / `ghost` 时）。
+     *
+     * 这是社区实报过的那条"关掉又弹出来"：`watch` / `peek` 都会走到这儿，
+     * 而窗一开，用户就以为自己的选择没生效。只有 `rise`（可抬头）允许重开。
+     */
+    if (!autoOpenWindow && !windowAlive()) {
+      windowState = null;
+      return { ok: false, reason: 'window-closed-by-user', skipped: true };
+    }
     if (windowState?.ok) return windowState;
     if (windowPending) return windowPending;
     windowPending = openWindow({ log }).then((st) => {
@@ -1249,6 +1309,12 @@ export function createRunner({
    */
   function stopVision(why = '仅监听') {
     if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
+    /**
+     * **先立标记再停进程**：`run.done` 是异步回调，晚一步就会先把耳朵关了
+     * （实机表现：`ears` 档关窗后 `status` 写「听声音：没在听 —— 采集收工」）。
+     * 没有进程在跑时立刻把标记清掉，免得下一次真正的收工把耳朵留在后台。
+     */
+    keepAudioOnStop = Boolean(run);
     run?.stop();
     run = null;
     running = false;
@@ -1429,6 +1495,43 @@ export function createRunner({
     /** 挂断状态（测试和状态页用） */
     isHungUp() { return hungUp; },
     /**
+     * 改「屏幕读取」总开关（**只管内存状态**）。
+     *
+     * 落盘不在这里：设置卡自己写 `~/.dsh/see-now.json`，`index.js` 的 1.5 秒轮询
+     * 读到变化后调这里。runner 不该知道配置文件长什么样，测试里很多 runner 是裸建的。
+     *
+     * 关掉时**只翻状态**：停循环、停画面 / 停听觉由 `index.js` 的 `applyGate` 按
+     * `onWindowClose` 分流（`stop` 一起停、`ears` / `rise` 留听）。这里若 teardown，
+     * 耳朵会一起关掉，后三档就做不成了。
+     *
+     * @returns {{enabled:boolean, wasEnabled:boolean}}
+     */
+    setEnabled(next) {
+      const wasEnabled = screenEnabled;
+      screenEnabled = next !== false;
+      if (wasEnabled !== screenEnabled) {
+        log(screenEnabled
+          ? '用户打开了屏幕读取总开关（只改状态，不自动开采集）。'
+          : '用户关掉了屏幕读取总开关 —— 从这一刻起不再取图。');
+      }
+      return { enabled: screenEnabled, wasEnabled };
+    },
+    /** 总开关现在是开还是关（设置卡、status、循环都用它）。 */
+    enabled() { return screenEnabled; },
+    /**
+     * 允许 / 禁止 `watch` / `peek` 自己支窗（见 `autoOpenWindow` 的注释）。
+     *
+     * 由循环在"窗没了"那一拍按 `onWindowClose` 调：`ears` / `ghost` 传 false，
+     * `rise` / `stop` 传 true。窗口被用户手动重开时这里会自动复位。
+     */
+    setAutoOpenWindow(next) {
+      const want = next !== false;
+      if (want === autoOpenWindow) return { autoOpen: autoOpenWindow };
+      autoOpenWindow = want;
+      log(want ? '允许 watch/peek 自己支窗。' : '窗是用户关的（留耳 / 隐身），watch/peek 不再支窗。');
+      return { autoOpen: autoOpenWindow };
+    },
+    /**
      * 用户/模型**明确说要看见它**时解除挂断（上游 v0.2.1 #59 的出口）。
      *
      * 关窗立的闸是单向门：以前唯一的出口是"用户自己把窗重开过"或者下一条
@@ -1531,6 +1634,8 @@ export function createRunner({
         hungUp, winAlive: windowAlive(), pidNow: pidStamp(), pidAtHangUp: hungUpStamp,
       })) {
         hungUp = false;
+        // 用户自己把窗开回来了 —— 留耳 / 隐身那档的"别再弹回来"到此为止
+        autoOpenWindow = true;
         log('悬浮窗被重新打开过 —— 解除挂断，继续看。');
       }
 
@@ -1543,8 +1648,14 @@ export function createRunner({
        * 从第 0 秒重来（社区实报的 24 秒解 1955 帧）。
        */
       const blocked = guardReason({
-        hungUp, fileEnded: Boolean(endedSource) && !running, explicitSrc,
+        hungUp,
+        fileEnded: Boolean(endedSource) && !running,
+        explicitSrc,
+        // 总开关关掉时**连 explicitSrc 也不放行**：它表达的是"我不许你看屏幕"，
+        // 不是"这一轮不想看"。模型换个说法带上 src 就能绕过去的闸不算闸。
+        disabled: !screenEnabled,
       });
+      if (blocked === 'disabled-by-user') return { ok: false, reason: 'disabled-by-user', waited: 0 };
       if (blocked === 'hung-up') return { ok: false, reason: 'hung-up', waited: 0 };
       if (blocked === 'file-ended') {
         return { ok: false, reason: 'file-ended', waited: 0, path: endedSource?.path };
@@ -1704,6 +1815,15 @@ export function createRunner({
           }
 
           while (Date.now() < deadline) {
+            /**
+             * **用户中途按了总开关**：立刻出来。
+             *
+             * 不这一段的话，模型会卡在等图里直到 `deadline`（最长 300 秒）——
+             * 用户看到的是"我明明关了，它还在说在看"。
+             */
+            if (!screenEnabled) {
+              return { ok: false, reason: 'disabled-by-user', waited: (Date.now() - t0) / 1000 };
+            }
             // 宿主取消了这一轮（用户按停止 / 超时策略）就立刻收工，别继续挂着
             if (signal?.aborted) {
               return { ok: false, reason: 'cancelled', waited: (Date.now() - t0) / 1000 };
@@ -1744,7 +1864,9 @@ export function createRunner({
         }
         return {
           ok: false,
-          reason: signal?.aborted ? 'cancelled' : (frames ? 'no-change' : 'capture-stopped'),
+          // 总开关中途被关掉时，"没图"的原因是用户不许看，不是采集停了 —— 文案两回事
+          reason: !screenEnabled ? 'disabled-by-user'
+            : signal?.aborted ? 'cancelled' : (frames ? 'no-change' : 'capture-stopped'),
           waited: (Date.now() - t0) / 1000,
           error: lastError,
         };
@@ -1770,6 +1892,12 @@ export function createRunner({
      * 不在这里开窗的话，用户永远没有可以打字的入口，也就没有"关窗 = 不看了"。
      */
     peek() {
+      /**
+       * 总开关关掉时不给图。为什么不"给完手上这几张再停"：用户按下开关的意图是
+       * "别再看我的屏幕了"，而队列里那些图正是他不想给的东西 —— 交出去反而更糟。
+       * `null` 和"还没攒到"在 index.js 那里是两条文案，不会混。
+       */
+      if (!screenEnabled) return null;
       noteUse();
       const queued = pipeline?.take() ?? null;
       if (running) armGrace();
@@ -1804,6 +1932,13 @@ export function createRunner({
         source,
         lastSource,
         hungUp,
+        /**
+         * 用户关掉了「屏幕读取」总开关没有。
+         *
+         * **必须进 status**：模型看到 `enabled:false` 才知道"不是它坏了，是用户不许看"，
+         * 而不是继续重试 `watch`、或者去 `window show` 找绕过的路（那条也过不去）。
+         */
+        enabled: screenEnabled,
         endedFile: endedSource?.path ?? null,
         quality,
         size: SIZES[quality],

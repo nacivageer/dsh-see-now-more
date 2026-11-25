@@ -38,6 +38,7 @@ import { noteInterjected } from './interject.js';
 import { onSpeech, speechSubscribers } from './speech.js';
 import { estimateSpeechMs, nextProactiveAt } from './pacing.js';
 import { listenGap } from './listen.js';
+import { WINDOW_CLOSE_MODES } from './tuning.js';
 import { appendLift, appendLiftDebug } from './lift/log.js';
 import { createLift } from './lift/index.js';
 import { bloodbarTailText, shouldGlance } from './bloodbar.js';
@@ -308,6 +309,19 @@ export function startLoop({
    * （2026-11-08 实踩：`listen` 之后 status 是「已停（capture-stopped）」）。
    */
   listen: startInListen = false,
+  /**
+   * 「关掉悬浮窗之后默认干什么」的**现取**函数（`~/.dsh/see-now.json` 的 `onWindowClose`）。
+   *
+   * 每拍现取：设置卡改完由 `index.js` 的 1.5 秒轮询更新，这里下一拍就按新档走。
+   * 不传就退回 `tuning` 里那份（启动时读的）。
+   */
+  getOnWindowClose = null,
+  /**
+   * `rise` 档专用：把悬浮窗重新开出来（`index.js` 把 `openWindow` 传进来）。
+   *
+   * 只有这一档会自己弹窗 —— 是用户显式选的，不算社区抱怨的那个"关掉又弹回来"。
+   */
+  reopenWindow = null,
   // `~/.dsh/see-now.json` 的节奏参数（readTuning()）；不传就用写死的默认值。
   tuning = null,
 } = {}) {
@@ -467,6 +481,20 @@ export function startLoop({
    * 却会被下面 ② 判成 `capture-stopped`，于是用户刚说一句话，循环整个收工。
    */
   let pausedByListen = startInListen;
+
+  /**
+   * 用户选的「关窗后」档位（每拍现取；写坏的配置一律按 `stop` 处理）。
+   *
+   * 四档：`stop` 收工 / `ears` 留耳 / `rise` 可抬头 / `ghost` 隐身。
+   * 不传 `getOnWindowClose` 的调用方（老测试、脚本）永远拿到 `stop` = 老行为。
+   */
+  const windowCloseMode = () => {
+    let v = null;
+    try { v = getOnWindowClose ? getOnWindowClose() : tuning?.onWindowClose; } catch { v = null; }
+    return WINDOW_CLOSE_MODES.includes(v) ? v : 'stop';
+  };
+  /** "窗没了"只处理一次：继续听的档位不该每拍重写日志、重停画面。 */
+  let windowGoneNoted = false;
 
   const enterListen = () => {
     if (mode === 'listen' || disposed) return;
@@ -734,6 +762,18 @@ export function startLoop({
     // `steer` 只是"允许插话"；真的插不插话看目标会话有没有在跑回合 ——
     // 打在空闲会话上的 steer 会起一个空回合、立刻 blocked（见 deliveryMode 的注释）。
     const mode = steer ? deliveryMode({ running: turnRunning(to) }) : 'followup';
+    /**
+     * `rise`：「可抬头」—— 轮到有料要说了，就把窗重新开出来。
+     *
+     * 只有这一档会自己弹窗（用户显式选的），其它档里窗是用户主动关的，
+     * 模型和循环都不该再把它顶回来 —— 那正是社区抱怨的"关掉又弹出来"。
+     */
+    if (windowCloseMode() === 'rise' && !windowAlive()) {
+      try {
+        const st = await reopenWindow?.();
+        if (st?.ok) log('窗口已按「可抬头」重开');
+      } catch { /* 开不起来就只说话，别让叫醒失败 */ }
+    }
     lastWakeAt = Date.now();
     /**
      * **叫醒必须有上限**（2026-11-10 实测）：`wakeWithRetry` 里 `sessions.flush()` 会等
@@ -824,13 +864,39 @@ export function startLoop({
       const winAlive = wasOpen ? windowAlive() : false;
       if (!wasOpen || winAlive) {
         windowGoneTicks = 0;
+        windowGoneNoted = false;
       } else {
         windowGoneTicks += 1;
         const verdict = windowVerdict({
           wasOpen, alive: winAlive, pidAlive: windowPidAlive(), goneTicks: windowGoneTicks,
         });
-        if (verdict === 'closed') { stop('window-closed'); return; }
-        if (verdict === 'stalled') { stop('window-stalled'); return; }
+        /**
+         * 窗没了怎么办，看用户选的那一档（`onWindowClose`）：
+         *
+         * | 档 | 画面 | 听觉 | 循环 |
+         * |---|---|---|---|
+         * | `stop` | 停 | 停 | 停（老行为，`onStop` 落挂断说明） |
+         * | `ears` | 停 | 留 | 继续听 |
+         * | `rise` | 停 | 留 | 继续听，下一次叫醒时自己把窗开回来 |
+         * | `ghost` | 继续 | 继续 | 完全不理窗没了 |
+         */
+        const closeMode = windowCloseMode();
+        if (verdict && closeMode === 'stop') {
+          stop(verdict === 'closed' ? 'window-closed' : 'window-stalled');
+          return;
+        }
+        if (verdict && !windowGoneNoted) {
+          windowGoneNoted = true;
+          log(`悬浮窗没了（${verdict}），按「${closeMode}」继续：`
+            + (closeMode === 'ghost' ? '画面和听觉都不断' : '停画面、留耳'));
+        }
+        if (verdict) {
+          // `ears` / `ghost` 下 `watch` / `peek` 不许把窗又弹回来；只有 `rise` 允许
+          try { runner.setAutoOpenWindow?.(closeMode === 'rise'); } catch { /* 老 runner 没这个方法 */ }
+          // `ghost` 之外都停画面（`enterListen` 顺手把 `pausedByListen` 立起来，
+          // 下面 ② 才不会把"我们自己停的"当成 capture-stopped）
+          if (closeMode !== 'ghost') enterListen();
+        }
       }
 
       // ①.5 只听模式：**必须排在窗口判断之后**（否则窗关了也发现不了），
@@ -921,7 +987,11 @@ export function startLoop({
       //      把循环整个拆掉等于把他的输入扔进黑洞（见 mode 的说明）。
       // 装了「盯着」任务就不收工：用户走开时说"帮我看着"，那就得一直看到他说够了。
       if (!pinned) {
-        const winOpenNow = windowAlive();
+        /**
+         * `ghost` 档的窗只是"收起"：对"还有人在陪看吗"这个判断来说，它不是"没人看" ——
+         * 否则三分钟没人说话就自动收工，那档就名不副实了。
+         */
+        const winOpenNow = windowAlive() || windowCloseMode() !== 'stop';
         const act = idleAction({
           idle: shouldGoIdle({
             wakesSinceUser, lastUserAt, windowOpen: winOpenNow,

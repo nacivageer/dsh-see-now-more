@@ -6,14 +6,36 @@
 
 ## 状态
 
-- 状态：待开工（格 2026-11-25 说「先搁着，哪天想做单开一轮」；交接文按她要求先写）
+- 状态：可验收（代码 + 单测 + **实机 1→9 已走**；只剩 rise 的「循环有料时自己开窗」那半条是代码级）
 - 对象：给 `see_now` 加一个**用户侧**的屏幕读取总开关——关掉后 `watch` / `start` / `peek` / `region`
   一律硬拒（**连显式 `source` 也不放行**），模型侧没有任何 action 能打开它；唯一入口是悬浮窗里的设置卡。
   配套加一个「关闭悬浮窗后默认行为」四档开关（见文末那一节，格 2026-11-25 定的档位与默认值）。
 - 归属：`C:\Users\Administrator\Documents\deepseek-harness\see-now-more`（session-d52e3d48 写）
-- 下一步：开一轮新会话照下面「落地位置」动手；动手前先 `git log --oneline -3` 核行号有没有漂。
-- 证据：本会话已核过的锚点行号见下（2026-11-25 05:00 左右；配套那节 08:40 核过）；上游对照物是本地 tag `upv0.2.7`。
-- 更新：2026-11-25 08:45 CST
+- 下一步：commit → 打 `v0.1.1-more.27`（annotated）→ Release 标 prerelease（等格点头再推）。
+- 证据：单测 `node --test` 366 项 / 363 过 / 3 skip；实机记录见文末「实机验收记录」。
+- 更新：2026-11-26 03:35 CST（session-2eaf2d91 接手后）
+
+## 实机验收记录（2026-11-26，格在旁共测）
+
+| # | 项 | 结果 |
+|---|---|---|
+| 1 | `node --test` | 366 项 / 363 过 / 3 skip（新增 `test/screen-gate.test.mjs` 7 条） |
+| 2 | 总开关热生效 | 写 `enabled:false` → 2.2s 后 `status` 首行「总开关：关」；`watch`（带 `source:"screen"`）/ `region` / `peek` / `start` 四入口全返 `disabled-by-user`；进程表无 `ffmpeg` / `window.py` / `pick_region`，`window-heartbeat` 未更新。**设置卡路径**：格点「屏幕读取」→ 关 / 开，JSON 写入正确、`status` 跟随 |
+| 3 | 窗还在、还能聊 | 窗里打的话进会话，`relay.log`：`ok(chat,followup)`（19:29:43）—— 第一次 `FAILED(session not found)` 是配置里绑定的旧会话 id（重启前的），插件自动退回当前会话重投，这是既有行为、与本档无关 |
+| 4 | 点回「开」→ 能看 | `watch` 正常出图（03:29） |
+| 5 | 重启后仍是关 | 重启后 `status` 首行「总开关：关」，采集未起（03:28） |
+| 6 | 版本 / 安装一致 | 三处 `0.1.1-more.27`；`install-dev --check` = `current`。tag / Release 待做 |
+| 7 | 四档 | `stop`：循环 `已停（window-closed）` + 采集停 + 听觉停 + 挂断说明；`ears`：循环 `只听` + 采集停 + **听觉在听**；`ghost`：`在看 screen`（21s / 233 帧）+ 循环在跑 + 听觉在听 + 窗不弹回；`rise`：`watch` 自己重开了窗（pid 换新）。**「循环唤醒时自己开窗」只在代码里，没有按需触发的手段** |
+| 8 | `say` 没窗 | 结果末尾出现「窗没开着，这句 say 没有气泡可投」 |
+| 9 | 默认档回归 | 未配置 `onWindowClose`（= stop）时关窗行为与 `more.26` 一致：全停 + 挂断 |
+
+实机才暴露、已修的三处：
+
+1. **留耳档关窗后耳朵被自己关掉**：`stopVision()` 停采集进程 → `run.done` 回调走 `teardown()` →
+   `listener.stop('采集收工')`。修法：`teardown(why, { keepAudio })` + `stopVision()` 在停进程前立标记。
+2. **设置卡那行提示被右边界截断**（格红框标出）：拆成两行短句（卡片最窄 380px 也放得下）。
+3. 附带：`ears` / `ghost` 下 `watch` 的「悬浮窗没开起来」改成「悬浮窗是关着的」——那一档是**故意不弹窗**，
+   不该写成故障。
 
 ## 一句话
 
