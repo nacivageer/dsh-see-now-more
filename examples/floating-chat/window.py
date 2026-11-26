@@ -134,6 +134,7 @@ from glass_geometry import (
     shapes_for,
 )
 from window_widgets import ChatFeed, Fonts, TextLayer
+from quote_text import format_quote_text, quote_preview, split_quote_blocks
 try:  # 单文件拷走 window.py 时也别让整个窗起不来：读不到就退回旧的预填判据
     from session_hint import current_session as _read_dsh_current_session
     from session_hint import prefill as _bind_prefill
@@ -1051,6 +1052,12 @@ class LiveGlass:
         self._focus_label = None
         # 图片（气泡里的 markdown / 裸路径 / URL）：本地同步加载，网络后台下载
         self._img_cache = {}
+        # 选区引用（2026-11-26）：输入草稿里的引用（{text, at}）；v1 只有一个，不进 chat.jsonl
+        self._draft_quote = None
+        # chip 命中：整块 (x0,y0,x1,y1) + × 的横向区间 (rx0,rx1)，每次 _render_input 重算
+        self._quote_hit = None
+        # 正文起画 x（有 chip 时右移；_input_index_at / 点击命中共用）
+        self._input_text_x = None
         self._img_pending = {}
         self._img_busy = set()
         self._seg_cache = {}
@@ -1771,10 +1778,10 @@ class LiveGlass:
     def _send(self, _event=None):
         if self._entry is None:
             return "break"
-        text = self._entry.get().strip()
-        if not text:
+        body = self._entry.get().strip()
+        if not body and not self._draft_quote:
             return "break"
-        text = self._expand_draft(text)      # [图片N] → ![图片](路径)
+        text = self._compose_send_text(body)     # 引用块在前 + [图片N] → ![图片](路径)
         try:
             append_user(text)
         except Exception as exc:
@@ -1788,6 +1795,8 @@ class LiveGlass:
         except Exception:
             pass
         self._img_refs = {}
+        self._draft_quote = None
+        self._quote_hit = None
         # 展开着某条气泡时发新话：先把它收回来，再贴到底部（2026-11-09 用户要求）。
         # 不收的话画面还钉在展开的那条上，自己刚发的话永远在视口外 —— 展开态把
         # `_scroll_px` 锁在 0（见 `_redraw_feed_layer`），新消息进来也看不见，
@@ -1939,6 +1948,144 @@ class LiveGlass:
         self._refresh_feed()
         self._draw_mic_dot()
 
+    # ---- 选区引用（2026-11-26 用户要求）----
+    #
+    # 气泡里选中文字 → 右键「引用选中文字」→ 输入区出现引号 chip → 发送时
+    # 拼成 DSH 同款 blockquote（`quote_text.format_quote_text`）。
+    #
+    # 引用只是**输入草稿的一部分**：不进 `chat.jsonl`，关窗不保留（和未发送的草稿一致）。
+    # Tk 是单行隐藏 Entry，做不到 DSH 那种原位原子节点，所以 chip 固定在正文左侧。
+
+    QUOTE_MAX = 4000          # 单次引用上限（超出截断并提示）
+    CHIP_H = 22
+    CHIP_BG = "#14202e"
+    CHIP_EDGE = "#2a4057"
+    CHIP_MARK = "#7fb8ff"
+    CHIP_TEXT = "#c7d6e8"
+    CHIP_CLOSE = "#8e9db2"
+
+    def _set_draft_quote(self, text: str) -> None:
+        """气泡右键「引用选中文字」的落点：存草稿、焦点给输入框、光标放开头。"""
+        raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not raw:
+            return
+        truncated = len(raw) > self.QUOTE_MAX
+        if truncated:
+            raw = raw[: self.QUOTE_MAX] + "…"
+        replaced = self._draft_quote is not None
+        self._draft_quote = {"text": raw, "at": time.time()}
+        self._sel = None
+        self._focus_input()
+        try:
+            self._entry.icursor(0)
+            self._entry.selection_clear()
+        except Exception:
+            pass
+        self._render_input()
+        if truncated:
+            self.feed.status = f"引用过长，已截到 {self.QUOTE_MAX} 字"
+            self._refresh_feed()
+        elif replaced:
+            self.feed.status = "已替换引用"
+            self._refresh_feed()
+
+    def _fit_ellipsis(self, font, text: str, maxw: float) -> str:
+        """按像素宽度截断并加 `…`（二分，避免每次按键扫 4000 个字）。"""
+        text = str(text or "")
+        if maxw <= 0:
+            return ""
+        if font.measure(text) <= maxw:
+            return text
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if font.measure(text[:mid] + "…") <= maxw:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo] + "…"
+
+    def _quote_chip_layout(self, base_x: float, cy: float, max_w: float) -> dict:
+        """chip 的几何（不画）：矩形、正文起点、预览文字、× 的命中区间。
+
+        单独拆出来是为了无 GUI 可测（`scripts/check-quote.py` 用假字体调它）。
+        """
+        f12 = self.fonts.get(12)
+        f11 = self.fonts.get(11)
+        mark_w = f12.measure("“")
+        close_w = f11.measure("”")
+        cross_w = f11.measure("×")
+        fixed = 8 + mark_w + 6 + close_w + 6 + cross_w + 8
+        chip_max = max(60.0, min(260.0, float(max_w) * 0.55))
+        preview_w = max(10.0, chip_max - fixed)
+        preview = self._fit_ellipsis(f11, quote_preview(
+            str((self._draft_quote or {}).get("text") or ""), limit=self.QUOTE_MAX), preview_w)
+        width = min(chip_max, fixed + f11.measure(preview))
+        x0, x1 = float(base_x), float(base_x) + width
+        rect = (x0, cy - self.CHIP_H / 2, x1, cy + self.CHIP_H / 2)
+        return {
+            "rect": rect,
+            "text_x": x1 + 8,
+            "preview": preview,
+            "preview_x": x0 + 8 + mark_w + 6,
+            "close": (x1 - 24, x1 - 4),
+        }
+
+    def _draw_quote_chip(self, chip: dict) -> None:
+        """画 chip：圆角底板 + 开引号 + 单行预览 + 闭引号 + ×。"""
+        c = self.canvas
+        x0, y0, x1, y1 = chip["rect"]
+        cy = (y0 + y1) / 2
+        tags = ("inputtext", "inputzone", "chrome")
+        try:
+            c.create_polygon(self._rounded_points(x0, y0, x1, y1, 11, 5),
+                             fill=self.CHIP_BG, outline=self.CHIP_EDGE,
+                             smooth=True, tags=tags)
+            self.text.draw(x0 + 8, cy, "“", anchor="w", fill=self.CHIP_MARK,
+                           size=12, tags=tags)
+            self.text.draw(chip["preview_x"], cy, chip["preview"], anchor="w",
+                           fill=self.CHIP_TEXT, size=11, tags=tags)
+            self.text.draw(x1 - 25, cy, "”", anchor="e", fill=self.CHIP_CLOSE,
+                           size=11, tags=tags)
+            self.text.draw(x1 - 8, cy, "×", anchor="e", fill=self.CHIP_CLOSE,
+                           size=12, tags=tags)
+        except Exception:
+            pass
+
+    def _compose_send_text(self, body: str) -> str:
+        """发送正文 = 引用块（在前）+ 空行 + 展开后的正文；没有引用时逐字不变。"""
+        quote = str((self._draft_quote or {}).get("text") or "").strip()
+        body = self._expand_draft(str(body or "").strip())
+        if not quote:
+            return body
+        text = format_quote_text(quote)
+        return f"{text}\n\n{body}" if body else text
+
+    def _quote_at_start(self) -> bool:
+        """光标在正文开头、没有选中、且挂着引用 —— 退格 / Delete 该先删引用。"""
+        if not self._draft_quote or self._entry is None:
+            return False
+        try:
+            if self._entry.selection_present():
+                return False
+            return int(self._entry.index("insert")) == 0
+        except Exception:
+            return False
+
+    def _drop_quote_at_start(self) -> bool:
+        if not self._quote_at_start():
+            return False
+        self._draft_quote = None
+        self._quote_hit = None
+        self._render_input()
+        return True
+
+    def _input_backspace(self, _e=None):
+        return "break" if self._drop_quote_at_start() else None
+
+    def _input_delete(self, _e=None):
+        return "break" if self._drop_quote_at_start() else None
+
     def _render_input(self) -> None:
         """输入文字画在 Canvas 上；Entry 只负责 IME/键盘，永远不可见。"""
         if self._entry is None:
@@ -1951,8 +2098,24 @@ class LiveGlass:
         except Exception:
             text, focused = "", False
         x0, y0, x1, y1, _r = self._geo.input_shape
-        x, y = x0 + 84, y0 + 27
-        maxw = max(60, x1 - x0 - 100)
+        cy = y0 + 27
+        base = x0 + 84
+        # 引用 chip：画在正文左边，正文整体右移（`_input_index_at` / 点击命中读同一个值）
+        chip = None
+        if self._draft_quote:
+            chip = self._quote_chip_layout(base, cy, max(60, x1 - base - 16))
+            self._draw_quote_chip(chip)
+        self._input_text_x = chip["text_x"] if chip else base
+        self._quote_hit = ((chip["rect"] + (chip["close"][0], chip["close"][1]))
+                           if chip else None)
+        # 隐藏 Entry 跟着正文起点走：输入法候选框不该飘到 chip 左边
+        try:
+            if getattr(self, "_entry_item", None) is not None:
+                c.coords(self._entry_item, self._input_text_x, cy)
+        except Exception:
+            pass
+        x = self._input_text_x
+        maxw = max(60, x1 - x - 16)
         font = self.fonts.get(11)
         if not text:
             self._input_shift = 0
@@ -1961,14 +2124,14 @@ class LiveGlass:
             if not focused:
                 # 占位文案也必须截断：窄窗时它会穿过「发送」按钮（2026-11-06 实报）。
                 room = x1 - x - 14
-                ph = "在这里向它输入文字或图片……"
-                if font.measure(ph) > room:
+                ph = "输入你的话…" if chip else "在这里向它输入文字或图片……"
+                if not chip and font.measure(ph) > room:
                     ph = "输入文字或图片…"
-                self.text.draw(x, y, self._fit_text(font, ph, room), anchor="w",
+                self.text.draw(x, cy, self._fit_text(font, ph, room), anchor="w",
                                fill="#8e9db2", size=11,
                                tags=("inputtext", "inputzone", "chrome"))
             else:
-                self._caret_item(c, x + 1, y)
+                self._caret_item(c, x + 1, cy)
             self.text.refresh()
             return
         # 视图跟着插入点走（2026-11-07 实报：长文字时按 ←，左边被挡的字回不来）。
@@ -1982,7 +2145,7 @@ class LiveGlass:
             print(f"[trace] input view n={len(text)} ins={ins} start={start} end={end}",
                   flush=True)
         self._input_shift = start
-        self._draw_input_text(c, x, y, font, text[start:end], start, focused)
+        self._draw_input_text(c, x, cy, font, text[start:end], start, focused)
         self.text.refresh()
 
     def _input_view(self, font, text, ins, maxw):
@@ -2180,7 +2343,7 @@ class LiveGlass:
         text = self._entry.get() if self._entry is not None else ""
         f = self.fonts.get(11)
         x0, _y0, _x1, _y1, _r = self._geo.input_shape
-        base = x0 + 84
+        base = getattr(self, "_input_text_x", None) or (x0 + 84)
         shift = getattr(self, "_input_shift", 0)
         acc = 0.0
         for i, ch in enumerate(text[shift:], start=shift):
@@ -2191,7 +2354,26 @@ class LiveGlass:
         return len(text)
 
     def _input_press(self, e=None):
-        """点输入栏：拿焦点 + 把光标放到点的位置，并开始一段选择。"""
+        """点输入栏：先判引用 chip（× 删引用、其余部分把光标放到开头），再放到点的位置。"""
+        hit = getattr(self, "_quote_hit", None)
+        if e is not None and hit is not None and hit[1] <= e.y <= hit[3]:
+            if hit[4] <= e.x <= hit[5]:
+                self._draft_quote = None
+                self._quote_hit = None
+                self._focus_input()
+                try:
+                    self._entry.icursor(0)
+                except Exception:
+                    pass
+                self._render_input()
+                return "break"
+            if hit[0] <= e.x <= hit[2]:
+                self._focus_input()
+                try:
+                    self._entry.icursor(0)
+                except Exception:
+                    pass
+                return "break"
         self._focus_input(e)
 
     def _input_select_to(self, x):
@@ -2688,8 +2870,11 @@ class LiveGlass:
         content_max = max(80, (bx1 - bx0) - 2 * pad)
         ls = max(1, self.fonts.get(11).metrics("linespace"))
         segs = []
-        for kind, payload in self._parse_blocks(str(msg.get("text") or "")):
-            if kind == "text":
+        notif_is_user = str(msg.get("role") or "").lower() in ("user", "me", "human")
+        for kind, payload in self._parse_blocks(str(msg.get("text") or ""),
+                                                quote_blocks=notif_is_user):
+            if kind in ("text", "q"):
+                # 收起态气泡不做引用样式（只有主窗 / 回顾窗要竖条），但引文必须去掉 `>`
                 body = payload.strip("\n")
                 if not body.strip():
                     continue
@@ -3172,6 +3357,9 @@ class LiveGlass:
         # 补一条 root 级绑定，让移动过程也能实时重画（第 83 条）。
         self.root.bind("<KeyPress>", self._on_root_key, add="+")
         self._entry.bind("<Return>", self._send)
+        # 光标在正文开头时，退格 / Delete 先删引用（不让它删掉正文第一个字）
+        self._entry.bind("<BackSpace>", self._input_backspace)
+        self._entry.bind("<Delete>", self._input_delete)
         self._entry.bind("<Control-v>", self._paste_image)
         self._entry.bind("<Control-V>", self._paste_image)
         self._entry.bind("<FocusIn>", lambda _e: self._render_input())
@@ -3885,13 +4073,28 @@ class LiveGlass:
         r'\.(?:png|jpe?g|gif|webp|bmp)(?:\?[^\s<>"\u3000）)]*)?)'
         r'|[A-Za-z]:\\[^\s<>"\u3000）)]+\.(?:png|jpe?g|gif|webp|bmp))', re.I)
 
-    def _parse_blocks(self, text):
-        """把消息正文切成 [("text", 文本) | ("img", 地址)]，保持原有顺序。
+    def _parse_blocks(self, text, quote_blocks=False):
+        """把消息正文切成 [("text", 文本) | ("img", 地址) | ("q", 引用文字)]。
 
         2026-11-06：**行内代码里的 `![...](...)` 是示例文字，不当图片。**
         5073c65e 22:43:15 那条回复用 `` `![图片](本地路径)` `` 解释链路，被当成
         真图片渲染成 `[图片]`，用户追问后才发现 —— 解析时必须先认出代码区间。
+
+        2026-11-26：`quote_blocks=True` 时先按 DSH 的 `quoteRule` 切出引用块
+        （`("q", 去掉 "> " 的原文)`），再对普通文本跑图片识别。**只对 user 气泡传 True**；
+        assistant 正文里的 `>` 维持原样显示。
         """
+        segments = split_quote_blocks(text) if quote_blocks else [("text", text)]
+        out = []
+        for kind, payload in segments:
+            if kind == "q":
+                out.append(("q", payload))
+            else:
+                out.extend(self._parse_image_blocks(payload))
+        return out
+
+    def _parse_image_blocks(self, text):
+        """图片识别：文本 → [("text", 文本) | ("img", 地址)]（`_parse_blocks` 的一半）。"""
         spans = [(m.start(), m.end()) for m in self.CODE_SPAN.finditer(text)]
 
         def in_code(i, table):
@@ -4020,12 +4223,12 @@ class LiveGlass:
         return out, paras
 
     def _draw_runs(self, x, y, line):
-        """按 run 画一行：粗体加粗、行内代码换淡蓝。宽度与折行用同一套 measure。"""
+        """按 run 画一行：粗体加粗、行内代码换淡蓝、引用段换淡蓝灰（2026-11-26）。"""
         cx = x
         for txt, style in line:
             if not txt:
                 continue
-            fill = "#ffffff" if style == "b" else ("#9fd6ff" if style == "c" else "#edf6ff")
+            fill = {"b": "#ffffff", "c": "#9fd6ff", "q": "#a9c4e0"}.get(style, "#edf6ff")
             self.text.draw(cx, y, txt, anchor="nw", fill=fill, size=11,
                            bold=(style == "b"), tags=("bubbles",),
                            shadow=False, adapt=not PLATE, per_char=not PLATE)
@@ -4080,7 +4283,7 @@ class LiveGlass:
         off = 0
         first = True
         for seg in segs:
-            if seg.get("kind") != "text":
+            if seg.get("kind") not in ("text", "q"):
                 continue
             if not first:
                 parts.append("\n")
@@ -4392,23 +4595,24 @@ class LiveGlass:
             text = msg.get("text") or ""
             max_img_h = (int(view_h * 0.6) if is_open else 120)
 
-            # 1) 切成段：文本（折行）/ 图片
+            # 1) 切成段：文本 / 引用块（折行）/ 图片
             raw = []
-            for kind, payload in self._parse_blocks(text):
-                if kind == "text":
+            for kind, payload in self._parse_blocks(text, quote_blocks=is_user):
+                if kind in ("text", "q"):
                     seg = payload.strip("\n")
                     if not seg.strip():
                         continue
                     _t0 = time.perf_counter()
-                    lines, paras = self._seg_lines_meta(seg, content_max,
-                                                        keep_blank=is_open)
-                    raw.append(("text", lines, paras))
+                    # 引用段左侧要画 2px 竖条 + 8px 间距：折行宽度先让出 10px
+                    width = content_max - 10 if kind == "q" else content_max
+                    lines, paras = self._seg_lines_meta(seg, width, keep_blank=is_open)
+                    raw.append((kind, lines, paras))
                     t_txt += time.perf_counter() - _t0
                     n_txt += len(seg)
                 else:
                     raw.append(("img", payload, None))
 
-            total_lines = sum(len(pl) for k, pl, _pa in raw if k == "text")
+            total_lines = sum(len(pl) for k, pl, _pa in raw if k in ("text", "q"))
             total_imgs = sum(1 for k, _pl, _pa in raw if k == "img")
 
             # 2) 摘要态：文本共 2 行 + 第一张图；展开态全给（超出靠像素滚动）
@@ -4416,26 +4620,26 @@ class LiveGlass:
                 cut = []
                 text_left, img_left = 2, 1
                 for kind, payload, paras in raw:
-                    if kind == "text" and text_left > 0:
+                    if kind in ("text", "q") and text_left > 0:
                         # 空行不占那两行的名额（原来段落之间的空行会把第二行吃掉，
                         # 屏幕上看就是"气泡里一行字 + 一大片空白"）
                         picked = [(ln, paras[i] if i < len(paras) else i)
                                   for i, ln in enumerate(payload) if ln][:text_left]
                         if picked:
-                            cut.append(("text", [ln for ln, _p in picked],
+                            cut.append((kind, [ln for ln, _p in picked],
                                         [p for _ln, p in picked]))
                             text_left -= len(picked)
                     elif kind == "img" and img_left > 0:
                         cut.append(("img", payload, None))
                         img_left -= 1
                 raw = cut
-            kept_lines = sum(len(pl) for k, pl, _pa in raw if k == "text")
+            kept_lines = sum(len(pl) for k, pl, _pa in raw if k in ("text", "q"))
             kept_imgs = sum(1 for k, _pl, _pa in raw if k == "img")
             more = (not is_open) and (kept_lines < total_lines or kept_imgs < total_imgs)
             if more:
                 # 截断了就要说一句：以前直接把尾巴砍掉，正文停在半句上（实报"话没说完"）
                 for i in range(len(raw) - 1, -1, -1):
-                    if raw[i][0] != "text" or not raw[i][1]:
+                    if raw[i][0] not in ("text", "q") or not raw[i][1]:
                         continue
                     lines_cut = list(raw[i][1])
                     last_cut = list(lines_cut[-1]) + [("…", "n")]
@@ -4447,7 +4651,7 @@ class LiveGlass:
                         else:
                             del last_cut[-2]
                     lines_cut[-1] = last_cut
-                    raw[i] = ("text", lines_cut, raw[i][2])
+                    raw[i] = (raw[i][0], lines_cut, raw[i][2])
                     break
 
             # 3) 图片：**只量尺寸、不加载像素**。108 条消息里 27 张图，松手重排时
@@ -4455,8 +4659,8 @@ class LiveGlass:
             #    `_paint_bubbles` 只为真正要画的那几张加载（2026-11-06 实测）。
             segs = []
             for kind, payload, paras in raw:
-                if kind == "text":
-                    segs.append({"kind": "text", "lines": payload,
+                if kind in ("text", "q"):
+                    segs.append({"kind": kind, "lines": payload,
                                  "paras": paras or [],
                                  "h": len(payload) * ls})
                 else:
@@ -4489,7 +4693,8 @@ class LiveGlass:
             body = max(ls + 16, sum(s["h"] for s in segs) + 16)
             if more:
                 body += 32          # 给右下角「展开」按钮留高度
-            inner = max([0] + [self._runs_width(line) for s in segs if s["kind"] == "text"
+            inner = max([0] + [self._runs_width(line) for s in segs
+                               if s["kind"] in ("text", "q")
                                for line in s["lines"]]
                         + [s["w"] for s in segs if s["kind"] == "img"])
             bw = min(max_bubble, max(min_bubble, inner + 2 * pad))
@@ -4689,9 +4894,23 @@ class LiveGlass:
                     smooth=True, tags=("bubbles",))
             sy = by0 + e["text_off"]
             for seg in e["segs"]:
-                if seg["kind"] == "text":
+                if seg["kind"] in ("text", "q"):
+                    is_quote = seg["kind"] == "q"
+                    bn = 10 if is_quote else 0       # 引用段：竖条 2px + 间距 8px
                     base = seg.get("base", 0)
                     offs = seg.get("offs") or []
+                    xt = e["tx"] + bn
+                    if is_quote:
+                        # 整段一条竖条（不是每行一段）：滚动时按视口裁
+                        y0q = max(sy, clip_top)
+                        y1q = min(sy + len(seg["lines"]) * e["ls"], view_bottom)
+                        if y1q - y0q >= 4:
+                            try:
+                                c.create_rectangle(e["tx"] + 2, y0q + 2, e["tx"] + 4, y1q - 2,
+                                                   fill="#7fb8ff", outline="",
+                                                   tags=("bubbles",))
+                            except Exception:
+                                pass
                     for li, line in enumerate(seg["lines"]):
                         ly = sy
                         sy += e["ls"]
@@ -4700,13 +4919,14 @@ class LiveGlass:
                             continue
                         off = base + (offs[li] if li < len(offs) else 0)
                         lw = self._runs_width(line)
-                        self._paint_sel_line(e["tx"], ly, e["ls"], line, off,
+                        self._paint_sel_line(xt, ly, e["ls"], line, off,
                                              selmap.get(e["key"]))
-                        self._draw_runs(e["tx"], ly, line)
+                        self._draw_runs(xt, ly,
+                                        [(t, "q") for t, _s in line] if is_quote else line)
                         self._sel_lines.append({
                             "key": e["key"], "off": off,
                             "text": "".join(t for t, _s in line),
-                            "runs": line, "x": e["tx"], "top": ly, "h": e["ls"], "w": lw})
+                            "runs": line, "x": xt, "top": ly, "h": e["ls"], "w": lw})
                 elif seg["kind"] == "img":
                     iy = sy
                     sy += seg["h"]
@@ -6532,7 +6752,7 @@ class LiveGlass:
         for txt, style in line:
             if not txt:
                 continue
-            fill = "#ffffff" if style == "b" else ("#9fd6ff" if style == "c" else "#edf6ff")
+            fill = {"b": "#ffffff", "c": "#9fd6ff", "q": "#a9c4e0"}.get(style, "#edf6ff")
             t.draw(cx, y, txt, anchor="nw", fill=fill, size=11,
                    bold=(style == "b"), tags=("hbody",),
                    shadow=False, adapt=False, per_char=False)
@@ -6568,41 +6788,43 @@ class LiveGlass:
             key = str(e.get("_key") or e.get("at") or "")
             is_open = expanded is not None and key == str(expanded)
             raw = []
-            for kind, payload in self._parse_blocks(e.get("text") or ""):
-                if kind == "text":
+            for kind, payload in self._parse_blocks(e.get("text") or "",
+                                                    quote_blocks=is_user):
+                if kind in ("text", "q"):
                     seg = payload.strip("\n")
                     if not seg.strip():
                         continue
-                    lines, paras = self._seg_lines_meta(seg, content_max)
-                    raw.append(("text", lines, paras))
+                    width = content_max - 10 if kind == "q" else content_max
+                    lines, paras = self._seg_lines_meta(seg, width)
+                    raw.append((kind, lines, paras))
                 else:
                     raw.append(("img", payload, None))
 
-            total_lines = sum(len(pl) for k, pl, _pa in raw if k == "text")
+            total_lines = sum(len(pl) for k, pl, _pa in raw if k in ("text", "q"))
             total_imgs = sum(1 for k, _pl, _pa in raw if k == "img")
             more = False
             if not is_open:
                 cut = []
                 text_left, img_left = 2, 1
                 for kind, payload, paras in raw:
-                    if kind == "text" and text_left > 0:
+                    if kind in ("text", "q") and text_left > 0:
                         # 空行不占那两行的名额（主窗同款：不然摘要只剩一行字）
                         picked = [(ln, paras[i] if i < len(paras) else i)
                                   for i, ln in enumerate(payload) if ln][:text_left]
                         if picked:
-                            cut.append(("text", [ln for ln, _p in picked],
+                            cut.append((kind, [ln for ln, _p in picked],
                                         [p for _ln, p in picked]))
                             text_left -= len(picked)
                     elif kind == "img" and img_left > 0:
                         cut.append(("img", payload, None))
                         img_left -= 1
-                kept_lines = sum(len(pl) for k, pl, _pa in cut if k == "text")
+                kept_lines = sum(len(pl) for k, pl, _pa in cut if k in ("text", "q"))
                 kept_imgs = sum(1 for k, _pl, _pa in cut if k == "img")
                 more = kept_lines < total_lines or kept_imgs < total_imgs
                 if more:
                     # 截断了就补省略号：以前直接砍断，正文停在半句上
                     for i in range(len(cut) - 1, -1, -1):
-                        if cut[i][0] != "text" or not cut[i][1]:
+                        if cut[i][0] not in ("text", "q") or not cut[i][1]:
                             continue
                         lines_cut = list(cut[i][1])
                         last_cut = list(lines_cut[-1]) + [("…", "n")]
@@ -6613,14 +6835,14 @@ class LiveGlass:
                             else:
                                 del last_cut[-2]
                         lines_cut[-1] = last_cut
-                        cut[i] = ("text", lines_cut, cut[i][2])
+                        cut[i] = (cut[i][0], lines_cut, cut[i][2])
                         break
                 raw = cut
 
             segs = []
             for kind, payload, paras in raw:
-                if kind == "text":
-                    segs.append({"kind": "text", "lines": payload,
+                if kind in ("text", "q"):
+                    segs.append({"kind": kind, "lines": payload,
                                  "paras": paras or [],
                                  "h": len(payload) * ls})
                 else:
@@ -6653,7 +6875,8 @@ class LiveGlass:
                 sid_full = str(e.get("sid") or "")
                 src_short = (sid_full[len("session-"):][:8] if sid_full.startswith("session-")
                              else (sid_full[:8] or "未归属"))
-            inner = max([0] + [self._runs_width(ln) for s in segs if s["kind"] == "text"
+            inner = max([0] + [self._runs_width(ln) for s in segs
+                               if s["kind"] in ("text", "q")
                                for ln in s["lines"]]
                         + [s["w"] for s in segs if s["kind"] == "img"])
             bw = min(max_bubble, max(140, inner + pad * 2))
@@ -6762,24 +6985,37 @@ class LiveGlass:
                     smooth=True, tags=("hbody",))
             sy = by0 + 8
             for seg in e["segs"]:
-                if seg["kind"] == "text":
+                if seg["kind"] in ("text", "q"):
+                    is_quote = seg["kind"] == "q"
+                    xq = e["bx0"] + e["pad"] + (10 if is_quote else 0)
                     base = seg.get("base", 0)
                     offs = seg.get("offs") or []
+                    if is_quote:
+                        y0q = max(sy, clip_top)
+                        y1q = min(sy + len(seg["lines"]) * ls, bottom)
+                        if y1q - y0q >= 4:
+                            try:
+                                c.create_rectangle(e["bx0"] + e["pad"] + 2, y0q + 2,
+                                                   e["bx0"] + e["pad"] + 4, y1q - 2,
+                                                   fill="#7fb8ff", outline="",
+                                                   tags=("hbody",))
+                            except Exception:
+                                pass
                     for li, line in enumerate(seg["lines"]):
                         ly = sy
                         sy += ls
                         if ly < clip_top or ly + 20 > bottom:
                             continue
                         off = base + (offs[li] if li < len(offs) else 0)
-                        x = e["bx0"] + e["pad"]
-                        self._paint_sel_line(x, ly, ls, line, off,
+                        self._paint_sel_line(xq, ly, ls, line, off,
                                              selmap.get(e["key"]),
                                              canvas=c, tag="hbody")
-                        self._hist_draw_runs(x, ly, line)
+                        self._hist_draw_runs(xq, ly,
+                                             [(t, "q") for t, _s in line] if is_quote else line)
                         st["sel_lines"].append({
                             "key": e["key"], "off": off,
                             "text": "".join(t for t, _s in line),
-                            "runs": line, "x": x, "top": ly, "h": ls,
+                            "runs": line, "x": xq, "top": ly, "h": ls,
                             "w": self._runs_width(line)})
                 else:
                     iy = sy
@@ -7048,7 +7284,8 @@ class LiveGlass:
                 self._bubble_menu(e.x_root, e.y_root, ent,
                                   in_fav=(st.get("page") == "fav"),
                                   sel_text=self._hist_sel_text(),
-                                  on_copy_sel=self._hist_copy_selection)
+                                  on_copy_sel=self._hist_copy_selection,
+                                  allow_quote=False)
                 return
 
     def _show_row_menu(self, x_root, y_root, g) -> None:
@@ -8661,7 +8898,7 @@ class LiveGlass:
         # 图片之外：落在气泡上就弹气泡菜单（2026-11-06 用户要求）
         for (x0, y0, x1, y1), ent in getattr(self, "_bubble_hits", []):
             if x0 <= e.x <= x1 and y0 <= e.y <= y1:
-                self._bubble_menu(e.x_root, e.y_root, ent)
+                self._bubble_menu(e.x_root, e.y_root, ent, allow_quote=True)
                 return
 
     def _show_img_menu(self, x_root, y_root, src: str) -> None:
@@ -9542,12 +9779,16 @@ class LiveGlass:
             pass
         return ""
 
-    def _bubble_html(self, text: str) -> str:
-        """气泡正文 → CF_HTML 片段：一行一个 div，图片用 file:/// 内嵌。"""
+    def _bubble_html(self, text: str, quote_blocks: bool = False) -> str:
+        """气泡正文 → CF_HTML 片段：一行一个 div，图片用 file:/// 内嵌。
+
+        `quote_blocks=True`（user 气泡）：引用块在富文本里按普通段落输出（去掉 `>`）；
+        **纯文本剪贴板仍是原始 Markdown**（`_copy_bubble` 的另一个参数）。
+        """
         import html as _h
         parts = []
-        for kind, payload in self._parse_blocks(str(text or "")):
-            if kind == "text":
+        for kind, payload in self._parse_blocks(str(text or ""), quote_blocks=quote_blocks):
+            if kind in ("text", "q"):
                 for line in str(payload).split("\n"):
                     s = line.strip()
                     parts.append("<div>" + (_h.escape(s) if s else "<br>") + "</div>")
@@ -9561,20 +9802,23 @@ class LiveGlass:
         return ('<div style="font-family:Microsoft YaHei,Segoe UI;'
                 'font-size:13px;color:#1a1a1a">' + "".join(parts) + "</div>")
 
-    def _copy_bubble(self, sid: str, at, text: str) -> None:
+    def _copy_bubble(self, sid: str, at, text: str, role: str = "") -> None:
+        quote = str(role or "").lower() in ("user", "me", "human")
         try:
-            ok = _set_clipboard_rich(str(text or ""), self._bubble_html(text))
+            ok = _set_clipboard_rich(str(text or ""),
+                                     self._bubble_html(text, quote_blocks=quote))
         except Exception as exc:
             print("copy bubble failed:", repr(exc), flush=True)
             ok = False
         self._flash_status("已复制全文" if ok else "复制失败")
 
     def _bubble_menu(self, x_root, y_root, ent: dict, in_fav: bool = False,
-                     sel_text=None, on_copy_sel=None) -> None:
-        """气泡右键：复制选中文字 / 复制全文 / 隐藏这条（红）/ 收藏（黄）。
+                     sel_text=None, on_copy_sel=None, allow_quote: bool = False) -> None:
+        """气泡右键：引用选中文字 / 复制选中文字 / 复制全文 / 隐藏这条（红）/ 收藏（黄）。
 
         图片上右键仍走图片菜单。主窗和回顾窗共用：回顾窗把 `sel_text` /
-        `on_copy_sel` 传进来，否则默认读主窗的选区。
+        `on_copy_sel` 传进来，否则默认读主窗的选区。`allow_quote` 只有主窗传 True ——
+        回顾窗是独立 Toplevel，点完引用要么被它盖住输入框、要么强行关窗，留到 P2。
         """
         src = ent.get("msg") or ent
         sid = str(src.get("sid") or ent.get("sid") or self._bound_full or "")
@@ -9589,6 +9833,8 @@ class LiveGlass:
         # 「复制内容」按用户当天要求改名「复制全文」（有选区时两项并存，语义不撞）。
         items = []
         if sel_text:
+            if allow_quote:
+                items.append(("引用选中文字", "quote"))
             items.append(("复制选中文字", "copysel"))
         items.append(("复制全文", "copy"))
         if in_fav:
@@ -9599,10 +9845,13 @@ class LiveGlass:
                           "#e8c34a"))
 
         def pick(action):
-            if action == "copysel":
+            if action == "quote":
+                self._set_draft_quote(sel_text)
+            elif action == "copysel":
                 copy_sel()
             elif action == "copy":
-                self._copy_bubble(sid, at, str(src.get("text") or ""))
+                self._copy_bubble(sid, at, str(src.get("text") or ""),
+                                  role=str(src.get("role") or ""))
             elif action == "fav":
                 self._fav_add(sid, at, src)
             elif action == "unfav":

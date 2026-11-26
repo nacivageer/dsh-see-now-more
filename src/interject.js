@@ -59,25 +59,63 @@ const clip = (s, n = 80) => {
   return t.length > n ? `${t.slice(0, n)}…` : t;
 };
 
+/** 插话末尾那段固定要求（无引用 / 有引用两条路共用，保证「没有引用时逐字不变」）。 */
+const INSTRUCTION = '\n**先说话，再干活** —— 先回这一句。普通回复悬浮窗里一个字都看不到（也不会被念），只有 `say` 会进那条流。'
+  + '下一次调用必须带 `say`：`see_now({ action:"watch", say: "…" })`，'
+  + '要同时看一眼直接加在**同一次调用**里（`say` 在采集**之前**就写进流，字先出、画面后到）。';
+
+/** 引用块上限：窗口已经限 4000，这里再兜一层（防绕过窗口直接投递）。 */
+const QUOTE_MAX = 4000;
+
+/**
+ * 切开头的引用块：`> ` 行原样保留（要给 DSH 的 `quoteRule` 渲染），
+ * 后面的正文用于「插话说明」。没有引用块返回 null。
+ *
+ * 只认**开头**的连续 `^ {0,3}>` 行：用户消息里正文中间的 `>` 不该被当成引用头，
+ * 那会把它整个搬走、插话说明变空。
+ */
+export function splitLeadingQuote(text) {
+  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const quote = [];
+  let i = 0;
+  while (i < lines.length && /^ {0,3}>/.test(lines[i])) {
+    quote.push(lines[i]);
+    i += 1;
+  }
+  if (!quote.length) return null;
+  return {
+    quote: quote.join('\n').slice(0, QUOTE_MAX),
+    rest: lines.slice(i).join('\n').trim(),
+  };
+}
+
 /**
  * 插话交给模型的那一段话。三条都是踩出来的：
  *   ① **先说话再干活** —— 普通回复悬浮窗里看不见、也不会被念，只有 `say` 会；
  *   ② **`say` 和取图可以同一次调用** —— `say` 在取图**之前**就写进流，字先出、画面后到；
  *   ③ 一段话，不是一屏话。
  *
- * @param {string} text 用户原话
+ * 2026-11-26：带引用时**引用块原样放最前**、不参与 200 字截断 —— 否则 DSH 主窗
+ * 只看到 `[看屏幕·用户插话] 「> …」`，长引用还会被截掉，等于只在浮窗里有效。
+ *
+ * @param {string} text 用户原话（可能以 `> ` 引用块开头）
  * @param {{at?:number|null}} [o] `at` 是收到的墙钟时刻（写进抬头，便于对时）
  */
 export function interjectNote(text, { at = null } = {}) {
   const said = String(text ?? '').trim();
-  noteInterjected(said, at ? { at } : undefined);
-  const when = Number.isFinite(Number(at))
+  const q = splitLeadingQuote(said);
+  const body = q ? q.rest : said;
+  // 待回执记的是**正文**：否则「未回应」提醒里会复读四千字引用
+  noteInterjected(q ? (body || '引用了一段内容') : said, at ? { at } : undefined);
+  // `Number(null)` 是 0（finite），不判 null 会给每条没带 at 的插话印一个 @08:00:00
+  const when = at != null && Number.isFinite(Number(at))
     ? ` @${new Date(Number(at)).toTimeString().slice(0, 8)}`
     : '';
-  return `[看屏幕·用户插话${when}] 「${clip(said, 200)}」`
-    + '\n**先说话，再干活** —— 先回这一句。普通回复悬浮窗里一个字都看不到（也不会被念），只有 `say` 会进那条流。'
-    + '下一次调用必须带 `say`：`see_now({ action:"watch", say: "…" })`，'
-    + '要同时看一眼直接加在**同一次调用**里（`say` 在采集**之前**就写进流，字先出、画面后到）。';
+  if (!q) {
+    return `[看屏幕·用户插话${when}] 「${clip(said, 200)}」${INSTRUCTION}`;
+  }
+  const explain = body || '用户引用了一段内容（见上方引用块）';
+  return `${q.quote}\n\n[看屏幕·用户插话${when}] 「${clip(explain, 200)}」${INSTRUCTION}`;
 }
 
 /**

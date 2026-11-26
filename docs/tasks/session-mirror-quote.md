@@ -3,7 +3,7 @@
 状态：进行中
 对象：给 see-now-more 的悬浮窗补两条。① **消息同步**：绑定会话里、用户在 DSH 主窗发的消息，实时进浮窗主聊天窗（用户气泡），并在插件启动 / 换绑时回填最近的用户消息；② **选区引用**：气泡里选中文字后右键多一项「引用选中文字」，输入区出现引号 chip，可删；发送后正文是 DSH 同款的 Markdown blockquote（每行 `> `），DSH 主窗也按引用渲染。
 归属：session-a58208c0-82bc-48b0-ad40-6cbf7a9a7756（任务书）/ `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：格已确认 A/B/C 并开工（2026-11-26 12:20）。功能 1 代码完成（判据层 / `mirror.js` / 四处过滤 / ChatFeed 排序；`node --test` 380 项 / 377 过 / 0 失败 / 3 skip，`scripts/check-feed-order.py` exit 0）；下一步功能 2 引用（`quote_text.py` → chip → 气泡渲染 → relay）。
+下一步：功能 2 代码也完成（`quote_text.py` / chip / 气泡引用段 / relay 引用块）。剩：装 profile → 重启 DSH 验 A/B/C → 文档（README / 机制 / 决策记录 / CHANGELOG）→ 版本 `0.1.1-more.29` → tag / Release。
 证据：
   - `src/index.js:877-898`：`mirrorAssistantText` 只镜像 `assistant/message` 的正文；`src/index.js:906-945` 的 `session/event` 钩子已经在按绑定会话过滤，但 `user/message` 只用于 `loop.noteUserSpoke`（937 行），没有写进聊天流。
   - `examples/floating-chat/window.py:685-690`：浮窗用户消息由窗口自己 `append_user` 写 `chat.jsonl`；`src/chat.js:80-89` 是插件侧唯一写入口。
@@ -13,7 +13,7 @@
   - 上游 `SAOS-3624/dsh-see-now` v0.2.9（2026-11-25）只同步 mic / window 三处修复；本仓 `mic.py:236` 仍写死 `D:/asr-local/models-sherpa`，`window.py:1615-1619` 仍每 250ms 清麦克风状态。
   - `git status --short` 空；HEAD `cb8ea1e`；版本 `0.1.1-more.27`（`package.json` / `dsh.plugin.json` 同值）。
 账：无需（本任务书只写方案，未跑实现 / 验收）
-更新：2026-11-26 12:36 CST
+更新：2026-11-26 13:10 CST
 
 ## 现状依据
 
@@ -360,4 +360,5 @@ def format_quote_text(text: str) -> str:
 - 2026-11-26 08:35 补入 watch-together v0.3.7 参考（**未开工**）：ChatFeed 去重键加 `mid`；启动扫 `chat.jsonl` 尾部已有 `mid`（补「写成功但水位没落盘」的崩溃窗口）；加 `scripts/check-quote.py` 无 GUI harness（照 `check-input-select.py`）与「镜像条目不唤醒 loop/watch」测试（照 `interject-anywhere` 的等待者用例）。同时记下：outbox 不是聊天输入通道，不迁协议；视频模块与整体拆分不借。等格说开工再动功能 1。
 - 2026-11-26 12:16 按格要求给任务顺序第 8 步补一条收尾检查：做完回头核 `README.md` 与 `src/tool-spec.js`（模型看到的 schema）要不要跟着改；本任务预期不加参数、schema 不动，但核过也要写明。只改任务书，功能代码未动。
 - 2026-11-26 12:36 开工（格确认 A/B/C）。功能 1 完成：`human.js` 加 `isTypedUserMessage`；`chat.js` 的 `appendChat` 支持 `{sid,at,mid,origin}`，加 `isFloatUserEntry` / `pendingStartupEntries`；新增 `mirror.js`（实时镜像 / 回填 / 水位 / 启动扫 `mid`）；`index.js` 接线（`session/event` 钩子、3 秒启动回填、换绑回填）；`loop.js` / `runner.js` / 启动补投 / relay 四处过滤；`window_widgets.py` 的 ChatFeed 加 `mid` 去重并按 `at` 排序，`window.py` 的 `_history_entries` 先排再取 500。验证：`node --test` 380 tests / 377 pass / 0 fail / 3 skip；`python scripts/check-feed-order.py` exit 0。代码与本文随本轮提交。
+- 2026-11-26 13:10 功能 2 代码完成：`examples/floating-chat/quote_text.py`（`format_quote_text` / `split_quote_blocks` / `quote_preview`）；`scripts/check-quote.py` 无 GUI 验编码 / chip 几何 / 发送拼装 / 退格删引用；`window.py` 加「引用选中文字」菜单（仅主窗，回顾窗 `allow_quote=False`）、`_draft_quote` + 引号 chip + 退格/Delete 删除 + 发送拼装、气泡引用段（主窗 + 回顾窗，竖条 + `#a9c4e0`、摘要 2 行预算含引用行）、收起态与富文本复制把引文去 `>`；`src/interject.js` 开头引用块原样保留、不参与 200 字截断、待回执只记正文。顺带修 `interjectNote` 在 `at=null` 时印出 `@08:00:00`（`Number(null)=0`）。验证：`node --test` 387 tests / 384 pass / 0 fail / 3 skip；`py_compile` exit 0；`check-quote.py` / `check-feed-order.py` 均 exit 0。代码与本文随本轮提交。
 
