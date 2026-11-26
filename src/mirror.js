@@ -31,16 +31,17 @@
  * ## 边界（别扩）
  *
  * - 用户消息只认 `source.kind === "user"`（`isTypedUserMessage`）：卡片按钮、
- *   插件自己的叫醒、工具消息都不进。图片只写一行 `[图片]` 占位。
+ *   插件自己的叫醒、工具消息都不进。图片（`.32` 起）引用附件对象路径，找不到就写
+ *   一行 `[图片]` 占位。
  * - assistant 只搬 `type:"text"` 的块；`reasoning` / `tool-call` 不进。
  * - 回填只取绑定会话、最近 500 条 / 30 天，跳过 fork 继承前缀。
  * - 失败只记 `mirror.log`，不重试、不弹窗、不影响实时镜像和工具调用。
  */
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { appendChat, chatDir, chatFile } from './chat.js';
+import { appendChat, chatDir, chatFile, dshHome } from './chat.js';
 import { isTypedUserMessage } from './human.js';
 import { isRelayInjectedId, serviceOf } from './timer.js';
 
@@ -72,25 +73,51 @@ export function mirrorPaths(env = process.env) {
  * `UserMessage`（`{id, content, source}`），没有 `message` 包一层；
  * 兼容包一层的实现，两种都认。
  *
- * 没有文字但有图片 → `[图片]`（不搬实体，点不开）；两者都没有 → 空串（跳过）。
+ * 没有文字但有图片 → 图片 Markdown（见 `imageMarkdownOf`）；两者都没有 → 空串（跳过）。
+ *
+ * 图片从 `.32` 起也进浮窗：附件对象按 sha256 存，直接引用不复制；对象不在就退回
+ * 一行 `[图片]`。图文混排按原块顺序拼。
  *
  * @param {object} event
+ * @param {object} [env] `DSH_HOME` 等（测试注入；决定附件对象路径）
  * @returns {string}
  */
-export function mirrorTextOf(event) {
+export function mirrorTextOf(event, env = process.env) {
   const data = event?.data ?? event ?? {};
   const blocks = data.content ?? data.message?.content;
   if (!Array.isArray(blocks)) return '';
-  const texts = [];
-  let hasImage = false;
+  const parts = [];
   for (const b of blocks) {
-    if (b?.type === 'text' && typeof b.text === 'string') texts.push(b.text);
-    else if (typeof b?.type === 'string' && b.type.startsWith('image')) hasImage = true;
+    if (b?.type === 'text' && typeof b.text === 'string') parts.push(b.text);
+    else if (typeof b?.type === 'string' && b.type.startsWith('image')) parts.push(imageMarkdownOf(b, env));
   }
-  let text = texts.join('\n').trim();
-  if (!text && hasImage) text = '[图片]';
+  const text = parts.join('\n').trim();
   if (!text) return '';
   return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…` : text;
+}
+
+/**
+ * 用户消息里的图片 → 浮窗能渲染的 Markdown。
+ *
+ * 形状（真实事件，2026-11-26 核过）：`{type:"image", attachment:{attachmentId:"sha256:<hex>", mediaType, width, height, name}}`。
+ * 附件对象在 `~/.dsh/attachments/v1/objects/<hex 前两位>/<hex>`；窗口对绝对路径
+ * 原样加载、按内容解码（不看扩展名），所以**直接引用**，不复制一份占盘。
+ * 对象被清理 / 不是 sha256 存储 → 退回 `[图片]`（`.31` 的行为）。
+ *
+ * @param {object} block 图片内容块
+ * @param {object} [env]
+ * @returns {string}
+ */
+export function imageMarkdownOf(block, env = process.env) {
+  const id = String(block?.attachment?.attachmentId ?? '');
+  const m = /^sha256:([0-9a-f]{64})$/i.exec(id);
+  if (!m) return '[图片]';
+  const hex = m[1];
+  const file = join(dshHome(env), 'attachments', 'v1', 'objects', hex.slice(0, 2), hex);
+  try {
+    if (!statSync(file).isFile()) return '[图片]';
+  } catch { return '[图片]'; }
+  return `![图片](${file})`;
 }
 
 /** 去重键；没有合法 seq 时返回空串（调用方跳过）。 */
@@ -361,7 +388,7 @@ export function createSessionMirror({
    * 由调用方决定停在哪。
    */
   const writeEvent = (sid, event, { persist = true } = {}) => {
-    const text = mirrorTextOf(event);
+    const text = mirrorTextOf(event, env);
     const seq = Number(event?.seq);
     if (!text) {
       // 没有可读正文（例如只有附件实体）：跳过，但水位要越过它，否则每次回填都重扫

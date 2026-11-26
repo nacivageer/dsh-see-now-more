@@ -99,6 +99,27 @@ test('mirrorTextOf：多块拼接 / 只有图片写 [图片] / 空跳过 / 超�
   assert.ok(clipped.endsWith('…'));
 });
 
+test('mirrorTextOf：图片引用附件对象；图文按原顺序；对象不在退回 [图片]', () => {
+  const env = sandbox();
+  const hex = 'a'.repeat(64);
+  const objDir = join(env.DSH_HOME, 'attachments', 'v1', 'objects', hex.slice(0, 2));
+  mkdirSync(objDir, { recursive: true });
+  writeFileSync(join(objDir, hex), 'not-a-real-png-but-a-file', 'utf8');
+
+  const img = (id) => ({ type: 'image', attachment: { attachmentId: id, mediaType: 'image/png', width: 10, height: 10 } });
+  const ev = (content) => ({ type: 'user/message', seq: 1, data: { content, source: { kind: 'user' } } });
+
+  const both = mirrorTextOf(ev([img(`sha256:${hex}`), { type: 'text', text: '看图' }]), env);
+  assert.match(both, /^!\[图片\]\(C:.*a{64}\)\n看图$/, '图片在前、正文在后，路径是附件对象');
+
+  // 纯图片：一张 markdown，不再是 [图片] 占位
+  assert.match(mirrorTextOf(ev([img(`sha256:${hex}`)]), env), /^!\[图片\]\(C:.*\)$/);
+
+  // 对象不在 / 不是 sha256 存储：退回占位
+  assert.equal(mirrorTextOf(ev([img(`sha256:${'b'.repeat(64)}`)]), env), '[图片]');
+  assert.equal(mirrorTextOf(ev([img('attachment-123')]), env), '[图片]');
+});
+
 test('appendChat：sid / at / mid / origin 原样落盘，旧调用不受影响', () => {
   const env = sandbox();
   const entry = appendChat('user', ' 主窗的话 ', {
