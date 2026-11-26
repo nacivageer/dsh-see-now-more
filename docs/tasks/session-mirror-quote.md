@@ -13,7 +13,7 @@
   - 上游 `SAOS-3624/dsh-see-now` v0.2.9（2026-11-25）只同步 mic / window 三处修复；本仓 `mic.py:236` 仍写死 `D:/asr-local/models-sherpa`，`window.py:1615-1619` 仍每 250ms 清麦克风状态。
   - `git status --short` 空；HEAD `cb8ea1e`；版本 `0.1.1-more.27`（`package.json` / `dsh.plugin.json` 同值）。
 账：无需（本任务书只写方案，未跑实现 / 验收）
-更新：2026-11-26 08:35 CST
+更新：2026-11-26 12:16 CST
 
 ## 现状依据
 
@@ -308,7 +308,7 @@ def format_quote_text(text: str) -> str:
 5. 输入区：`_draft_quote`、chip、布局偏移、退格 / Delete、发送拼装；手工点验。
 6. 气泡渲染：主窗 + 回顾窗的引用段与颜色；回归 assistant 的 `>` 原样显示。
 7. relay：`interjectNote` 保留引用块 + 单测；在 DSH 主窗确认引用被渲染。
-8. 文档、版本（`0.1.1-more.29`）、tag / prerelease、验收记录。
+8. 文档、版本（`0.1.1-more.29`）、tag / prerelease、验收记录。**收尾时回头核一遍 `README.md` 与 `src/tool-spec.js`（模型看到的 schema）要不要跟着改**：本任务预期不动 schema（不加参数），但「核过、不用改」也要写进状态块，不能默认跳过。
 
 ## 验收（10 条，每条都要能抄出证据）
 
@@ -358,4 +358,5 @@ def format_quote_text(text: str) -> str:
 - 2026-11-26 08:08 上游 v0.2.9 三处回移完成（**未提交，等格确认**）：`mic.py` 加 `resolve_models_dir`（显式目录缺文件报错 2、http 只查 `silero_vad.onnx`）；`window.py` 用 `_on_mic_exit` + stderr 泵（只留内存、跳过转写行）+ `_mic_models_from_asr`（asr.json 的 `--models` 是 SenseVoice，不能直接当 mic 目录）。验证：`py_compile` OK；ASR venv 跑 `mic.py --from-file 0.wav --dry-run` 转写成功、exit 0；空 `--models-dir` exit 2 且报缺文件；`node --test` 366 tests / 363 pass / 0 fail / 3 skip；无 Tk 探针把状态跑到 `麦没起来：挂了：Error querying device -1`（本机无输入端点），不再被 250ms 轮询抹掉。
 - 2026-11-26 08:18 发版：commit `e80403a` / tag `v0.1.1-more.28` / prerelease <https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.28>；`install-dev.mjs` 已把 desktop profile 同步到 `.28`（`--check` 报 current），**重启 DSH 后生效**。
 - 2026-11-26 08:35 补入 watch-together v0.3.7 参考（**未开工**）：ChatFeed 去重键加 `mid`；启动扫 `chat.jsonl` 尾部已有 `mid`（补「写成功但水位没落盘」的崩溃窗口）；加 `scripts/check-quote.py` 无 GUI harness（照 `check-input-select.py`）与「镜像条目不唤醒 loop/watch」测试（照 `interject-anywhere` 的等待者用例）。同时记下：outbox 不是聊天输入通道，不迁协议；视频模块与整体拆分不借。等格说开工再动功能 1。
+- 2026-11-26 12:16 按格要求给任务顺序第 8 步补一条收尾检查：做完回头核 `README.md` 与 `src/tool-spec.js`（模型看到的 schema）要不要跟着改；本任务预期不加参数、schema 不动，但核过也要写明。只改任务书，功能代码未动。
 
