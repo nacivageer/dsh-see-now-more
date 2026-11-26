@@ -3,7 +3,7 @@
 状态：进行中
 对象：给 see-now-more 的悬浮窗补两条。① **消息同步**：绑定会话里、用户在 DSH 主窗发的消息，实时进浮窗主聊天窗（用户气泡），并在插件启动 / 换绑时回填最近的用户消息；② **选区引用**：气泡里选中文字后右键多一项「引用选中文字」，输入区出现引号 chip，可删；发送后正文是 DSH 同款的 Markdown blockquote（每行 `> `），DSH 主窗也按引用渲染。
 归属：session-a58208c0-82bc-48b0-ad40-6cbf7a9a7756（任务书）/ `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：上游 v0.2.9 三处已回移并验到可验收，等格确认提交（建议 `0.1.1-more.28`）；随后开工功能 1。拍板项默认按推荐值走；格不同意就先改任务书再开工。
+下一步：上游 `.28` 已发并装进 profile（**需重启 DSH 生效**）；下一步开工功能 1（判据层 + 镜像核心）。拍板项默认按推荐值走；格不同意就先改任务书再开工。
 证据：
   - `src/index.js:877-898`：`mirrorAssistantText` 只镜像 `assistant/message` 的正文；`src/index.js:906-945` 的 `session/event` 钩子已经在按绑定会话过滤，但 `user/message` 只用于 `loop.noteUserSpoke`（937 行），没有写进聊天流。
   - `examples/floating-chat/window.py:685-690`：浮窗用户消息由窗口自己 `append_user` 写 `chat.jsonl`；`src/chat.js:80-89` 是插件侧唯一写入口。
@@ -13,7 +13,7 @@
   - 上游 `SAOS-3624/dsh-see-now` v0.2.9（2026-11-25）只同步 mic / window 三处修复；本仓 `mic.py:236` 仍写死 `D:/asr-local/models-sherpa`，`window.py:1615-1619` 仍每 250ms 清麦克风状态。
   - `git status --short` 空；HEAD `cb8ea1e`；版本 `0.1.1-more.27`（`package.json` / `dsh.plugin.json` 同值）。
 账：无需（本任务书只写方案，未跑实现 / 验收）
-更新：2026-11-26 08:08 CST
+更新：2026-11-26 08:18 CST
 
 ## 现状依据
 
@@ -337,4 +337,5 @@ def format_quote_text(text: str) -> str:
 - 2026-11-26 07:58 新建（进行中）。依据：`src/index.js` 只镜像 assistant；`dsh-message-quotes@0.2.2-rc.5` 的引用实现；上游 v0.2.9 只同步 mic/window 三处修复；工作树干净（HEAD `cb8ea1e`）。未动任何代码。
 - 2026-11-26 07:58 按格要求停在任务书；因上游 v0.2.9 刚发，实现前先合上游，避免同一段 `window.py` 两轮改。
 - 2026-11-26 08:08 上游 v0.2.9 三处回移完成（**未提交，等格确认**）：`mic.py` 加 `resolve_models_dir`（显式目录缺文件报错 2、http 只查 `silero_vad.onnx`）；`window.py` 用 `_on_mic_exit` + stderr 泵（只留内存、跳过转写行）+ `_mic_models_from_asr`（asr.json 的 `--models` 是 SenseVoice，不能直接当 mic 目录）。验证：`py_compile` OK；ASR venv 跑 `mic.py --from-file 0.wav --dry-run` 转写成功、exit 0；空 `--models-dir` exit 2 且报缺文件；`node --test` 366 tests / 363 pass / 0 fail / 3 skip；无 Tk 探针把状态跑到 `麦没起来：挂了：Error querying device -1`（本机无输入端点），不再被 250ms 轮询抹掉。
+- 2026-11-26 08:18 发版：commit `e80403a` / tag `v0.1.1-more.28` / prerelease <https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.28>；`install-dev.mjs` 已把 desktop profile 同步到 `.28`（`--check` 报 current），**重启 DSH 后生效**。
 
