@@ -18,6 +18,7 @@
 """
 
 import ctypes
+import glob
 import json
 import os
 import sys
@@ -213,27 +214,44 @@ MODE_OK = {'both', 'vision', 'audio', 'none', ''}
 PACE_OK = {'calm', 'normal', 'dense', 'game-economic', ''}
 
 
-def check_state_file():
+def read_state_file():
     path = os.path.join(os.path.expanduser('~'), '.dsh', 'see-now.json')
     if not os.path.exists(path):
-        return 'WARN', 'no ~/.dsh/see-now.json (defaults apply)'
+        return 'WARN', 'no ~/.dsh/see-now.json (defaults apply)', None
     try:
         with open(path, 'r', encoding='utf-8') as f:
             raw = json.load(f)
     except Exception as e:  # noqa: BLE001
-        return 'FAIL', 'unparsable: %s' % e
+        return 'FAIL', 'unparsable: %s' % e, None
     if not isinstance(raw, dict):
-        return 'FAIL', 'not a JSON object'
+        return 'FAIL', 'not a JSON object', None
+    bad = []
     mode = str(raw.get('mode', ''))
     pace = str(raw.get('defaultPace', ''))
-    bad = []
     if mode not in MODE_OK:
         bad.append('mode=%r' % mode)
     if pace not in PACE_OK:
         bad.append('defaultPace=%r' % pace)
     if bad:
-        return 'FAIL', 'bad values: ' + ', '.join(bad)
-    return 'PASS', 'mode=%s defaultPace=%s' % (mode or '-', pace or '-')
+        return 'FAIL', 'bad values: ' + ', '.join(bad), raw
+    return 'PASS', 'mode=%s defaultPace=%s' % (mode or '-', pace or '-'), raw
+
+
+def check_bound_session(raw):
+    """窗口绑定到哪个会话，写在 see-now.json 的 session 里。
+    绑到一个已经不存在的会话时症状很哑：打得进去，没有人接。
+    会话库按工作区分目录：~/.dsh/sessions/<workspace>/session-<uuid>/。"""
+    if not isinstance(raw, dict):
+        return 'WARN', 'no parsable state file'
+    sid = str(raw.get('session') or '').strip()
+    if not sid:
+        return 'WARN', 'unbound (no session key)'
+    name = sid if sid.startswith('session-') else 'session-' + sid
+    pattern = os.path.join(os.path.expanduser('~'), '.dsh', 'sessions', '*', name)
+    hits = glob.glob(pattern)
+    if hits:
+        return 'PASS', name
+    return 'FAIL', name + ' not found under ~/.dsh/sessions/*/'
 
 
 def run(argv):
@@ -353,7 +371,9 @@ def run(argv):
         results.append(('z-order', 'PASS', 'nothing above it overlaps >=20%'))
 
     # 8. 配置：形状对不对（窗口与宿主都靠这份文件，写坏了症状很玄）
-    results.append(('state-file',) + check_state_file())
+    verdict, detail, raw = read_state_file()
+    results.append(('state-file', verdict, detail))
+    results.append(('bound-session',) + check_bound_session(raw))
 
     # 输出
     p('see-now-more ui selftest')
