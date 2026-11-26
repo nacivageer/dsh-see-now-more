@@ -2,6 +2,47 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.29] - 2026-11-26
+
+### Added — 浮窗同步主窗用户消息（功能 1）
+
+- `src/mirror.js`（新）：绑定会话里用户亲手打的 `user/message` 实时写进 `~/.dsh/see-now/chat.jsonl`
+  （条目带 `origin:"dsh"` + `mid:"<sid>:<seq>"` + 会话事件时间），并在插件启动 3 秒后 /
+  换绑时回填最近 500 条 / 30 天。水位 `session-mirror.json` 只在写盘成功后推进；启动扫
+  `chat.jsonl` 尾部 4000 行的 `mid`，补「写成功但水位没落盘」的崩溃窗口；跳过 fork 继承前缀。
+- `src/chat.js`：`appendChat` 支持 `{sid, at, mid, origin}`；新增 `isFloatUserEntry()`
+  （`role==="user" && origin!=="dsh"`）与 `pendingStartupEntries()`。
+- 四个消费点改用 `isFloatUserEntry()`：启动补投、relay 增量、常驻循环、阻塞 watch ——
+  镜像条目不会被重投，也不会让 watch 误判「用户插话」。
+- 窗口侧：`ChatFeed` 去重键加 `mid`、按 `at` 稳定排序、截断保留最近 200 条；
+  `_history_entries` 先按 `at` 排再取 500（回填的旧条目在文件尾，按写入顺序截会挑中最旧的）。
+- 开关：`~/.dsh/see-now.json` 的 `"mirror": {"users": true, "backfill": true}`，缺省都开；
+  `users:false` 一键停实时 + 回填。
+
+### Added — 气泡选区「引用选中文字」（功能 2）
+
+- 主聊天窗气泡有选区时，右键菜单多「引用选中文字」：输入区出现引号 chip（开 / 闭引号 +
+  单行预览 + ×），可点 × 或光标在正文开头按退格 / Delete 删除；没有正文也能只发引用。
+- 发送按 DSH `formatQuoteText` 编码（每行 `> `）+ 空行 + 正文；DSH 主窗渲染成引用，
+  relay 的 200 字截断不作用于引用块，模型看到完整引用。单次引用上限 4000 字。
+- 浮窗自己的气泡认同一套 `>` 行（只对 user 气泡）：左侧 2px 竖条 + `#a9c4e0` 文字；
+  摘要态的 2 行预算把引用行也算进去；选中复制得到去掉 `>` 的原文，「复制全文」仍是原始 Markdown。
+- `examples/floating-chat/quote_text.py`（新，纯函数）+ `scripts/check-quote.py` 无 GUI harness。
+- 已知边界：v1 只有一条引用、只在主聊天窗（回顾窗不提供）；引用里的 `>` 会变成 `> > …`。
+
+### Fixed
+
+- `src/interject.js`：`interjectNote()` 在 `at=null` 时印出 `@08:00:00`（`Number(null)=0`）；
+  带引用的插话现在把引用块原样放最前、说明只放引用之后的正文。
+
+### 验证
+
+- `node --test`：387 项 / 384 过 / 0 失败 / 3 skip（新增 `session-mirror` 14 条、
+  `quote-text` 2 条、`interject-quote` 5 条）。
+- `python -m py_compile` 三文件 OK；`python scripts/check-quote.py`、
+  `python scripts/check-feed-order.py` 均 exit 0。
+- 待补：装 profile 后重启 DSH 的 A/B/C 实机验收。
+
 ## [0.1.1-more.28] - 2026-11-26
 
 ### Fixed — 麦克风：回移上游 v0.2.9 的三处修复（issue #66）
