@@ -2,6 +2,31 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.28] - 2026-11-26
+
+### Fixed — 麦克风：回移上游 v0.2.9 的三处修复（issue #66）
+
+- `examples/floating-chat/mic.py`：模型目录不再写死 `D:/asr-local/models-sherpa`；按
+  `--models-dir` → `DSH_ASR_MODELS` → `<DSH_HOME>/asr-models/sherpa` → 旧开发机路径找。
+  **显式目录缺文件直接退出 2**，报出缺哪几个，不再静默回退；`--engine http` 只校验
+  `silero_vad.onnx`。`main()` 改成 `return run(args)`，退出码不再被吞。
+- `examples/floating-chat/window.py`：`_poll_chat` 不再每 250ms 清麦克风状态，改由
+  `_on_mic_exit` 接管；子进程 stderr 用 `PIPE` 泵进内存（最后 20 行、跳过 `识别` 开头的
+  转写行、不落盘）。异常退出时状态行显示 `麦没起来：…`（模型缺文件 / 缺依赖 / 设备打不开），
+  用户主动停才清空。
+- 本仓额外适配：`_mic_models_from_asr()` 从 `~/.dsh/asr.json` 的 `--vad` / `--punct`
+  反推 mic 的 sherpa 目录，设给子进程的 `DSH_ASR_MODELS`。该文件的 `--models` 是 ASR
+  服务的 SenseVoice 目录，直接指给 mic 会被新校验判成「模型不完整」。
+- 文档：README / INSTALL 的模型目录与排查路径同步；不再生成 `mic.log`（转写内容不落盘）。
+
+### 验证
+
+- `node --test`：366 项 / 363 过 / 0 失败 / 3 skip。
+- `python -m py_compile` 两文件 OK；ASR venv 跑 `mic.py --from-file 0.wav --dry-run`
+  出字、exit 0；空 `--models-dir` exit 2；无 Tk 探针把状态跑到
+  `麦没起来：挂了：Error querying device -1`（本机无输入端点）。
+- **未验证**：真实麦克风成功路径（本机没有可用输入端点）；GUI 状态行的实际渲染。
+
 ## [0.1.1-more.27] - 2026-11-26
 
 ### Added — 「屏幕读取」总开关：用户侧唯一按得下的闸（档 B）

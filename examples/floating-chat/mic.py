@@ -210,6 +210,70 @@ def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
+# ---------------------------------------------------------------- 模型目录（issue #66）
+
+"""
+以前这里写死 `D:/asr-local/models-sherpa` —— 那是开发机上的路径。
+
+单 C 盘的用户点 🎤 会「完全没反应」：进程起来就退（目录不存在），而 `window.py`
+把子进程的 stderr 接成 DEVNULL，退出原因全丢了。三层叠在一起才是那个症状：
+**路径写死 + stderr 丢弃 + 250ms 轮询把状态清空**（第三层在 window.py 里）。
+
+这里只解第一层：按引擎列候选、**显式配置缺文件就报错退出（2）而不是静默回退**。
+"""
+MODEL_FILES = ("model.int8.onnx", "tokens.txt", "silero_vad.onnx")
+
+
+def _die(msg):
+    """打印到 stderr 并把退出码定为 2（window.py 会把最后几行搬进状态栏）。"""
+    log(msg)
+    return 2
+
+
+def _models_candidates(args):
+    """候选目录 (路径, 来源)。顺序 = 用户的意图强度：显式 > 环境变量 > 默认 > 旧默认。"""
+    if args.models_dir:
+        yield args.models_dir, "--models-dir"
+    env = os.environ.get("DSH_ASR_MODELS")
+    if env:
+        yield env, "DSH_ASR_MODELS"
+    home = os.environ.get("DSH_HOME") or os.path.join(
+        os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".dsh")
+    yield os.path.join(home, "asr-models", "sherpa"), "默认"
+    # 旧开发机路径：**只在 Windows 上加**。别的平台上 "D:/asr-local" 会被当成相对路径，
+    # 在 mac/Linux 上就是个毫无意义的目录名。
+    if os.name == "nt":
+        yield "D:/asr-local/models-sherpa", "旧默认"
+
+
+def resolve_models_dir(args):
+    """找到一个"文件齐"的模型目录，返回 (绝对路径, 来源)。
+
+    两条规矩：
+
+    1. **显式配置（`--models-dir` / `DSH_ASR_MODELS`）缺文件 → 直接退出 2**，不许
+       静默回退到别的目录。否则用户改错路径，表现是"改了没生效"，比报错难查十倍。
+    2. `--engine http` 只校验 `silero_vad.onnx`：那个引擎不加载识别模型（共用 8000
+       服务），但分句还要 VAD。以前不分引擎一律查三个文件，会误伤 http 用户。
+    """
+    need = MODEL_FILES if args.engine == "local" else ("silero_vad.onnx",)
+    tried = []
+    for raw, source in _models_candidates(args):
+        path = os.path.abspath(os.path.expanduser(str(raw)))
+        miss = [f for f in need if not os.path.isfile(os.path.join(path, f))]
+        if not miss:
+            return path, source
+        tried.append((path, miss, source))
+        if source in ("--models-dir", "DSH_ASR_MODELS"):
+            raise SystemExit(_die(
+                f"模型不完整：{path} 缺 {', '.join(miss)}（来自 {source}，不会自动换别的目录）"))
+    detail = "；".join(f"{p} 缺 {', '.join(m)}" for p, m, _ in tried)
+    raise SystemExit(_die(
+        f"找不到 ASR 模型：需要 {', '.join(need)}。试过：{detail or '（没有候选目录）'}\n"
+        f"  把 sherpa-onnx-paraformer-zh-small 解开放到 <DSH_HOME>/asr-models/sherpa/，"
+        f"或用 --models-dir / DSH_ASR_MODELS 指定"))
+
+
 class Ring:
     """环形缓冲：存原始麦克风（消回声**之前**的），用来判断"这段到底是不是回声"。
 
@@ -233,7 +297,8 @@ class Ring:
 
 
 def run(args):
-    models_dir = args.models_dir or os.path.join("D:/asr-local", "models-sherpa")  # TODO 开发机路径；换机器用 --models-dir
+    models_dir, models_src = resolve_models_dir(args)
+    log(f"模型目录：{models_dir}（{models_src}）")
     engine = LocalEngine(models_dir, punct=not args.no_punct) if args.engine == "local" \
         else HttpEngine(args.url)
     vad = make_vad(models_dir)
@@ -376,7 +441,8 @@ def main():
     ap.add_argument("--engine", choices=["local", "http"], default="local",
                     help="local=自带模型（默认，和视频那条路互不干扰）；http=共用 8000 服务")
     ap.add_argument("--url", default="http://127.0.0.1:8000", help="http 模式的服务地址")
-    ap.add_argument("--models-dir", default=None, help="模型目录（默认是开发机的 D:/asr-local/models-sherpa，换机器请传这个参数）")
+    ap.add_argument("--models-dir", default=None,
+                    help="模型目录（默认 <DSH_HOME>/asr-models/sherpa；也可用 DSH_ASR_MODELS）")
     ap.add_argument("--device", type=int, default=None, help="麦克风设备号")
     ap.add_argument("--list-devices", action="store_true", help="列出输入设备后退出")
     ap.add_argument("--from-file", default=None, help="用 wav 文件代替麦克风（测试）")
@@ -402,7 +468,8 @@ def main():
         return
 
     try:
-        run(args)
+        # **必须 return**：run() 里的 SystemExit / 返回码以前被吞掉，CLI 永远退出 0
+        return run(args)
     except KeyboardInterrupt:
         log("停了")
     except ImportError as exc:

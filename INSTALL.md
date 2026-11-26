@@ -101,7 +101,8 @@ node bin/see-window.mjs
 
 1. 打开悬浮窗，点输入栏左边的「麦」图标。
 2. 说一句话，看输入框里有没有出字。
-3. 没出字：看 `~/.dsh/see-now/mic.log`，把最后 30 行连同这些信息贴到 issue
+3. 没出字：先看悬浮窗状态行（异常退出会显示 `麦没起来：…` 的原因）；要看完整输出就在终端跑
+   `python examples/floating-chat/mic.py --engine local`，把 stderr 最后 30 行连同这些信息贴到 issue
    （仓库里有「麦克风测试反馈」模板）：
    - Windows 版本、`where python`、麦克风设备名；
    - `see_now({action:"status"})` 的「听声音」行。
@@ -109,8 +110,10 @@ node bin/see-window.mjs
 
 已知坑：
 
-- `mic.py` 默认模型目录是开发机的 `D:/asr-local/models-sherpa`，换机器要传 `--models-dir`
-  或改 `~/.dsh/asr.json` 的 `manage.start`。
+- `mic.py` 的模型目录按 `--models-dir` → `DSH_ASR_MODELS` → `<DSH_HOME>/asr-models/sherpa` →
+  旧开发机路径 `D:/asr-local/models-sherpa` 的顺序找；**显式指定的目录缺文件会直接报错退出**，
+  不会静默换别的目录。窗口会在 `~/.dsh/asr.json` 的 `manage.start` 里找 `--vad` / `--punct`
+  指向的模型目录，自动设成子进程的 `DSH_ASR_MODELS`。
 - 依赖 `sounddevice`：`pip install sounddevice`。
 - Windows 设置 → 隐私 → 麦克风 要允许 DSH 使用。
 

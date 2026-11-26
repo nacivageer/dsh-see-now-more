@@ -753,6 +753,9 @@ def _asr_config() -> dict:
     麦克风要跑 `mic.py`，它需要装有 sounddevice / sherpa_onnx 的解释器。
     这台机器上 PATH 里的 python 没有这些包，直接起会 ImportError 秒退
     （用户体感就是"点一下只响很短一下"）。
+
+    `models` 是 ASR **服务**的模型目录（SenseVoice），不是 mic.py 的 paraformer
+    目录；mic 的目录由 `_mic_models_from_asr()` 从 `--vad` / `--punct` 反推。
     """
     try:
         cfg = json.loads((Path.home() / ".dsh" / "asr.json").read_text(encoding="utf-8"))
@@ -767,6 +770,47 @@ def _asr_config() -> dict:
         return {}
 
 
+def _mic_models_from_asr() -> str:
+    """从 asr.json 的 `--vad` / `--punct` / `--models` 反推 mic.py 的本机模型目录。
+
+    为什么不能直接拿 `--models`：那是 ASR 服务的 SenseVoice 目录，和 mic.py 的
+    paraformer（`model.int8.onnx` + `tokens.txt` + `silero_vad.onnx`）是两套模型。
+    v0.2.9 起显式目录缺文件会直接报错退出，指错反而把麦克风弄哑。
+    找不到完整目录就返回空串，交给 mic.py 自己的 `DSH_ASR_MODELS` / 默认链。
+    """
+    try:
+        cfg = json.loads((Path.home() / ".dsh" / "asr.json").read_text(encoding="utf-8"))
+        start = (cfg.get("manage") or {}).get("start") or []
+    except Exception:
+        return ""
+    need = ("model.int8.onnx", "tokens.txt", "silero_vad.onnx")
+
+    def complete(path) -> bool:
+        return bool(path) and all(os.path.isfile(os.path.join(path, f)) for f in need)
+
+    def value(flag: str) -> str:
+        if flag in start:
+            i = start.index(flag)
+            if i + 1 < len(start):
+                return str(start[i + 1])
+        return ""
+
+    vad = value("--vad")                       # <模型目录>/silero_vad.onnx
+    if vad:
+        cand = os.path.dirname(vad)
+        if complete(cand):
+            return cand
+    punct = value("--punct")                   # <模型目录>/punct/model.onnx
+    if punct:
+        cand = os.path.dirname(os.path.dirname(punct))
+        if complete(cand):
+            return cand
+    models = value("--models")                 # 少数机器上服务与 mic 共用同一份
+    if complete(models):
+        return models
+    return ""
+
+
 def asr_python() -> str:
     """麦克风用 ASR 的 Python，不是带 tkinter 的这个。"""
     for key in ("DSH_ASR_PYTHON", "DSH_FLOAT_PYTHON"):
@@ -775,7 +819,7 @@ def asr_python() -> str:
             return v
     py = _asr_config().get("python")
     if py:
-        # pythonw 没有 stderr，换成同目录的 python.exe（有输出，方便看 mic.log）
+        # pythonw 没有 stderr，换成同目录的 python.exe（有输出，方便看子进程 stderr）
         if py.lower().endswith("pythonw.exe"):
             console = py[:-len("pythonw.exe")] + "python.exe"
             if Path(console).exists():
@@ -834,6 +878,12 @@ class LiveGlass:
         self._bound_full = bound_sid_full()
         self.feed = ChatFeed(CHAT_FILE, sid=self._bound_full)
         self._mic_proc = None
+        # 这次开麦的 stderr 末几行（**只在内存**：mic.py 每识别一句都会打一行，
+        # 落盘等于把用户说的话全存下来）。麦挂掉时把原因搬进状态栏。
+        self._mic_lines = []
+        # 「用户主动停」vs「它自己崩了」—— 两者都表现为子进程退出，混在一起就只能猜
+        self._mic_stopping = False
+        self._mic_pump = None
         self._protocol = WindowProtocol() if WindowProtocol is not None else None
         self._collapsed = False
         self._saved_h = DEFAULT_H
@@ -1613,10 +1663,10 @@ class LiveGlass:
             for event in self._drain_protocol():
                 self._render_event(event)
             if self._mic_proc is not None and self._mic_proc.poll() is not None:
-                self._mic_proc = None
-                self.feed.status = ""
-                self._refresh_feed()
-                self._draw_mic_dot()
+                # **不要在这里直接清场**（issue #66）：这个轮询每 250ms 跑一遍，
+                # 清了之后没人知道子进程是"用户停的"还是"它自己崩的"，
+                # 崩溃原因就算写进 status 也会在 250ms 内被抹掉。
+                self._on_mic_exit()
             n0 = len(self.feed.messages)
             if self.feed.poll():
                 new = self.feed.messages[n0:]
@@ -1789,44 +1839,96 @@ class LiveGlass:
             return
         try:
             cmd = [asr_python(), str(MIC_SCRIPT), "--engine", "local"]
-            models = _asr_config().get("models")
-            if models:
-                cmd += ["--models-dir", models]
-            log_path = os.path.join(os.environ.get("DSH_VIDEO_CACHE_DIR", "."), "mic.log")
-            try:
-                log_fd = open(log_path, "a", encoding="utf-8")
-            except Exception:
-                log_fd = subprocess.DEVNULL
+            # 环境变量优先：用户显式设了 DSH_ASR_MODELS 就以它为准；没设才从 asr.json
+            # 的 --vad / --punct 反推本机 sherpa 目录，避免把服务的 SenseVoice 目录指给 mic。
+            env = os.environ.copy()
+            if not env.get("DSH_ASR_MODELS"):
+                found = _mic_models_from_asr()
+                if found:
+                    env["DSH_ASR_MODELS"] = found
+            self._mic_lines = []
+            self._mic_stopping = False
+            # `stderr=PIPE` 而不是 DEVNULL / 文件：以前退出原因全丢，用户看到的是"点了没反应"（#66）。
+            # 也不能落盘 —— mic.py 每识别一句就打一行，写文件等于把语音转写存本地。
+            si = None
+            if os.name == "nt":
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                si.wShowWindow = subprocess.SW_HIDE
             self._mic_proc = subprocess.Popen(
-                cmd, stdout=log_fd, stderr=log_fd,
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env,
                 creationflags=0x08000000 if os.name == "nt" else 0,
+                **({"startupinfo": si} if si is not None else {}),
             )
-            if log_fd is not subprocess.DEVNULL:
-                log_fd.close()
+            self._mic_pump = threading.Thread(target=self._pump_mic_stderr,
+                                              args=(self._mic_proc,), daemon=True)
+            self._mic_pump.start()
             self.feed.status = "录音中"
-            self.root.after(5000, self._check_mic)
         except Exception as exc:
             self.feed.status = f"麦起不来：{exc}"
         self._refresh_feed()
         self._draw_mic_dot()
 
-    def _check_mic(self) -> None:
-        """起麦克风 5 秒后还活着才算真的在录；秒退就把 mic.log 的位置露在状态行上。
+    def _pump_mic_stderr(self, p) -> None:
+        """盯着 mic.py 的 stderr，只在内存里留最后 20 行。
 
-        本机没有可用的输入端点（只枚举到 WDM-KS，PortAudio 打不开），mic.py 会秒退。
-        不检查的话状态行一直写着"录音中"，实际什么都没录 —— 骗人。
+        **跳过 `识别` 开头的那几行**：那是用户语音的转写内容，不该出现在状态栏、
+        更不该留在任何地方。
+        """
+        try:
+            for raw in iter(p.stderr.readline, b""):
+                line = raw.decode("utf-8", "replace").strip()
+                if not line or line.startswith("识别"):
+                    continue
+                if p is not self._mic_proc:
+                    break                   # 已经换了一次开麦，别往新缓冲里塞旧日志
+                self._mic_lines.append(line)
+                del self._mic_lines[:-20]
+        except Exception:
+            pass
+
+    def _on_mic_exit(self) -> None:
+        """mic.py 退出了：分清"用户停的"和"它自己崩的"，后者把原因放到状态栏。
+
+        为什么接管这条已有路径而不是另起一个定时器：`_poll_chat` 每 250ms 跑，
+        任何"1.5 秒后再查"的写法都会在检查之前被它清掉 `_mic_proc`，
+        于是崩溃被误判成手动停止（第一版就是这么写的，根本触发不了）。
         """
         p = self._mic_proc
-        if p is None:
+        pump = self._mic_pump
+        # 进程已经退出：先把 stderr 里剩下的行泵完再判断原因；否则最后几行（往往正是
+        # 「模型不完整」「缺依赖」）可能还在管道里，状态栏只能退化成退出码。
+        if pump is not None and pump.is_alive():
+            pump.join(timeout=0.5)
+        self._mic_pump = None
+        self._mic_proc = None
+        if self._mic_stopping:
+            self._mic_stopping = False
+            self.feed.status = ""
+            self._refresh_feed()
+            self._draw_mic_dot()
             return
-        if p.poll() is not None:
-            self._mic_proc = None
-            self.feed.status = "麦克风没起来（看 ~/.dsh/see-now/mic.log）"
+        code = None if p is None else p.returncode
+        reason = ""
+        for line in reversed(self._mic_lines):
+            # 关键词要覆盖 mic.py 真正会说的那几句：「模型不完整 … 缺 X」「找不到 ASR 模型」
+            # 「缺依赖」「挂了」「转写失败」。漏一个就退化成只报退出码，白做。
+            if any(k in line for k in
+                   ("缺", "找不到", "模型不完整", "Error", "Traceback", "Exception", "failed", "挂了")):
+                reason = line
+                break
+        # **不能拿末行兜底当原因**：正常时它是"本地模型就绪 1.4s"这种，
+        # 显示成"麦没起来：本地模型就绪"比不说还糟。宁可只报退出码。
+        self.feed.status = (
+            f"麦没起来：{reason[:120]}" if reason
+            else f"麦没起来（退出码 {code}；终端跑 python mic.py --engine local 看原因）"
+        )
         self._refresh_feed()
         self._draw_mic_dot()
 
     def _stop_mic(self):
         p = self._mic_proc
+        self._mic_stopping = True       # 先说清是"我要停"，否则 _on_mic_exit 会报成崩溃
         self._mic_proc = None
         self.feed.status = ""
         if p is not None and p.poll() is None:
