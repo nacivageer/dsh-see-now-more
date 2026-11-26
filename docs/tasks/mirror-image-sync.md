@@ -1,9 +1,9 @@
 # 任务书：主窗发来的图片也进浮窗（0.1.1-more.32）
 
-状态：可验收（代码 / 单测 / 插件入口 / 窗口冒烟都过；真机重启这一层待做）
+状态：已发版（`v0.1.1-more.32`，prerelease <https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.32>；真机 A 通过）
 对象：绑定会话里用户发的 `image` 块，镜像进浮窗时写成 `![图片](<附件对象绝对路径>)`，浮窗里显示成真图；对象不在就退回 `[图片]`。不复制图片、不改窗口。
 归属：session-8cca3e59-4846-40d9-bf73-893e55226978 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：格重启 DSH 让 `.32` 生效 → 主窗发一张带文字的图，浮窗出现缩略图 → commit（按实际路径）/ tag `v0.1.1-more.32` / prerelease。
+下一步：无。可选的剩余：`DSH_HOME` 搬家后老条目的图片会退回 `[图片]`（写的是绝对路径），已知边界，不修。
 证据：
   - 真实事件形状（本会话 seq 1446 / 1466）：`{type:"image", attachment:{attachmentId:"sha256:9c62f2a3…", mediaType, width, height, bytes, name}}`。
   - 附件对象路径 `~/.dsh/attachments/v1/objects/<hex 前两位>/<hex>`（用 seq 1446 / 1466 的 sha 实测存在）。
@@ -12,8 +12,11 @@
   - 插件入口 harness（`_scratch/apply_harness.mjs image`，装好的 `.32` + 临时 home + 真实附件对象）：
     `user:![图片](<temp home>\attachments\v1\objects\72\7244…)\n带图的话:dsh:session-harness-image:2` → PASS。
   - 窗口冒烟：临时 home + 真 `bin/see-window.mjs`，该 markdown 渲染成缩略图 + 文字（`_scratch/mirror-image-bubble.png`）。
+  - **真机（23:14，`.32` 重启后）**：格在主窗发图 + 「这是主窗口发的图」→ `chat.jsonl`
+    `{"text":"![图片](C:\\…\\objects\\44\\4436…)\n这是主窗口发的图","mid":"…:1736","origin":"dsh"}`；
+    浮窗气泡里是缩略图（`_scratch/mirror-image-real.png`）。
 账：无需（小改动）
-更新：2026-11-26 23:09 CST
+更新：2026-11-26 23:15 CST
 
 ## 设计
 
@@ -45,3 +48,6 @@
   窗口冒烟出图。
 - 2026-11-26 23:10 证据补齐（仍等真机）：`node --test` 409 / 406 过 / 0 失败；装好的 `.32` 走插件入口
   harness 写出 `![图片](…)\n带图的话`；profile 已同步 `.32`。真机那条要重启后验。
+- 2026-11-26 23:15 **真机通过 + 发版**：重启后 `.32` 生效，主窗发图 → 浮窗缩略图（证据见上）；
+  commit `14020e6`（9 个路径）、tag `v0.1.1-more.32`、prerelease 已核。纯图（无文字）那条只有单测覆盖，
+  真机测的是图文混排。
