@@ -10,7 +10,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { interjectNote, splitLeadingQuote, pendingInterjected, __resetInterject } from '../src/interject.js';
+import {
+  interjectNote, relayInstruction, relayUserText, splitLeadingQuote,
+  pendingInterjected, __resetInterject,
+} from '../src/interject.js';
 
 // 旧实现（2026-11-26 之前）在没有引用时的完整输出 —— 逐字锁死，防回归。
 const OLD_PLAIN = '[看屏幕·用户插话] 「你好」'
@@ -53,6 +56,21 @@ test('只引用不打字：说明写成「用户引用了一段内容」', () =>
   const out = interjectNote('> a\n> b');
   assert.ok(out.startsWith('> a\n> b\n\n[看屏幕·用户插话] 「用户引用了一段内容（见上方引用块）」'));
   assert.equal(pendingInterjected().text, '引用了一段内容');
+});
+
+test('relayUserText：投成用户气泡的那条逐字不动（引用块保留）', () => {
+  assert.equal(relayUserText('> a\n> b\n\n问题'), '> a\n> b\n\n问题');
+  assert.equal(relayUserText(' 你好 '), '你好');
+  assert.equal(relayUserText('   '), '');
+});
+
+test('relayInstruction：说明单独一条，不重复引用块（引用只在用户气泡里）', () => {
+  __resetInterject();
+  const out = relayInstruction('> a\n> b\n\n问题', { at: 0 });
+  assert.ok(!out.startsWith('> a'), '引用块不该再进说明那条');
+  assert.ok(out.startsWith('[看屏幕·用户插话 @08:00:00] 「问题」'), out.slice(0, 40));
+  assert.ok(out.endsWith('画面后到）。'));
+  assert.equal(pendingInterjected().text, '问题', '待回执只记正文');
 });
 
 test('splitLeadingQuote：只认开头的引用块，正文中间的 > 不搬走', () => {

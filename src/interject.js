@@ -90,7 +90,40 @@ export function splitLeadingQuote(text) {
 }
 
 /**
- * 插话交给模型的那一段话。三条都是踩出来的：
+ * 浮窗消息投给会话时，**用户原话**单独发一条（`source.kind:"user"`）。
+ *
+ * 2026-11-26 用户要求：浮窗发的话要在 DSH 主窗显示成**用户的聊天气泡**，而不是
+ * 「收到执行请求」触发卡；只有这样引用块才会按 Markdown 渲染。原话保持逐字不变
+ * （`> ` 引用块、图片 Markdown 都不动）。
+ */
+export function relayUserText(text) {
+  return String(text ?? '').trim();
+}
+
+/**
+ * 紧跟原话之后的**说明**（`source.kind:"see-now"`）：为什么必须用 `say` 回。
+ *
+ * 单独一条而不是塞进原话里：塞进去会让一大段插件指令变成用户的聊天气泡内容。
+ * 这条仍会以「触发卡」形式出现在主窗，但它不是用户的话。
+ *
+ * @param {string} text 用户原话
+ * @param {{at?:number|null}} [o]
+ */
+export function relayInstruction(text, { at = null } = {}) {
+  const said = String(text ?? '').trim();
+  const q = splitLeadingQuote(said);
+  const body = q ? q.rest : said;
+  // 待回执记正文（不是整段引用）
+  noteInterjected(q ? (body || '引用了一段内容') : said, at ? { at } : undefined);
+  const when = at != null && Number.isFinite(Number(at))
+    ? ` @${new Date(Number(at)).toTimeString().slice(0, 8)}`
+    : '';
+  const hint = body ? `「${clip(body, 200)}」` : '（引用了一段内容，见上一条）';
+  return `[看屏幕·用户插话${when}] ${hint}${INSTRUCTION}`;
+}
+
+/**
+ * 插话交给模型的那一段话（**工具结果里用**，不用于会话投递）。
  *   ① **先说话再干活** —— 普通回复悬浮窗里看不见、也不会被念，只有 `say` 会；
  *   ② **`say` 和取图可以同一次调用** —— `say` 在取图**之前**就写进流，字先出、画面后到；
  *   ③ 一段话，不是一屏话。
@@ -107,7 +140,6 @@ export function interjectNote(text, { at = null } = {}) {
   const body = q ? q.rest : said;
   // 待回执记的是**正文**：否则「未回应」提醒里会复读四千字引用
   noteInterjected(q ? (body || '引用了一段内容') : said, at ? { at } : undefined);
-  // `Number(null)` 是 0（finite），不判 null 会给每条没带 at 的插话印一个 @08:00:00
   const when = at != null && Number.isFinite(Number(at))
     ? ` @${new Date(Number(at)).toTimeString().slice(0, 8)}`
     : '';

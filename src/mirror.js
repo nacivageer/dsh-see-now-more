@@ -29,7 +29,7 @@ import { join } from 'node:path';
 
 import { appendChat, chatDir, chatFile } from './chat.js';
 import { isTypedUserMessage } from './human.js';
-import { serviceOf } from './timer.js';
+import { isRelayInjectedId, serviceOf } from './timer.js';
 
 /** 镜像条目的来源标记；四个消费点靠它把「主窗说的」和「浮窗说的」分开。 */
 export const MIRROR_ORIGIN = 'dsh';
@@ -85,6 +85,22 @@ export function mirrorMid(sid, event) {
   const seq = Number(event?.seq);
   if (!sid || !Number.isFinite(seq) || seq < 0) return '';
   return `${sid}:${seq}`;
+}
+
+/** 事件里的消息 id（`user/message` 的 data 就是 MessageBase；兼容包一层的） */
+function eventMessageId(event) {
+  const d = event?.data ?? event ?? {};
+  return String(d.id ?? d.message?.id ?? '');
+}
+
+/**
+ * 这条用户消息是不是**浮窗 relay 代用户投的**（`source.kind:"user"`）。
+ *
+ * 必须跳：窗口自己已经把这句话写进 `chat.jsonl` 了，再镜像一遍就是重复气泡；
+ * 重启后回填也要跳（relay 投过的 id 落盘在 `relay-user-ids.json`）。
+ */
+function isRelayInjected(event, env) {
+  return isRelayInjectedId(eventMessageId(event), env);
 }
 
 /**
@@ -222,6 +238,7 @@ export function createSessionMirror({
     if (disposed || !cfg.users) return false;
     const id = String(sid ?? '');
     if (!id || !isTypedUserMessage(event)) return false;
+    if (isRelayInjected(event, env)) return false;
     const mid = mirrorMid(id, event);
     if (!mid) return false;
     if (seen.has(mid)) return false;
@@ -279,6 +296,7 @@ export function createSessionMirror({
       if (!Number.isFinite(seq) || seq < inherited) continue;
       if (seq > lastScanned) lastScanned = seq;
       if (!isTypedUserMessage(ev)) continue;
+      if (isRelayInjected(ev, env)) continue;
       if (seq <= since) continue;
       if ((Number(ev?.time) || 0) < cutoff) continue;
       picked.push(ev);

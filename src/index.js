@@ -10,7 +10,7 @@ import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE, DEFAULT_QUALITY } from '
 import { resolveFfmpeg } from './binaries.js';
 import { parseRegion } from './layout.js';
 import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC, TOOL_NAME, ACTION_VALUES } from './tool-spec.js';
-import { interjectNote, noteInterjected, replyReminder, clearInterjected } from './interject.js';
+import { interjectNote, relayInstruction, relayUserText, noteInterjected, replyReminder, clearInterjected } from './interject.js';
 import { appendSpoken, appendChat, appendNotice, lastSaidNote, lastSaidText, chatDir, chatWatcherShared,
          chatWaiterCount, isFloatUserEntry, markDelivered, pendingStartupEntries, relaySeenHas, markRelaySeen } from './chat.js';
 import { createTitleSync } from './titles.js';
@@ -1459,12 +1459,30 @@ async function registerAll(ctx) {
      * 判据见 `deliveryMode()`；`followup` 落在空闲会话上就是正常起一轮。
      */
     const mode = deliveryMode({ running: turnStates[sid]?.state === 'running' });
-    const r = await wakeWithRetry({ ctx, sessionId: sid, text: interjectNote(clean), log, steer: mode === 'steer' });
+    const steer = mode === 'steer';
+    /**
+     * 2026-11-26 用户要求：浮窗消息要在 DSH 主窗显示成**用户的聊天气泡**。
+     *
+     * 之前是一条 `source.kind:"see-now"` 消息，DSH 把它渲染成「收到执行请求」触发卡，
+     * 不带用户气泡、引用也不按 Markdown 渲染。现在拆两条：
+     *   ① 用户原话（`source.kind:"user"`）→ 主窗用户气泡、引用块正常渲染；
+     *   ② 为什么必须用 `say` 回的说明（`see-now`）→ 仍然是触发卡，但只有它进卡。
+     * 两条都投失败才算失败；说明那条失败时用户话已经进了会话，不能把回执标成失败。
+     */
+    const r = await wakeWithRetry({
+      ctx, sessionId: sid, text: relayUserText(clean), sourceKind: 'user', log, steer,
+    });
     if (!r?.ok) {
       relayLog(`FAILED(${source}) -> ${sid}: ${r?.reason ?? 'unknown'} | ${clean.slice(0, 80)}`);
       markDelivered(key, false);      // 窗口把「发送中」换成「发送失败」
       return false;
     }
+    const r2 = await wakeWithRetry({
+      ctx, sessionId: sid,
+      text: relayInstruction(clean, { at: key ? Number(key) : null }),
+      log, steer,
+    });
+    if (!r2?.ok) relayLog(`warn(${source}): 说明那条没投进去：${r2?.reason ?? 'unknown'}`);
     markRelaySeen(key);               // 重启补投不许再投同一句
     markDelivered(key, true);         // 窗口把「发送中」换成「已送达」
     // via 写进日志：下次"投了却没反应"时，第一眼就能看出走的是插话还是排队

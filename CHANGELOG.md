@@ -30,6 +30,15 @@
 - `examples/floating-chat/quote_text.py`（新，纯函数）+ `scripts/check-quote.py` 无 GUI harness。
 - 已知边界：v1 只有一条引用、只在主聊天窗（回顾窗不提供）；引用里的 `>` 会变成 `> > …`。
 
+### Changed — 浮窗消息在主窗显示成用户气泡
+
+- relay 原来把用户原话和「先说话再干活」说明包成一条 `source.kind:"see-now"` 消息，DSH
+  客户端把它渲染成「收到执行请求」触发卡：主窗里看不到用户自己的气泡，引用也不按 Markdown
+  渲染。现在拆两条：原话走 `source.kind:"user"`（主窗用户气泡、引用块正常），说明单独走
+  `see-now`（仍是触发卡）。
+- 新增 `~/.dsh/see-now/relay-user-ids.json`：relay 代投的消息 id 落盘（最近 200 条），
+  mirror 的 live / 回填都跳过这些事件，避免浮窗刚发的话被镜像回灌成第二条。
+
 ### Fixed
 
 - `src/interject.js`：`interjectNote()` 在 `at=null` 时印出 `@08:00:00`（`Number(null)=0`）；

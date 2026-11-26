@@ -20,6 +20,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { chatDir } from './chat.js';
 
 /**
  * 从 cordis 上下文里取一个**可选**服务（取不到返回 null，绝不抛）。
@@ -45,14 +49,60 @@ export function controllerOf(ctx) {
 }
 
 /** 唤醒用的消息：DSH 的 `followup()` 要的是一条 user 角色的消息（`MessageBase`） */
-function followupMessage(text) {
+function followupMessage(text, { kind = 'see-now' } = {}) {
   return {
     id: randomUUID(),
     role: 'user',
     content: [{ type: 'text', text: String(text ?? '') }],
-    // 自定义 source.kind 是 DSH 文档里给插件用的形状
-    source: { kind: 'see-now' },
+    // `see-now` = 插件自己的叫醒 / 提词；`user` = 用户在浮窗亲手打的字（2026-11-26）
+    source: kind === 'user' ? { kind: 'user' } : { kind: 'see-now' },
   };
+}
+
+/**
+ * **我们代用户投进会话的消息 id**（`relay-user-ids.json`）。
+ *
+ * 为什么需要：浮窗消息现在以 `source.kind:"user"` 投递 —— 主窗才会显示成用户的
+ * 气泡、引用才会按 Markdown 渲染。但镜子（`mirror.js`）只认「source.kind=user」，
+ * 不拦就会把浮窗刚发的话再镜像回浮窗（一条变两条）。id 是我们自己生成的，
+ * 记下来给 mirror 查；落盘是为了重启后回填也不重复。
+ */
+const RELAY_ID_FILE = 'relay-user-ids.json';
+const RELAY_ID_MAX = 200;
+const relayIdCaches = new Map();
+
+function relayIdsPath(env = process.env) {
+  return join(chatDir(env), RELAY_ID_FILE);
+}
+
+function relayIdsSet(env = process.env) {
+  const path = relayIdsPath(env);
+  let set = relayIdCaches.get(path);
+  if (set) return set;
+  try { set = new Set(JSON.parse(readFileSync(path, 'utf8')).map(String)); }
+  catch { set = new Set(); }
+  relayIdCaches.set(path, set);
+  return set;
+}
+
+/** 这条 id 是不是浮窗 relay 代用户投的（mirror 用它跳过回灌）。 */
+export function isRelayInjectedId(id, env = process.env) {
+  const key = String(id ?? '');
+  if (!key) return false;
+  return relayIdsSet(env).has(key);
+}
+
+/** 记下一条 relay 代用户投的消息 id（只留最近 200 条）。 */
+export function markRelayInjectedId(id, env = process.env) {
+  const key = String(id ?? '');
+  if (!key) return;
+  const set = relayIdsSet(env);
+  set.add(key);
+  while (set.size > RELAY_ID_MAX) set.delete(set.values().next().value);
+  try {
+    mkdirSync(chatDir(env), { recursive: true });
+    writeFileSync(relayIdsPath(env), JSON.stringify([...set]), 'utf8');
+  } catch { /* 记不住最多重启后回填多一条，不能挡住投递 */ }
 }
 
 /**
@@ -117,7 +167,7 @@ export function deliveryMode({ running } = {}) {
  *   2. `agent.followup(message)` 排队下一轮并唤醒驱动器
  *   3. `sessions.flush(agent.session)` 确认真的落进会话（followup 只进收件箱）
  */
-export async function wakeSession(ctx, { sessionId, text, steer = false } = {}) {
+export async function wakeSession(ctx, { sessionId, text, steer = false, sourceKind = 'see-now' } = {}) {
   const sc = controllerOf(ctx);
   if (!sc?.resolveAgent) return { ok: false, reason: 'no-session-controller' };
   if (!sessionId) return { ok: false, reason: 'no-session-id' };
@@ -132,7 +182,9 @@ export async function wakeSession(ctx, { sessionId, text, steer = false } = {}) 
     // `followup` = 下一**回合**（模型正忙时排在后面）。窗口里的用户消息**不是永远走 steer**：
     // 只有会话真在跑回合时才能插话，判据见 `deliveryMode()`。
     const agent = resolved.agent;
-    const msg = followupMessage(text);
+    const msg = followupMessage(text, { kind: sourceKind });
+    // 投之前就记：事件可能比 await 更早到达 mirror
+    if (sourceKind === 'user') markRelayInjectedId(msg.id);
     let via = 'followup';
     if (steer && typeof agent.steer === 'function') {
       agent.steer(msg);
@@ -157,10 +209,10 @@ export async function wakeSession(ctx, { sessionId, text, steer = false } = {}) 
  * 以前这里是 `void wakeSession(...)`，返回 `{ok:false}` 也没人看 ——
  * 用户看到的现象就是"突然不理我了"（陪看那边实报过）。
  */
-export async function wakeWithRetry({ ctx, sessionId, text, note = () => {}, appendMeta = null, steer = false }) {
+export async function wakeWithRetry({ ctx, sessionId, text, note = () => {}, appendMeta = null, steer = false, sourceKind = 'see-now' }) {
   let r = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { r = await wakeSession(ctx, { sessionId, text, steer }); } catch (e) { r = { ok: false, reason: String(e?.message ?? e) }; }
+    try { r = await wakeSession(ctx, { sessionId, text, steer, sourceKind }); } catch (e) { r = { ok: false, reason: String(e?.message ?? e) }; }
     if (r?.ok) return r;
     if (attempt === 0) await new Promise((res) => setTimeout(res, 800));
   }

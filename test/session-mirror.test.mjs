@@ -18,6 +18,7 @@ import { join } from 'node:path';
 
 import { appendChat, chatFile, isFloatUserEntry, pendingStartupEntries } from '../src/chat.js';
 import { isTypedUserMessage } from '../src/human.js';
+import { markRelayInjectedId } from '../src/timer.js';
 import {
   BACKFILL_LIMIT, MAX_TEXT, createSessionMirror, mirrorPaths, mirrorTextOf, readMirrorWatermark,
 } from '../src/mirror.js';
@@ -110,6 +111,26 @@ test('pendingStartupEntries：镜像条目跳过但不停，浮窗消息才补�
   // 早于 cutoff 的浮窗消息不投（10 分钟窗口）
   const old = JSON.stringify({ role: 'user', text: '十分钟前', at: NOW - 11 * 60 * 1000 });
   assert.deepEqual(pendingStartupEntries(`${old}\n`, { cutoff: NOW - 10 * 60 * 1000 }), []);
+});
+
+test('relay 代用户投的消息不镜像（live 与回填都跳过）', async () => {
+  const env = sandbox();
+  const relayId = 'relay-msg-0001';
+  markRelayInjectedId(relayId, env);
+  const ev = userEvent(9, '浮窗发的话');
+  ev.data.id = relayId;
+
+  const live = createSessionMirror({ env, now: () => NOW });
+  assert.equal(live.onEvent('session-test', ev), false);
+  assert.equal(chatEntries(env).length, 0, '窗口自己已经写过这条，不许镜像回灌');
+
+  // 重启后回填：id 落在 relay-user-ids.json 里，也要跳过
+  const bf = createSessionMirror({
+    env, now: () => NOW, ctx: ctxWith(async () => ({ events: [ev] })),
+  });
+  const r = await bf.backfill({ sid: 'session-test' });
+  assert.equal(r.written, 0);
+  assert.equal(chatEntries(env).length, 0);
 });
 
 test('onEvent：写入一条带 origin/mid 的条目；重复事件不写第二遍', () => {
