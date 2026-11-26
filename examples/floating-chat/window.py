@@ -1992,6 +1992,24 @@ class LiveGlass:
             self.feed.status = "已替换引用"
             self._refresh_feed()
 
+    def _quote_choice(self, sel_text: str, from_review: bool = False) -> None:
+        """菜单「引用选中文字」的落地：设 chip；来自回顾窗时先把主窗带回前面。
+
+        回顾窗是独立 Toplevel 且同样 topmost，只设 chip 的话输入区被它盖住。
+        P2 的决定是「引用完就回主窗」：关回顾窗、主窗 lift、焦点进输入框 ——
+        引用本来就是为了回主窗发出去。代价是回顾页的滚动位置会丢。
+        """
+        self._set_draft_quote(sel_text)
+        if not from_review:
+            return
+        self._close_history()
+        try:
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+        except Exception:
+            pass
+        self._focus_input()
+
     def _fit_ellipsis(self, font, text: str, maxw: float) -> str:
         """按像素宽度截断并加 `…`（二分，避免每次按键扫 4000 个字）。"""
         text = str(text or "")
@@ -7288,7 +7306,8 @@ class LiveGlass:
                                   in_fav=(st.get("page") == "fav"),
                                   sel_text=self._hist_sel_text(),
                                   on_copy_sel=self._hist_copy_selection,
-                                  allow_quote=False)
+                                  allow_quote=True,
+                                  from_review=True)
                 return
 
     def _show_row_menu(self, x_root, y_root, g) -> None:
@@ -9816,12 +9835,14 @@ class LiveGlass:
         self._flash_status("已复制全文" if ok else "复制失败")
 
     def _bubble_menu(self, x_root, y_root, ent: dict, in_fav: bool = False,
-                     sel_text=None, on_copy_sel=None, allow_quote: bool = False) -> None:
+                     sel_text=None, on_copy_sel=None, allow_quote: bool = False,
+                     from_review: bool = False) -> None:
         """气泡右键：引用选中文字 / 复制选中文字 / 复制全文 / 隐藏这条（红）/ 收藏（黄）。
 
         图片上右键仍走图片菜单。主窗和回顾窗共用：回顾窗把 `sel_text` /
-        `on_copy_sel` 传进来，否则默认读主窗的选区。`allow_quote` 只有主窗传 True ——
-        回顾窗是独立 Toplevel，点完引用要么被它盖住输入框、要么强行关窗，留到 P2。
+        `on_copy_sel` 传进来，否则默认读主窗的选区。`allow_quote` 主窗与回顾窗都传 True
+        （2026-11-27 P2）；`from_review=True` 时点完引用会关回顾窗、把主窗带回前面 ——
+        回顾窗是独立 Toplevel，不这样做 chip 会被它盖住。
         """
         src = ent.get("msg") or ent
         sid = str(src.get("sid") or ent.get("sid") or self._bound_full or "")
@@ -9849,7 +9870,7 @@ class LiveGlass:
 
         def pick(action):
             if action == "quote":
-                self._set_draft_quote(sel_text)
+                self._quote_choice(sel_text, from_review=from_review)
             elif action == "copysel":
                 copy_sel()
             elif action == "copy":

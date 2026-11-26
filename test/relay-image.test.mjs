@@ -92,6 +92,23 @@ test('saveImage 失败：同样退回原 markdown，不许抛穿投递', async (
   assert.match(out.text, /!\[图片\]\(/);
 });
 
+test('超过 4MB 的图也交给 saveImage —— 归一化是 DSH 的事，4MB 是旧门槛', async () => {
+  // 2026-11-27：原来的 4MB 是内联 base64 时代的保守值；现在 DSH 的附件库会把源图缩到
+  // 2048² 像素 / ≤4MB（源图准入 50MB），插件不该先把它挡掉。手机照片常见 5–10MB。
+  const dir = mkdtempSync(join(tmpdir(), 'see-now-relay-big-'));
+  const path = join(dir, 'big.png');
+  writeFileSync(path, Buffer.alloc(4 * 1024 * 1024 + 1, 7));
+  let saved = null;
+  const ctx = ctxWithAttachments(async (input) => { saved = input; return REF; });
+
+  const out = await loadRelayImages({ ctx, text: `看图\n![图片](${path})`, log: () => {} });
+
+  assert.ok(saved, '4MB 以上必须走到 saveImage，让 DSH 归一化');
+  assert.equal(saved.data.byteLength, 4 * 1024 * 1024 + 1);
+  assert.deepEqual(out.images, [{ attachment: REF }]);
+  assert.equal(out.text, '看图');
+});
+
 test('followup 投出去的是 {type:"image", attachment}，一个字节都不带', async () => {
   const { ctx, seen } = ctxWithAgent();
   const r = await wakeSession(ctx, { sessionId: 'sid', text: '看图', images: [{ attachment: REF }] });

@@ -558,9 +558,16 @@ function writeLoadError(e) {
   } catch { /* 记不住也不能再炸一次 */ }
 }
 
-/** 浮窗消息里的本地图片：一条最多搬几张、单张多大（base64 还会再涨约 1/3）。 */
+/**
+ * 浮窗消息里的本地图片：一条最多搬几张、单张源文件多大。
+ *
+ * **32MB 不是存储上限，是「明显不合理的文件」挡板。** DSH 附件库自己就把图归一化到
+ * 2048² 像素 / ≤4MB（`dsh-attachment-local` 的 `DEFAULT_NORMALIZED_IMAGE_MAX_PIXELS` /
+ * `_MAX_BYTES`），源图准入线是 50MB；2026-11-27 之前这里的 4MB 是内联 base64 时代留下的
+ * 错误门槛，把本来能被归一化的手机照片挡在门外。现在走 `saveImage`，不传 base64。
+ */
 const RELAY_IMAGE_MAX = 4;
-const RELAY_IMAGE_BYTES = 4 * 1024 * 1024;
+const RELAY_IMAGE_BYTES = 32 * 1024 * 1024;
 const RELAY_IMAGE_MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
@@ -570,7 +577,7 @@ const RELAY_IMAGE_MIME = {
  * 把浮窗正文里的本地图片**存进宿主附件库**，换成 DSH 的图片内容块（2026-11-26）。
  *
  * 主窗不解析本地路径的 Markdown 图片，不搬就只显示一行 `![图片](C:\…)`。
- * 搬不动的（文件没了 / 超 4MB / 格式不认识 / 超过 4 张 / 没有附件服务）**保留原
+ * 搬不动的（文件没了 / 超 32MB / 格式不认识 / 超过 4 张 / 没有附件服务）**保留原
  * markdown**，别让路径凭空消失 —— 模型还能沿路径自己读。
  *
  * ## 为什么必须 saveImage，不许把 base64 塞进内容块

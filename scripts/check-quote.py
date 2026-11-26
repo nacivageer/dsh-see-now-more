@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """check-quote.py — 无 GUI 验「引用选中文字」的编码 / chip 几何 / 发送拼装。
 
 不创建 Tk 窗口：用 `object.__new__(Window)` 造一个没有 `__init__` 的壳，
@@ -152,11 +152,38 @@ def test_parse_and_backspace():
     assert Window._input_backspace(w) is None
 
 
+def test_quote_from_review():
+    """P2：回顾窗点「引用选中文字」→ 关回顾窗、主窗前置、焦点进输入框。"""
+    w = object.__new__(Window)
+    calls = []
+
+    class FakeRoot:
+        def lift(self):
+            calls.append("lift")
+
+        def attributes(self, *a):
+            calls.append(("attributes",) + a)
+
+    w.root = FakeRoot()
+    w._set_draft_quote = lambda text: calls.append(("quote", text))
+    w._close_history = lambda: calls.append("close")
+    w._focus_input = lambda _e=None: calls.append("focus")
+
+    Window._quote_choice(w, "回顾里选的", from_review=True)
+    assert calls == [("quote", "回顾里选的"), "close", "lift",
+                     ("attributes", "-topmost", True), "focus"]
+
+    # 主窗引用：只设 chip，不关窗、不动窗口
+    calls.clear()
+    Window._quote_choice(w, "主窗选的")
+    assert calls == [("quote", "主窗选的")]
+
+
 def main() -> int:
     for fn in (test_format, test_split, test_preview, test_chip_layout,
-               test_compose, test_parse_and_backspace):
+               test_compose, test_parse_and_backspace, test_quote_from_review):
         fn()
-    print("ok: 引用编码 / chip 几何 / 发送拼装 / 退格删引用 全过")
+    print("ok: 引用编码 / chip 几何 / 发送拼装 / 退格删引用 / 回顾窗引用 全过")
     return 0
 
 

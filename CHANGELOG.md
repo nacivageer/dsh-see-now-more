@@ -2,6 +2,19 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.35] - 2026-11-27
+
+### Changed — 浮窗发图的源文件门槛 4MB → 32MB；回顾窗也能引用选中文字
+
+- `src/index.js` 的 `RELAY_IMAGE_BYTES`：4MB → 32MB。原来的 4MB 是内联 base64 时代的保守值；
+  现在走 `attachments.saveImage()`，DSH 的附件库自己会把图归一化到 2048² 像素 / ≤4MB
+  （源图准入 50MB），插件不该抢在它前面把手机照片挡回一行路径。
+- `examples/floating-chat/window.py`：回顾窗（回顾 / 收藏页）的气泡右键多了「引用选中文字」；
+  点完会**关掉回顾窗、把主窗带到前面**、焦点进输入框 —— 回顾窗是独立 Toplevel 且同样
+  topmost，不这样做 chip 会被它盖住。代价是回顾页的滚动位置会丢。
+- 单测：`test/relay-image.test.mjs` 新增「>4MB 也交给 saveImage」；`scripts/check-quote.py`
+  新增「回顾窗引用 → 关窗 + 主窗前置 + 焦点」。
+
 ## [0.1.1-more.34] - 2026-11-26
 
 ### Fixed — steer 时的插话说明迟到；纯图消息在主窗无文字可搜
