@@ -2,6 +2,9 @@
 
 动手前先读 `docs/决策记录.md`：做什么、不做什么、发版六步都在那里。
 
+发版（打 tag / Release）前先核文档：这一版改到的行为 / 参数 / 数字有没有落进 `README.md` 和
+`src/tool-spec.js`（模型看到的 schema）；**这一版没有对应改动也要核一遍再往下**（发版六步的第 1 步）。
+
 改到窗口的代码（`examples/floating-chat/window.py`、`src/window.js`、`src/index.js`
 里碰窗口 / 置顶 / 穿透的部分）之后，跑两条：
 
