@@ -3,7 +3,7 @@
 状态：已发版（`v0.1.1-more.31`，prerelease <https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.31>；真机 A/B 已过）
 对象：把绑定会话里 assistant 的正文也同步进浮窗的聊天流 —— 窗关着时照写、插件启动 / 换绑时回填，补掉「关窗一段再开，回看只有用户半边」的缺口。不碰窗口 UI。
 归属：session-8cca3e59-4846-40d9-bf73-893e55226978 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：无。唯一没亲眼看到的是「真机 live 写 assistant 的那一条」——本回合回复落盘后读 `chat.jsonl` 核（同一 handler 的 user 侧已 live 验过）。
+下一步：无（真机 live 写 assistant 也已核：`14:21:07.420Z assistant session-8cca3e59-…:1327（1156 字）`）。
 证据：
   - **真机（2026-11-26 22:15，格重启 DSH 后 `.31` 生效）**：`mirror.log` `14:15:06.215Z backfill session-8cca3e59 startup: wrote 0 users + 6 assistant / 0+6 scanned 1151 ms=4027`；`14:17:20.186Z wrote session-8cca3e59-…:1156（26 字）`（格在主窗发的那句，窗关着 → live 镜像）；`_scratch/verify_after_restart.mjs` PASS（9 条镜像：user 3 / assistant 6，0 重复 mid）；开窗截图 `_scratch/assistant-mirror-real-restart.png`（4 条回填的模型气泡 + 22:17 那条用户气泡）。
   - `node --test` → 408 tests / 405 pass / 0 fail / 3 skip（2026-11-26 21:50，含 `pushAssistantText` 接线测试）。
@@ -15,7 +15,7 @@
   - 重启后一条命令：`node _scratch/verify_after_restart.mjs`（查副本版本、`.31` 的 startup 回填行、绑定会话两侧条目、重复 mid）。当前跑出来是「还没重启」。
   - 代码落点：`src/mirror.js`（`assistantTextOf` / `onAssistant` / `pushAssistantText` / `assistantThroughSeq` / 回填合并），`src/chat.js`（`pendingStartupEntries` 跳过镜像 assistant），`src/index.js`（接线，朗读仍只在窗开时）。
 账：无需（实现轮）
-更新：2026-11-26 22:21 CST
+更新：2026-11-26 22:22 CST
 
 ## 验收（3 条，格确认过；中途要加先问）
 
@@ -94,4 +94,9 @@
   B：把绑定换到不存在的会话再换回来，触发 `wrote 0 users + 0 assistant`（9 条镜像不变、0 重复 mid）。
 - 2026-11-26 22:20 **提交 + tag + prerelease**：commit `a389d49`（11 个路径，`git show --stat` 核过）、
   tag `v0.1.1-more.31`、`git-push.ps1 -TagAtHead` 走代理推送（`21c2fd3..a389d49 main` + new tag）、
-  Release 已建并核 `isPrerelease: true`。tag 之后只动文档。
+  Release 已建并核 `isPrerelease: true`；之后 `ae9b7b4` 只补任务书状态，tag 不挪。
+- 2026-11-26 22:21 **真机 live 写 assistant 也核完**：上一轮回复落盘时 `mirror.log`
+  `14:21:07.420Z assistant session-8cca3e59-…:1327（1156 字）`，`chat.jsonl` 里 10 条镜像
+  （user 3 / assistant 7）、0 重复 mid。A/B 两条在真机上都对上了；C 由单测钉住（真机这次没有待投的浮窗消息可触发，
+  `relay.log` 的 startup 补投是 0 条）。tag 与 Release 已在 22:20 发出。
+
