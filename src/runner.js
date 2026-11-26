@@ -1541,6 +1541,8 @@ export function createRunner({
      * 消费式：给了就记水位，后面只补新的。
      */
     textNote: (a, b) => takeText(a, b),
+    /** 运行期开关（`see-now.json` 的 `text.enabled`，改完 1.5 秒生效，不用重启） */
+    setTextEnabled: (on) => textStream?.setEnabled(on),
     /**
      * 血条简报（P2）：`{text, below, ratio, at}` 或 `null`。
      * 唤醒文案与 `watch` 结果都拼这一行 —— **只报告，不唤**。

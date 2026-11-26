@@ -1132,6 +1132,10 @@ async function registerAll(ctx) {
   let lastCfgMode = (() => {
     try { return readTuning().mode ?? null; } catch { return null; }
   })();
+  /** 屏幕文字流的运行期开关现值（`text.enabled`，默认开） */
+  let lastCfgText = (() => {
+    try { return readTuning().text?.enabled !== false; } catch { return true; }
+  })();
 
   /**
    * 把一档模式**真的做出来**（2026-11-19 用户要求：设置页要能"一眼开始看"）。
@@ -1214,6 +1218,14 @@ async function registerAll(ctx) {
     }
     const mode = t.mode ?? null;
     const at = Number(t.modeAt) || 0;
+    // 屏幕文字流的运行期开关：改 `text.enabled` 立刻生效，**不用重启**。
+    // A/B 靠它 —— 重启会打断常驻循环，开 / 关两段的条件就不一致了。
+    const textOn = t.text?.enabled !== false;
+    if (textOn !== lastCfgText) {
+      lastCfgText = textOn;
+      try { runner.setTextEnabled(textOn); } catch { /* 开关不许弄挂轮询 */ }
+      log(`屏幕文字流：${textOn ? '开' : '关'}（see-now.json 的 text.enabled，即时生效）`);
+    }
     // 窗口每点一次都写 `modeAt`（同一个值也算一次）；手改配置没有 modeAt，
     // 就退回按 `mode` 值变化判断。
     if (!mode || (at === lastModeAt && mode === lastCfgMode)) return;

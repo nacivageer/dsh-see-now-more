@@ -209,11 +209,24 @@ export function createTextStream({
     try { o?.stop(); } catch { /* 已经退了 */ }
   }
 
+  /**
+   * 运行期开关（`see-now.json` 的 `text.enabled`，1.5 秒轮询调进来）。
+   *
+   * 关掉时把 sidecar 停了、闸门里的字**留着**（再打开时同一段字幕还在窗口里）；
+   * 打开时下一帧会懒起 sidecar。A/B 靠它：不用重启，开 / 关两段能背靠背跑。
+   */
+  function setEnabled(on) {
+    cfg.enabled = Boolean(on);
+    if (!cfg.enabled) stop();
+    return cfg.enabled;
+  }
+
   return {
     onFrame,
     between,
     status,
     stop,
+    setEnabled,
     /** 测试用：等手上这一帧识别完 */
     settled: () => inFlight ?? Promise.resolve(),
   };
