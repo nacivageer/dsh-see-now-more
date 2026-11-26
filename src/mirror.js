@@ -16,10 +16,23 @@
  * - **水位** `session-mirror.json`：只有 `appendChat` 成功后才推进；水位保证
  *   「用户在浮窗里删掉的条目不会被回填复活」，也保证回填幂等。
  *
+ * ## 2026-11-26（.31）：模型正文也进来
+ *
+ * 只搬用户消息时，关窗一段再打开，回看是「只有我半边」—— 因为
+ * `mirrorAssistantText` 在窗没开时直接跳过（`src/index.js`）。现在：
+ *
+ * - **live 不看窗**：绑定会话（未绑定时用事件所属会话）的 `assistant/message`
+ *   正文照写，关窗也写；朗读仍只在窗开时（`src/index.js` 决定）。
+ * - **回填 assistant** 用独立游标 `assistantThroughSeq`：用户游标被后面一条
+ *   user 推走时，它前面那批「当时窗没开」的正文仍补得到。
+ * - 旧条目没有 `mid`：回填前先按「同文且 ≤10s」与「已被 `say` 覆盖且 ≤120s」
+ *   对 `chat.jsonl` 里已有的 assistant 条目去重。
+ *
  * ## 边界（别扩）
  *
- * - 只认 `source.kind === "user"`（`isTypedUserMessage`）：卡片按钮、插件自己的
- *   叫醒、工具消息都不进。图片只写一行 `[图片]` 占位。
+ * - 用户消息只认 `source.kind === "user"`（`isTypedUserMessage`）：卡片按钮、
+ *   插件自己的叫醒、工具消息都不进。图片只写一行 `[图片]` 占位。
+ * - assistant 只搬 `type:"text"` 的块；`reasoning` / `tool-call` 不进。
  * - 回填只取绑定会话、最近 500 条 / 30 天，跳过 fork 继承前缀。
  * - 失败只记 `mirror.log`，不重试、不弹窗、不影响实时镜像和工具调用。
  */
@@ -87,6 +100,57 @@ export function mirrorMid(sid, event) {
   return `${sid}:${seq}`;
 }
 
+/** 比较用的正文：去掉所有空白（换行 / 空格差异不该算两条）。 */
+export function normText(text) {
+  return String(text ?? '').replace(/\s+/g, '');
+}
+
+/**
+ * 从一条 `assistant/message` 事件里取出要显示的正文。
+ *
+ * 形状（真实会话日志，2026-11-26 核过）：`data.message.content` 是块数组，
+ * 里面有 `reasoning` / `tool-call` / `text`；只拼 `text`。**纯工具轮没有正文**
+ * （真实日志 203 条 assistant 里 50 条是这样），返回空串让调用方跳过。
+ *
+ * 截断口径与窗口里的历史一致：3000 字 + 省略号。
+ *
+ * @param {object} event
+ * @returns {string}
+ */
+export function assistantTextOf(event) {
+  if (event?.type !== 'assistant/message') return '';
+  const data = event?.data ?? {};
+  const blocks = data?.message?.content ?? data?.content;
+  if (!Array.isArray(blocks)) return '';
+  const text = blocks
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text)
+    .join('\n')
+    .trim();
+  if (text.length < 2) return '';
+  return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…` : text;
+}
+
+/**
+ * 这句正文是不是已经被 `say` 写过一遍了。
+ *
+ * 判据与 live 原来的实现同口径（`src/index.js` 2026-11-26 之前那段）：两分钟内
+ * 说过的那句、且被正文原文包含 —— 那就只留 `say` 那条气泡，不写第二遍。
+ *
+ * @param {{text?:string, at?:number}|null} said
+ * @param {string} text 候选正文
+ * @param {number} at 候选事件时间
+ * @param {number} nowMs 没有事件时间时的兜底
+ */
+export function saidCovers(said, text, at, nowMs = Date.now()) {
+  if (!said?.text) return false;
+  const when = Number(at) > 0 ? Number(at) : nowMs;
+  if (Math.abs(when - (Number(said.at) || 0)) > 120_000) return false;
+  const body = normText(text);
+  const saidNorm = normText(said.text);
+  return saidNorm.length > 0 && body.includes(saidNorm);
+}
+
 /** 事件里的消息 id（`user/message` 的 data 就是 MessageBase；兼容包一层的） */
 function eventMessageId(event) {
   const d = event?.data ?? event ?? {};
@@ -112,9 +176,16 @@ export function readMirrorWatermark(env = process.env) {
     const raw = JSON.parse(readFileSync(mirrorPaths(env).watermark, 'utf8'));
     const sids = {};
     for (const [sid, v] of Object.entries(raw?.sids ?? {})) {
-      const seq = Number(v?.throughSeq);
-      if (!sid || !Number.isFinite(seq) || seq < 0) continue;
-      sids[sid] = { throughSeq: seq, updated: Number(v?.updated) || 0 };
+      const u = Number(v?.throughSeq);
+      const a = Number(v?.assistantThroughSeq);
+      const hasU = Number.isFinite(u) && u >= 0;
+      const hasA = Number.isFinite(a) && a >= 0;
+      if (!sid || (!hasU && !hasA)) continue;
+      sids[sid] = {
+        throughSeq: hasU ? u : 0,
+        assistantThroughSeq: hasA ? a : 0,
+        updated: Number(v?.updated) || 0,
+      };
     }
     return { v: 1, sids };
   } catch {
@@ -138,6 +209,88 @@ export function scanTailMids(env = process.env) {
     } catch { /* 半行 / 坏行跳过 */ }
   }
   return out;
+}
+
+/**
+ * `chat.jsonl` 里已有的 assistant 正文（按 `at` 升序），用于回填去重。
+ *
+ * 为什么必须看文件而不能只看水位：`.31` 之前的 assistant 条目没有 `mid`，
+ * 而 `say` 写的气泡和模型正文是同一句话 —— 只看 `mid` 会把同一句写两遍。
+ *
+ * 只取尾部 `TAIL_LINES` 行：更早的条目不在窗口回看范围里，也不必为它扫全文件。
+ *
+ * @returns {{at:number, norm:string}[]}
+ */
+export function scanAssistantTexts(sid = '', env = process.env) {
+  const out = [];
+  let raw = '';
+  try { raw = readFileSync(chatFile(env), 'utf8'); } catch { return out; }
+  const lines = raw.split('\n');
+  const from = Math.max(0, lines.length - TAIL_LINES);
+  for (let i = from; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line || !line.includes('"assistant"')) continue;
+    let entry = null;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (entry?.role !== 'assistant') continue;
+    if (sid && entry?.sid && entry.sid !== sid) continue;
+    const at = Number(entry?.at);
+    if (!Number.isFinite(at) || at <= 0) continue;
+    const text = entry?.text;
+    if (typeof text !== 'string' || !text.trim()) continue;
+    out.push({ at, norm: normText(text) });
+  }
+  out.sort((a, b) => a.at - b.at);
+  return out;
+}
+
+/**
+ * 这条正文是不是已经以别的形式进过流了（旧版 live 条目 / `say` 气泡）。
+ *
+ * - 同文、10 秒内：旧版 live 写的同一条（它没带 `mid`，时间取写在当时的 `Date.now()`）；
+ * - 已有条目是候选的一大部分、120 秒内：`say` 已经把那句话写过一遍（live 的判据是
+ *   「包含」，这里再加一条「占比 ≥ 30%」，免得模型下一轮的长回复里顺带提了一句
+ *   旧台词就被当成重复吞掉 —— 实测 1201 条 assistant 里这类包含对只有 1 对）。
+ *
+ * 两条都要求时间近，避免模型隔很久重复同一句话时被误吞。
+ */
+export function assistantAlreadyInStream(existing, text, at) {
+  if (!Array.isArray(existing) || !existing.length) return false;
+  const when = Number(at) || 0;
+  const norm = normText(text);
+  const near = 120_000;
+  // `existing` 按 at 升序：跳过太早的
+  let i = 0;
+  while (i < existing.length && existing[i].at < when - near) i += 1;
+  for (; i < existing.length && existing[i].at <= when + near; i += 1) {
+    const e = existing[i];
+    if (Math.abs(e.at - when) <= 10_000 && e.norm === norm) return true;
+    if (e.norm.length >= 3 && norm.includes(e.norm) && e.norm.length / norm.length >= 0.3) return true;
+  }
+  return false;
+}
+
+/**
+ * 接线的唯一实现：一条 `assistant/message` 交给镜像，并决定要不要朗读。
+ *
+ * 为什么单独成函数：`registerAll` 里那段闭包测不到，而「**窗关着也写、只在窗开时念**」
+ * 恰恰是 `.31` 最容易被以后的重构改回去的一行（原来的 `if (!windowAlive()) return`
+ * 就在那里）。把它钉成可测的纯接线。
+ *
+ * @param {{onAssistant?:Function}} mirror `createSessionMirror()` 的返回值
+ * @param {object} event `assistant/message`
+ * @param {{sid?:string, said?:{text:string,at:number}|null, alive?:boolean, speak?:Function}} [o]
+ * @returns {{ok:boolean, text?:string, skip?:string}}
+ */
+export function pushAssistantText(mirror, event, { sid, said = null, alive = false, speak = null } = {}) {
+  if (event?.type !== 'assistant/message' || typeof mirror?.onAssistant !== 'function') {
+    return { ok: false };
+  }
+  const r = mirror.onAssistant(sid, event, { said });
+  if (r?.ok && alive && typeof speak === 'function') {
+    try { speak(r.text); } catch { /* 念不出来不影响记录 */ }
+  }
+  return r;
 }
 
 /**
@@ -186,15 +339,22 @@ export function createSessionMirror({
     }
   };
 
-  const advance = (sid, seq, { persist = true } = {}) => {
+  /**
+   * 推进游标。用户与模型各一个（`throughSeq` / `assistantThroughSeq`）：
+   * 共用一个的话，「assistant 在最后一条 user 之前、而且当时窗没开」的那批
+   * 会被后面那条 user 推过去的游标永远挡在外面。
+   */
+  const advanceTo = (sid, key, seq, { persist = true } = {}) => {
     const n = Number(seq);
     if (!sid || !Number.isFinite(n) || n <= 0) return false;
-    const cur = Number(water.sids[sid]?.throughSeq) || 0;
+    const cur = Number(water.sids[sid]?.[key]) || 0;
     if (n <= cur) return false;
-    water.sids[sid] = { throughSeq: n, updated: now() };
+    water.sids[sid] = { ...water.sids[sid], [key]: n, updated: now() };
     if (persist) persistWater();
     return true;
   };
+  const advance = (sid, seq, opt) => advanceTo(sid, 'throughSeq', seq, opt);
+  const advanceAssistant = (sid, seq, opt) => advanceTo(sid, 'assistantThroughSeq', seq, opt);
 
   /**
    * 写一条镜像条目。**写盘成功才推进水位**；失败返回 `{ok:false}`，
@@ -255,15 +415,87 @@ export function createSessionMirror({
   };
 
   /**
-   * 回填：读会话日志，把水位之后的用户消息补进 `chat.jsonl`。
+   * 写一条 assistant 正文（`role:"assistant"` + `mid` + `origin:"dsh"`）。
+   *
+   * 与用户条目同一份 `chat.jsonl`、同一个 `origin`：窗口按 `sid` 过滤、按 `at`
+   * 排序，不新增流。写不进去只记日志。
+   */
+  const writeAssistant = (sid, event, text, mid) => {
+    try {
+      return appendChat('assistant', text, {
+        sid,
+        at: Number(event?.time) || now(),
+        mid,
+        origin: MIRROR_ORIGIN,
+        env,
+      });
+    } catch (e) {
+      note(`appendChat 抛错 ${mid}：${e?.message ?? e}`);
+      return null;
+    }
+  };
+
+  /**
+   * 实时镜像模型正文：`session/event` 钩子里调（**窗没开也写**）。
+   *
+   * 与用户消息的区别：
+   * - 不看窗：关窗那段也要有正文，否则重开窗就是「只有我半边」；
+   * - `say` 已经写过的句子不写第二遍（`saidCovers`，与原来的 live 判据同口径）；
+   * - **朗读不在这里**（`index.js` 决定，窗不开就不念）。
+   *
+   * @param {string} sid 绑定会话（未绑定时传事件所属会话）
+   * @param {object} event `assistant/message`
+   * @param {{said?:{text:string, at:number}|null}} [o] 最近一次 `say`（用来去重）
+   * @returns {{ok:boolean, text?:string, skip?:string}}
+   */
+  const onAssistant = (sid, event, { said = null } = {}) => {
+    if (disposed || !cfg.users) return { ok: false, skip: 'disabled' };
+    const id = String(sid ?? '');
+    if (!id || event?.type !== 'assistant/message') return { ok: false };
+    const seq = Number(event?.seq);
+    if (!Number.isFinite(seq) || seq <= 0) return { ok: false };
+    const cur = Number(water.sids[id]?.assistantThroughSeq) || 0;
+    if (seq <= cur) return { ok: false, skip: 'stale' };
+    const text = assistantTextOf(event);
+    if (!text) {
+      advanceAssistant(id, seq);
+      return { ok: false, skip: 'empty' };
+    }
+    if (saidCovers(said, text, Number(event?.time), now())) {
+      advanceAssistant(id, seq);
+      return { ok: false, skip: 'said' };
+    }
+    const mid = mirrorMid(id, event);
+    if (!mid) {
+      advanceAssistant(id, seq);
+      return { ok: false, skip: 'no-mid' };
+    }
+    if (seen.has(mid)) {
+      advanceAssistant(id, seq);
+      return { ok: false, skip: 'seen' };
+    }
+    const entry = writeAssistant(id, event, text, mid);
+    if (!entry) return { ok: false };
+    seen.add(mid);
+    advanceAssistant(id, seq);
+    note(`assistant ${mid}（${text.length} 字）`);
+    return { ok: true, text };
+  };
+
+  /**
+   * 回填：读会话日志，把游标之后的消息补进 `chat.jsonl`。
+   *
+   * 两类各走一条游标：
+   * - 用户：`user/message` + `source.kind=user`（`.29`）；
+   * - 模型正文：`assistant/message` 的 `text` 块（`.31`）。
    *
    * 约束（任务书「触发、回填与配置」）：
-   * - 只取 `type=user/message` + `source.kind=user`；
    * - 跳过 `inheritedEventCount` 之前的 fork 继承前缀；
-   * - 取最近 500 条 / 30 天内；每条写成功才推进水位，失败停在失败那条之前；
-   * - 扫完没有可写的也要把水位推到扫描到的最后一条 seq，避免每次重扫。
+   * - 每类取最近 500 条 / 30 天内，按 seq 顺序写；
+   * - 每条写成功才推进游标，失败停在失败那条之前；
+   * - 扫完没有可写的也要把游标推到扫描到的最后一条 seq，避免每次重扫。
    *
-   * @returns {Promise<{written:number, scanned?:number, ms?:number, error?:string, skipped?:string}>}
+   * @returns {Promise<{written:number, users?:number, assistants?:number, scanned?:number, ms?:number, error?:string, skipped?:string}>}
    */
   const backfill = async ({ sid, reason = 'manual' } = {}) => {
     if (disposed) return { written: 0, skipped: 'disposed' };
@@ -287,14 +519,23 @@ export function createSessionMirror({
     const events = Array.isArray(res?.events) ? res.events : [];
     const inherited = Number(res?.inheritedEventCount) || 0;
     const since = Number(water.sids[id]?.throughSeq) || 0;
+    const sinceA = Number(water.sids[id]?.assistantThroughSeq) || 0;
     const cutoff = now() - BACKFILL_MAX_AGE_MS;
 
     const picked = [];
-    let lastScanned = since;
+    const pickedA = [];
+    let lastScanned = Math.max(since, sinceA);
     for (const ev of events) {
       const seq = Number(ev?.seq);
       if (!Number.isFinite(seq) || seq < inherited) continue;
       if (seq > lastScanned) lastScanned = seq;
+      if (ev?.type === 'assistant/message') {
+        if (seq <= sinceA) continue;
+        if ((Number(ev?.time) || 0) < cutoff) continue;
+        if (!assistantTextOf(ev)) continue;   // 纯工具轮没有正文，见 assistantTextOf
+        pickedA.push(ev);
+        continue;
+      }
       if (!isTypedUserMessage(ev)) continue;
       if (isRelayInjected(ev, env)) continue;
       if (seq <= since) continue;
@@ -302,37 +543,73 @@ export function createSessionMirror({
       picked.push(ev);
     }
 
-    const tail = picked.slice(-BACKFILL_LIMIT);
+    // 两类各自截到最近 500 条，再合成一条按 seq 的顺序写（对话顺序不能颠倒）
+    const tailUsers = picked.slice(-BACKFILL_LIMIT);
+    const tailAssistant = pickedA.slice(-BACKFILL_LIMIT);
+    const batch = [
+      ...tailUsers.map((ev) => ({ kind: 'user', ev })),
+      ...tailAssistant.map((ev) => ({ kind: 'assistant', ev })),
+    ].sort((a, b) => (Number(a.ev?.seq) || 0) - (Number(b.ev?.seq) || 0));
+
+    // 旧 assistant 条目（没有 mid）+ say 气泡：都是"同一句已经进过流"的证据
+    const existingAssistant = tailAssistant.length ? scanAssistantTexts(id, env) : [];
+
     let written = 0;
+    let writtenA = 0;
     let failed = false;
-    for (const ev of tail) {
-      // 启动时扫到的已有 mid（写成功但水位没落盘的崩溃窗口）→ 跳过但把水位越过它
+    for (const { kind, ev } of batch) {
+      const seq = Number(ev?.seq);
       const mid = mirrorMid(id, ev);
+      // 启动时扫到的已有 mid（写成功但游标没落盘的崩溃窗口）→ 跳过但把游标越过它
       if (mid && seen.has(mid)) {
-        advance(id, Number(ev?.seq), { persist: false });
+        if (kind === 'user') advance(id, seq, { persist: false });
+        else advanceAssistant(id, seq, { persist: false });
         continue;
+      }
+      if (kind === 'assistant') {
+        const text = assistantTextOf(ev);
+        if (assistantAlreadyInStream(existingAssistant, text, Number(ev?.time))) {
+          advanceAssistant(id, seq, { persist: false });
+          continue;
+        }
+        const entry = writeAssistant(id, ev, text, mid);
+        if (entry) {
+          written += 1;
+          writtenA += 1;
+          if (mid) seen.add(mid);
+          advanceAssistant(id, seq, { persist: false });
+          continue;
+        }
+        failed = true;
+        note(`回填写失败 assistant ${id.slice(0, 16)} seq=${seq}`);
+        break;
       }
       const r = writeEvent(id, ev, { persist: false });
       if (r.ok) { written += 1; continue; }
       if (r.skip) continue;
       failed = true;
-      note(`回填写失败 ${id.slice(0, 16)} seq=${ev?.seq}`);
+      note(`回填写失败 ${id.slice(0, 16)} seq=${seq}`);
       break;
     }
 
-    if (!failed) advance(id, lastScanned, { persist: false });
+    if (!failed) {
+      advance(id, lastScanned, { persist: false });
+      advanceAssistant(id, lastScanned, { persist: false });
+    }
     persistWater();
 
     const ms = Date.now() - startedAt;
-    note(`backfill ${id.slice(0, 16)} ${reason}: wrote ${written}/${picked.length}`
+    note(`backfill ${id.slice(0, 16)} ${reason}: wrote ${written - writtenA} users`
+      + ` + ${writtenA} assistant / ${tailUsers.length}+${tailAssistant.length}`
       + ` scanned ${events.length} ms=${ms}${failed ? ' failed' : ''}`);
-    return { written, scanned: events.length, ms };
+    return { written, users: written - writtenA, assistants: writtenA, scanned: events.length, ms };
   };
 
   const dispose = () => { disposed = true; };
 
   return {
     onEvent,
+    onAssistant,
     backfill,
     dispose,
     /** 仅测试 / 排查用 */
@@ -341,6 +618,8 @@ export function createSessionMirror({
       backfill: cfg.backfill,
       seen: seen.size,
       watermark: Object.fromEntries(Object.entries(water.sids).map(([k, v]) => [k, v.throughSeq])),
+      assistantWatermark: Object.fromEntries(Object.entries(water.sids)
+        .map(([k, v]) => [k, v.assistantThroughSeq])),
     }),
   };
 }

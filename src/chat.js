@@ -124,6 +124,11 @@ export function appendNotice(text, sid = '', env = process.env) {
  * 但它后面若还有真正的浮窗消息，那些仍要补投。这条语义只有一处实现，
  * 免得以后第五个消费者又各写一份判断。
  *
+ * **镜像的模型正文同样跳过但不停（2026-11-26 `.31`）**：它回的是会话里的话，
+ * 不是"这条浮窗消息有人回了"的证据。不跳过的话，回填的正文会把一条真没投出去的
+ * 浮窗消息挡在 break 后面，重启后不补投。真正的去重是 `relay-delivered.json`
+ * 加调用方的 10 分钟 cutoff。
+ *
  * @param {string} raw `chat.jsonl` 全文
  * @param {{cutoff?:number}} [o] 早于这个时间戳的不投（默认 0 = 全要）
  */
@@ -138,7 +143,10 @@ export function pendingStartupEntries(raw, { cutoff = 0 } = {}) {
       if (isFloatUserEntry(entry)) pending.unshift(entry);
       continue;
     }
-    if (role === 'assistant' || role === 'meta') break;
+    if (role === 'assistant' || role === 'meta') {
+      if (entry?.origin === 'dsh') continue;   // 会话镜像，不是回复
+      break;
+    }
   }
   return pending.filter((e) => Number(e?.at ?? 0) >= cutoff && String(e?.text ?? '').trim());
 }

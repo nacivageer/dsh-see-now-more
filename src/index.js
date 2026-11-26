@@ -14,7 +14,7 @@ import { interjectNote, relayInstruction, splitImageMarkdown, noteInterjected, r
 import { appendSpoken, appendChat, appendNotice, lastSaidNote, lastSaidText, chatDir, chatWatcherShared,
          chatWaiterCount, isFloatUserEntry, markDelivered, pendingStartupEntries, relaySeenHas, markRelaySeen } from './chat.js';
 import { createTitleSync } from './titles.js';
-import { createSessionMirror } from './mirror.js';
+import { createSessionMirror, pushAssistantText } from './mirror.js';
 import { ensureConfiguredVoice, detachAdapters, attachedAdapters, configuredVoiceAdapter, lastVoiceError, lastVoiceErrorSpec } from './voice.js';
 import { speechSubscribers, onSpeech, emitSpeech } from './speech.js';
 import { describeAcoustic, describeCoverage, describeEvents, markSpeaking, soundText } from './listen.js';
@@ -941,38 +941,27 @@ async function registerAll(ctx) {
   let lastRegionKey = regionText(loadRegion());
 
   /**
-   * 把模型的**正文**也记进小窗那条流。
+   * 把模型的**正文**也记进小窗那条流（2026-11-26 `.31` 起关窗也记）。
    *
    * 为什么：小窗原来只有 `say` 气泡和用户自己打的字 —— 模型正常回的话一句都不在
    * 里面，于是它只好跟用户解释"我们的对话不会记录在窗口"（2026-11-03 社区反馈）。
-   * 记录本来就该是完整的：窗开着的时候，把这一轮的正文追加进 `chat.jsonl`
-   * （**不朗读** —— 只有 `say` 才念，这条只是留痕）。
+   * `.29` 补了用户消息，`.31` 补模型正文：**窗关着的时候也写**，否则重开窗看到的
+   * 还是「只有我半边」—— `mirror.backfill` 只在启动 / 换绑时跑，补不了刚关的这段。
    *
-   * 三条护栏：
-   *   - 窗没开着就不写：没人在看，写了只是让文件长胖；
+   * 三条护栏（都在 `src/mirror.js`，这里只做接线）：
    *   - `say` 已经进过窗的（正文包含那句 say）就跳过，不然用户会看到同一句两遍；
-   *   - 超长截断到 600 字：小窗是气泡流，不是终端。
+   *   - 超长截断到 3000 字：小窗是气泡流，不是终端；
+   *   - **朗读仍只在窗开着时**（`speakAssistantReply`）：关窗时没人放声音，排进
+   *     语音队列只会在下次开窗时补念一堆旧话。
    */
   const mirrorAssistantText = (event) => {
     try {
-      if (event?.type !== 'assistant/message') return;
-      const payload = event.data ?? event;
-      const blocks = payload?.message?.content;
-      if (!Array.isArray(blocks)) return;
-      const text = blocks
-        .filter((b) => b?.type === 'text' && typeof b.text === 'string')
-        .map((b) => b.text)
-        .join('\n')
-        .trim();
-      if (text.length < 2) return;
-      if (!windowAlive()) return;
-      const said = lastSaidText();
-      const norm = (s) => String(s).replace(/\s+/g, '');
-      if (said && Date.now() - said.at < 120_000 && norm(text).includes(norm(said.text))) return;
-      // 气泡现在会按文字高度长（见 window.py 的 _message_shapes），
-      // 600 字的截断只会让模型"看起来只会说短句" —— 放到 3000。
-      appendChat('assistant', text.length > 3000 ? `${text.slice(0, 3000)}…` : text);
-      speakAssistantReply(text);
+      pushAssistantText(mirror, event, {
+        sid: boundSessionNow() ?? lastSessionId,
+        said: lastSaidText(),
+        alive: windowAlive(),
+        speak: speakAssistantReply,
+      });
     } catch { /* 记录失败绝不能影响会话本身 */ }
   };
   /**

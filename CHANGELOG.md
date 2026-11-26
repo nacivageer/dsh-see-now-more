@@ -2,6 +2,26 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.31] - 2026-11-26
+
+### Added — 浮窗补齐会话里的模型正文（关窗也同步 + 回填）
+
+- `src/mirror.js` 新增 `onAssistant()`：绑定会话的 `assistant/message` 正文（只取
+  `type:"text"` 的块，3000 字截断）也写进 `~/.dsh/see-now/chat.jsonl`，条目带
+  `origin:"dsh"` / `mid:"<sid>:<seq>"` / 会话事件时间。**窗关着也写** —— 以前
+  `mirrorAssistantText` 在窗没开时直接返回，于是关窗一段再打开，回看只有用户半边。
+  朗读仍只在窗开着时（关窗时排进语音队列，只会在下次开窗补念一堆旧话）。
+- 回填加一条**独立游标** `assistantThroughSeq`（`session-mirror.json`）：用户游标被
+  后面一条 user 推走时，「正文在它之前、当时窗没开」的那批仍补得到。30 天 / 最近
+  500 条，跳 fork 继承前缀。
+- 旧条目没有 `mid`：回填前按「同文 ≤10 秒」与「已被 `say` 覆盖、占比 ≥30%、≤120 秒」
+  对 `chat.jsonl` 里已有的 assistant 条目去重，`say` 写过的句子不会再来第二条。
+- `src/chat.js` 的 `pendingStartupEntries()`：`origin:"dsh"` 的 assistant / meta 跟镜像
+  user 一样「跳过但不停」—— 会话镜像不是「浮窗这句话有人回了」的证据，否则回填的正文
+  会把一条真没投出去的浮窗消息挡在 break 后面。
+- 开关语义：`"mirror": {"users": false}` 现在停的是「会话内容同步」（用户消息 + 模型
+  正文的实时 / 回填），窗里 `say` 的气泡不受影响；`"backfill": false` 只停回填。
+
 ## [0.1.1-more.30] - 2026-11-26
 
 ### Fixed — 浮窗发图把会话打成「DeepSeek Messages transport failed」

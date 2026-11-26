@@ -1,11 +1,15 @@
 /**
- * session-mirror.test.mjs — 浮窗镜像主窗用户消息的判据层与核心（2026-11-26）。
+ * session-mirror.test.mjs — 浮窗镜像主窗消息的判据层与核心（2026-11-26）。
  *
  * 这条线的风险不在"能不能显示"，而在四件看不见的事：
  *   ① 判据放宽 → 卡片按钮 / 插件自己的叫醒混进浮窗；
  *   ② 去重失效 → 回填把同一句灌两遍（重启 / 换绑都会触发）；
  *   ③ 水位推进错 → 用户在浮窗删掉的话被回填复活；
  *   ④ 写失败仍推水位 → 丢一条永远补不回来。
+ *
+ * `.31` 起 model 正文也走这条流（关窗也写、回填另用一条游标），多两个坑：
+ *   ⑤ 旧条目没有 `mid` → 回填把 live 写过的正文再写一遍；
+ *   ⑥ 回填的正文遮断启动补投 → 真没投出去的浮窗消息不补了。
  *
  * 所以这里全部按**落盘结果**测：读 `chat.jsonl` 的条目、读 `session-mirror.json`
  * 的水位，不测内部变量。
@@ -20,7 +24,8 @@ import { appendChat, chatFile, isFloatUserEntry, pendingStartupEntries } from '.
 import { isTypedUserMessage } from '../src/human.js';
 import { markRelayInjectedId } from '../src/timer.js';
 import {
-  BACKFILL_LIMIT, MAX_TEXT, createSessionMirror, mirrorPaths, mirrorTextOf, readMirrorWatermark,
+  BACKFILL_LIMIT, MAX_TEXT, assistantTextOf, createSessionMirror, mirrorPaths, mirrorTextOf,
+  pushAssistantText, readMirrorWatermark,
 } from '../src/mirror.js';
 
 const NOW = 1_800_000_000_000;
@@ -43,6 +48,14 @@ const userEvent = (seq, text, { at = NOW - 60_000 + seq, kind = 'user' } = {}) =
   seq,
   time: at,
   data: { id: `m${seq}`, content: [{ type: 'text', text }], source: { kind } },
+});
+
+/** 模型正文事件：形状照真实会话日志（`data.message.content` 块数组）。 */
+const assistantEvent = (seq, text, { at = NOW - 60_000 + seq } = {}) => ({
+  type: 'assistant/message',
+  seq,
+  time: at,
+  data: { message: { role: 'assistant', content: [{ type: 'text', text }] } },
 });
 
 const ctxWith = (readSession) => ({
@@ -262,4 +275,217 @@ test('水位文件最多记 50 个会话（按最近更新排）', () => {
   assert.equal(Object.keys(sids).length, 50);
   assert.equal(sids['session-0'], undefined, '最早的 5 个被挤掉');
   assert.ok(sids['session-54']);
+});
+
+// ---------------------------------------------------------------- .31 模型正文
+
+test('assistantTextOf：只拼 text 块 / 纯工具轮为空 / 超长截断', () => {
+  const ev = (content) => ({ type: 'assistant/message', seq: 1, data: { message: { content } } });
+  assert.equal(
+    assistantTextOf(ev([{ type: 'text', text: '第一段' }, { type: 'text', text: '第二段' }])),
+    '第一段\n第二段',
+  );
+  // reasoning / tool-call 不搬（真实日志里 203 条 assistant 有 50 条是纯工具轮）
+  assert.equal(assistantTextOf(ev([{ type: 'reasoning', text: '想' }, { type: 'tool-call' }])), '');
+  assert.equal(assistantTextOf(ev([{ type: 'text', text: '  ' }])), '');
+  assert.equal(assistantTextOf({ type: 'user/message', data: {} }), '');
+  assert.equal(assistantTextOf(null), '');
+
+  const long = '字'.repeat(MAX_TEXT + 10);
+  const clipped = assistantTextOf(ev([{ type: 'text', text: long }]));
+  assert.equal(clipped.length, MAX_TEXT + 1);
+  assert.ok(clipped.endsWith('…'));
+});
+
+test('onAssistant：窗没开也写，带 sid/at/mid/origin；同一 seq 不写第二遍', () => {
+  const env = sandbox();
+  const mirror = createSessionMirror({ env, now: () => NOW });
+  const ev = assistantEvent(4, '模型回的话', { at: NOW - 4321 });
+
+  assert.equal(mirror.onAssistant('session-test', ev).ok, true);
+  assert.equal(mirror.onAssistant('session-test', ev).ok, false, '同一个 seq 第二次进来必须挡住');
+
+  const entries = chatEntries(env);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].role, 'assistant');
+  assert.equal(entries[0].text, '模型回的话');
+  assert.equal(entries[0].at, NOW - 4321, '时间戳用会话事件时间');
+  assert.equal(entries[0].sid, 'session-test');
+  assert.equal(entries[0].mid, 'session-test:4');
+  assert.equal(entries[0].origin, 'dsh');
+  assert.equal(readMirrorWatermark(env).sids['session-test'].assistantThroughSeq, 4);
+});
+
+test('onAssistant：say 覆盖过的正文不写第二遍，也不推错游标', () => {
+  const env = sandbox();
+  const mirror = createSessionMirror({ env, now: () => NOW });
+  const ev = assistantEvent(6, '看这里\n\n后面还有解释', { at: NOW - 1000 });
+  const r = mirror.onAssistant('session-test', ev, { said: { text: '看这里', at: NOW - 5000 } });
+  assert.equal(r.ok, false);
+  assert.equal(r.skip, 'said');
+  assert.equal(chatEntries(env).length, 0, 'say 已经写过这句，不再来一条');
+  assert.equal(readMirrorWatermark(env).sids['session-test'].assistantThroughSeq, 6, '跳过也要越过 seq');
+
+  // 两分钟以外的不算覆盖（和 live 同口径）
+  const far = assistantEvent(8, '看这里\n\n正文', { at: NOW - 400_000 });
+  assert.equal(mirror.onAssistant('session-test', far, { said: { text: '看这里', at: NOW - 600_000 } }).ok, true);
+});
+
+test('onAssistant：空正文 / 没绑定 / 开关关掉都不写；空轮也推进游标', () => {
+  const env = sandbox();
+  const mirror = createSessionMirror({ env, now: () => NOW });
+  assert.equal(mirror.onAssistant('session-test', assistantEvent(5, '')).ok, false);
+  assert.equal(chatEntries(env).length, 0);
+  assert.equal(readMirrorWatermark(env).sids['session-test'].assistantThroughSeq, 5, '空轮越过，别每次重扫');
+
+  assert.equal(mirror.onAssistant(null, assistantEvent(6, 'hi')).ok, false);
+  assert.equal(mirror.onAssistant('session-test', userEvent(7, 'hi')).ok, false);
+
+  const offEnv = sandbox();
+  const off = createSessionMirror({ env: offEnv, now: () => NOW, config: { users: false } });
+  assert.equal(off.onAssistant('session-test', assistantEvent(9, 'hi')).ok, false);
+  assert.equal(chatEntries(offEnv).length, 0);
+});
+
+test('backfill：模型正文走独立游标 —— 在最后一条 user 之前也补得到', async () => {
+  const env = sandbox();
+  // 旧版只有用户游标：live 时用户游标已被 seq 5 的 user 推走，assistant seq 2 当时窗没开
+  mkdirSync(join(env.DSH_HOME, 'see-now'), { recursive: true });
+  writeFileSync(mirrorPaths(env).watermark, JSON.stringify({
+    v: 1, sids: { 'session-test': { throughSeq: 5, updated: NOW } },
+  }), 'utf8');
+  const events = [
+    userEvent(1, '主窗第一句'),
+    assistantEvent(2, '当时没窗，模型回的话', { at: NOW - 3000 }),
+    userEvent(5, '主窗第二句'),
+  ];
+  const mirror = createSessionMirror({
+    env, now: () => NOW, ctx: ctxWith(async () => ({ events })),
+  });
+  const r = await mirror.backfill({ sid: 'session-test' });
+  assert.equal(r.written, 1);
+  assert.equal(r.assistants, 1);
+  assert.deepEqual(chatEntries(env).map((e) => [e.role, e.text]), [['assistant', '当时没窗，模型回的话']]);
+  assert.equal(readMirrorWatermark(env).sids['session-test'].throughSeq, 5, '用户游标不动');
+  assert.equal(readMirrorWatermark(env).sids['session-test'].assistantThroughSeq, 5);
+});
+
+test('backfill：旧 assistant 条目（没有 mid）同文 10 秒内不重复写', async () => {
+  const env = sandbox();
+  // 旧版 live 写在事件当口（at = Date.now），没有 mid / origin
+  appendChat('assistant', '回一句', { env, sid: 'session-test', at: NOW - 500 });
+  const events = [assistantEvent(2, '回一句', { at: NOW - 1000 })];
+  const mirror = createSessionMirror({ env, now: () => NOW, ctx: ctxWith(async () => ({ events })) });
+  const r = await mirror.backfill({ sid: 'session-test' });
+  assert.equal(r.written, 0);
+  assert.equal(chatEntries(env).length, 1);
+  assert.equal(readMirrorWatermark(env).sids['session-test'].assistantThroughSeq, 2, '去重也要越过 seq');
+});
+
+test('backfill：被 say 覆盖的正文不重复写，不同内容照写', async () => {
+  const env = sandbox();
+  appendChat('assistant', '看这里', { env, sid: 'session-test', at: NOW - 3000 });   // say 气泡
+  const events = [
+    assistantEvent(2, '看这里\n\n后面还有正文', { at: NOW - 1000 }),
+    assistantEvent(4, '另一句完全不同的回复', { at: NOW - 800 }),
+  ];
+  const mirror = createSessionMirror({ env, now: () => NOW, ctx: ctxWith(async () => ({ events })) });
+  const r = await mirror.backfill({ sid: 'session-test' });
+  assert.equal(r.written, 1);
+  assert.deepEqual(chatEntries(env).map((e) => e.text), ['看这里', '另一句完全不同的回复']);
+});
+
+test('backfill：assistant 也只取最近 500 条', async () => {
+  const env = sandbox();
+  const events = [];
+  for (let i = 1; i <= BACKFILL_LIMIT + 5; i += 1) {
+    events.push(assistantEvent(i, `第${i}条回复`, { at: NOW - 1000 + i }));
+  }
+  const mirror = createSessionMirror({ env, now: () => NOW, ctx: ctxWith(async () => ({ events })) });
+  const r = await mirror.backfill({ sid: 'session-test' });
+  assert.equal(r.written, BACKFILL_LIMIT);
+  const texts = chatEntries(env).map((e) => e.text);
+  assert.equal(texts[0], '第6条回复', '最早 5 条被 500 上限挤掉');
+  assert.equal(texts.at(-1), `第${BACKFILL_LIMIT + 5}条回复`);
+});
+
+test('backfill 幂等：模型正文连跑两次不重复；清游标后靠 mid 也挡住', async () => {
+  const env = sandbox();
+  const events = [assistantEvent(2, '只回一次', { at: NOW - 1000 })];
+  const make = () => createSessionMirror({ env, now: () => NOW, ctx: ctxWith(async () => ({ events })) });
+
+  assert.equal((await make().backfill({ sid: 'session-test' })).written, 1);
+  assert.equal((await make().backfill({ sid: 'session-test' })).written, 0, '游标挡住第二次');
+
+  writeFileSync(mirrorPaths(env).watermark, JSON.stringify({ v: 1, sids: {} }), 'utf8');
+  assert.equal((await make().backfill({ sid: 'session-test' })).written, 0, 'mid 扫描挡住');
+  assert.equal(chatEntries(env).length, 1);
+});
+
+test('pushAssistantText：窗关着也写、不朗读；窗开着才念；say 覆盖的不写不念', () => {
+  const env = sandbox();
+  const mirror = createSessionMirror({ env, now: () => NOW });
+  const spoken = [];
+
+  // 窗关着：必须写，但不朗读（关窗时排进语音队列只会在下次开窗补念旧话）
+  const r1 = pushAssistantText(mirror, assistantEvent(4, '关窗时的话', { at: NOW - 1000 }), {
+    sid: 'session-test', alive: false, speak: (t) => spoken.push(t),
+  });
+  assert.equal(r1.ok, true);
+  assert.equal(chatEntries(env).length, 1, '窗关着也要写');
+  assert.deepEqual(spoken, []);
+
+  // 窗开着：写 + 念一次
+  const r2 = pushAssistantText(mirror, assistantEvent(6, '开窗时的话', { at: NOW - 500 }), {
+    sid: 'session-test', alive: true, speak: (t) => spoken.push(t),
+  });
+  assert.equal(r2.ok, true);
+  assert.deepEqual(spoken, ['开窗时的话']);
+
+  // say 已经写过这句：不写第二遍、也不念
+  const r3 = pushAssistantText(mirror, assistantEvent(8, '看这里\n\n正文', { at: NOW - 200 }), {
+    sid: 'session-test', alive: true, said: { text: '看这里', at: NOW - 1000 },
+    speak: (t) => spoken.push(t),
+  });
+  assert.equal(r3.ok, false);
+  assert.equal(r3.skip, 'said');
+  assert.equal(spoken.length, 1);
+  assert.equal(chatEntries(env).length, 2);
+
+  // 不是 assistant/message 一律不碰
+  assert.equal(pushAssistantText(mirror, userEvent(10, 'hi'), { sid: 'session-test' }).ok, false);
+});
+
+test('live 写过的正文，重启后回填不再写一遍', async () => {
+  const env = sandbox();
+  const events = [
+    userEvent(1, '问题', { at: NOW - 2000 }),
+    assistantEvent(2, '回答', { at: NOW - 1000 }),
+  ];
+  const live = createSessionMirror({ env, now: () => NOW });
+  assert.equal(live.onEvent('session-test', events[0]), true);
+  assert.equal(live.onAssistant('session-test', events[1]).ok, true);
+  assert.equal(chatEntries(env).length, 2);
+
+  const restarted = createSessionMirror({
+    env, now: () => NOW, ctx: ctxWith(async () => ({ events })),
+  });
+  const r = await restarted.backfill({ sid: 'session-test' });
+  assert.equal(r.written, 0, '两条游标都挡住了');
+  assert.deepEqual(chatEntries(env).map((e) => [e.role, e.text]), [['user', '问题'], ['assistant', '回答']]);
+});
+
+test('pendingStartupEntries：镜像的模型正文跳过但不停，浮窗的回复仍然停', () => {
+  const raw = [
+    { role: 'user', text: '浮窗这句', at: NOW },
+    { role: 'assistant', text: '会话里的回复', origin: 'dsh', at: NOW + 1 },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+  assert.deepEqual(pendingStartupEntries(raw).map((e) => e.text), ['浮窗这句'],
+    '镜像回复不是"这条浮窗消息有人回了"的证据');
+
+  const raw2 = [
+    { role: 'user', text: '浮窗这句', at: NOW },
+    { role: 'assistant', text: '浮窗自己的回复', at: NOW + 1 },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+  assert.deepEqual(pendingStartupEntries(raw2), [], '真正的回复仍然停住补投');
 });
