@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { loadRelayImages } from '../src/index.js';
+import { relaySendText } from '../src/interject.js';
 import { wakeSession } from '../src/timer.js';
 
 /** 1x1 透明 PNG，够用来当"一个磁盘上的图" */
@@ -115,4 +116,16 @@ test('内联 base64 形状投不进去 —— 这条就是 2026-11-26 事故的�
   assert.equal(r.ok, false, '必须失败，不能"投成功了但是会话废了"');
   assert.match(String(r.reason), /附件引用/);
   assert.equal(seen.length, 0, '坏块一条都不许进会话');
+});
+
+test('relaySendText：纯图不再补 [图片] 正文，没图才退回原话', () => {
+  const img = [{ attachment: REF }];
+  // 图文混排：正文照旧
+  assert.equal(relaySendText({ text: '看图', images: img, fallback: '![图片](p)' }), '看图');
+  // 纯图：正文留空 —— 主窗里图片自己就在，多一行 `[图片]` 是噪音
+  assert.equal(relaySendText({ text: '', images: img, fallback: '![图片](C:\\x.png)' }), '');
+  // 没图：沿用原话（历史行为）
+  assert.equal(relaySendText({ text: '', images: [], fallback: '原话' }), '原话');
+  // 拆完只剩空白也算纯图
+  assert.equal(relaySendText({ text: '   ', images: img, fallback: 'x' }), '');
 });

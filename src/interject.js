@@ -60,8 +60,9 @@ const clip = (s, n = 80) => {
 };
 
 /** 插话末尾那段固定要求（无引用 / 有引用两条路共用，保证「没有引用时逐字不变」）。 */
-const INSTRUCTION = '\n**先说话，再干活** —— 先回这一句。普通回复悬浮窗里一个字都看不到（也不会被念），只有 `say` 会进那条流。'
-  + '下一次调用必须带 `say`：`see_now({ action:"watch", say: "…" })`，'
+const INSTRUCTION = '\n**先说话，再干活** —— 先回这一句。普通回复从 2026-11-26 起也会镜像进悬浮窗'
+  + '（能看见、但不会念），只有 `say` 会念出来；想让她听见就在下一次调用带 `say`：'
+  + '`see_now({ action:"watch", say: "…" })`，'
   + '要同时看一眼直接加在**同一次调用**里（`say` 在采集**之前**就写进流，字先出、画面后到）。';
 
 /** 引用块上限：窗口已经限 4000，这里再兜一层（防绕过窗口直接投递）。 */
@@ -130,6 +131,24 @@ export function relayUserText(text) {
 }
 
 /**
+ * 投给会话时，用户那条消息的**正文**（2026-11-26 `.33`）。
+ *
+ * 浮窗发**纯图**（拆完 markdown 没有正文）时不再补 `[图片]`：主窗里图片自己就在，
+ * 多一行 `[图片]` 只是噪音，还排在图片上面。没有图时才退回原话（历史行为）。
+ *
+ * 说明那条（`relayInstruction`）仍用 `[图片]` 占位 —— 否则它会写成
+ * 「引用了一段内容，见上一条」，读起来像引用而不是一张图。
+ *
+ * @param {{text?:string, images?:unknown[], fallback?:string}} [o]
+ * @returns {string}
+ */
+export function relaySendText({ text = '', images = [], fallback = '' } = {}) {
+  const body = String(text ?? '');
+  if (body.trim()) return body;
+  return Array.isArray(images) && images.length ? '' : String(fallback ?? '');
+}
+
+/**
  * 紧跟原话之后的**说明**（`source.kind:"see-now"`）：为什么必须用 `say` 回。
  *
  * 单独一条而不是塞进原话里：塞进去会让一大段插件指令变成用户的聊天气泡内容。
@@ -153,7 +172,7 @@ export function relayInstruction(text, { at = null } = {}) {
 
 /**
  * 插话交给模型的那一段话（**工具结果里用**，不用于会话投递）。
- *   ① **先说话再干活** —— 普通回复悬浮窗里看不见、也不会被念，只有 `say` 会；
+ *   ① **先说话再干活** —— 正文从 `.31` 起也会镜像进悬浮窗，但**不会念**；只有 `say` 会念；
  *   ② **`say` 和取图可以同一次调用** —— `say` 在取图**之前**就写进流，字先出、画面后到；
  *   ③ 一段话，不是一屏话。
  *

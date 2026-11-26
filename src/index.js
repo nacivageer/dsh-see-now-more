@@ -10,7 +10,7 @@ import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE, DEFAULT_QUALITY } from '
 import { resolveFfmpeg } from './binaries.js';
 import { parseRegion } from './layout.js';
 import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC, TOOL_NAME, ACTION_VALUES } from './tool-spec.js';
-import { interjectNote, relayInstruction, splitImageMarkdown, noteInterjected, replyReminder, clearInterjected } from './interject.js';
+import { interjectNote, relayInstruction, relaySendText, splitImageMarkdown, noteInterjected, replyReminder, clearInterjected } from './interject.js';
 import { appendSpoken, appendChat, appendNotice, lastSaidNote, lastSaidText, chatDir, chatWatcherShared,
          chatWaiterCount, isFloatUserEntry, markDelivered, pendingStartupEntries, relaySeenHas, markRelaySeen } from './chat.js';
 import { createTitleSync } from './titles.js';
@@ -1530,7 +1530,9 @@ async function registerAll(ctx) {
      * 两条都投失败才算失败；说明那条失败时用户话已经进了会话，不能把回执标成失败。
      */
     const relayed = await loadRelayImages({ ctx, text: clean, log });
-    const sendText = relayed.text || (relayed.images.length ? '[图片]' : clean);
+    // 纯图不补 `[图片]` 正文（`.33`）：主窗里图片自己就在，多一行只是噪音；说明那条仍用占位
+    const sendText = relaySendText({ text: relayed.text, images: relayed.images, fallback: clean });
+    const saidForInstruction = relayed.text || (relayed.images.length ? '[图片]' : clean);
     const r = await wakeWithRetry({
       ctx, sessionId: sid, text: sendText, images: relayed.images,
       sourceKind: 'user', log, steer,
@@ -1542,7 +1544,7 @@ async function registerAll(ctx) {
     }
     const r2 = await wakeWithRetry({
       ctx, sessionId: sid,
-      text: relayInstruction(relayed.text || sendText, { at: key ? Number(key) : null }),
+      text: relayInstruction(saidForInstruction, { at: key ? Number(key) : null }),
       log, steer,
     });
     if (!r2?.ok) relayLog(`warn(${source}): 说明那条没投进去：${r2?.reason ?? 'unknown'}`);
