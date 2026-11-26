@@ -57,7 +57,46 @@ export function boundSessionForChat() {
   return boundSid;
 }
 
-/** 追加一条。`role` 只有两种：`assistant`（模型说的）和 `user`（用户打的/说的）。 */
+/**
+ * 追加一条。`role` 只有三种：`assistant`（模型说的）、`user`（用户打的 / 说的）、
+ * `notice`（系统提示，走 `appendNotice`）。
+ *
+ * `sid` / `at` / `mid` / `origin` 是 2026-11-26 给「浮窗镜像主窗用户消息」加的：
+ * - `at` 用会话事件时间（回填的条目比文件尾旧，窗口必须按它排序）；
+ * - `mid` = `<sid>:<seq>`，实时与回填共用的去重键；
+ * - `origin: "dsh"` 是四个消费者（启动补投 / relay / 常驻循环 / 阻塞 watch）
+ *   判断「这条不是用户在浮窗里说的」的唯一依据 —— 见 `isFloatUserEntry`。
+ *
+ * @param {'assistant'|'user'|'meta'|'notice'} role
+ * @param {string} text
+ * @param {{sid?:string, at?:number, mid?:string, origin?:string, env?:object}} [o]
+ */
+export function appendChat(role, text, { sid, at, mid, origin, env = process.env } = {}) {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  const file = chatFile(env);
+  mkdirSync(chatDir(env), { recursive: true });
+  const atMs = Number(at);
+  const entry = { role, text: t, at: Number.isFinite(atMs) && atMs > 0 ? atMs : Date.now() };
+  const bound = sid == null ? boundSessionForChat() : String(sid);
+  if (bound) entry.sid = bound;
+  if (mid) entry.mid = String(mid);
+  if (origin) entry.origin = String(origin);
+  appendFileSync(file, `${JSON.stringify(entry)}\n`, 'utf8');
+  return entry;
+}
+
+/**
+ * 这条 `chat.jsonl` 条目是不是**用户在浮窗里亲手说的**。
+ *
+ * 四个消费者都拿它判断「用户刚插话了」：启动补投（`replayUnanswered`）、
+ * relay 增量、常驻循环（`loop.js`）、阻塞 watch（`runner.js`）。
+ * 镜像条目带 `origin:"dsh"`，必须被挡在外面 —— 否则历史消息会被重投、
+ * watch 会误以为用户插话。判断只写这一份：各写一份，迟早漏掉第五个消费者。
+ */
+export function isFloatUserEntry(entry) {
+  return entry?.role === 'user' && entry?.origin !== 'dsh';
+}
 /**
  * 追加一条居中「系统提示」气泡（`role: "notice"`）。
  *
@@ -77,15 +116,31 @@ export function appendNotice(text, sid = '', env = process.env) {
   return entry;
 }
 
-export function appendChat(role, text, env = process.env) {  const t = String(text ?? '').trim();
-  if (!t) return null;
-  const file = chatFile(env);
-  mkdirSync(chatDir(env), { recursive: true });
-  const sid = boundSessionForChat();
-  const entry = { role, text: t, at: Date.now() };
-  if (sid) entry.sid = sid;
-  appendFileSync(file, `${JSON.stringify(entry)}\n`, 'utf8');
-  return entry;
+/**
+ * 启动补投要投的条目：从文件末尾往回，最后一个 `assistant` / `meta` 之后的
+ * 浮窗 user 条目（`relay-seen` 已投过的由调用方挡）。
+ *
+ * **镜像条目（`origin:"dsh"`）跳过但不停**：它是主窗历史，不是"写进去没人回过"；
+ * 但它后面若还有真正的浮窗消息，那些仍要补投。这条语义只有一处实现，
+ * 免得以后第五个消费者又各写一份判断。
+ *
+ * @param {string} raw `chat.jsonl` 全文
+ * @param {{cutoff?:number}} [o] 早于这个时间戳的不投（默认 0 = 全要）
+ */
+export function pendingStartupEntries(raw, { cutoff = 0 } = {}) {
+  const pending = [];
+  for (const line of String(raw ?? '').split('\n').reverse()) {
+    if (!line.trim()) continue;
+    let entry = null;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const role = String(entry?.role ?? '');
+    if (role === 'user') {
+      if (isFloatUserEntry(entry)) pending.unshift(entry);
+      continue;
+    }
+    if (role === 'assistant' || role === 'meta') break;
+  }
+  return pending.filter((e) => Number(e?.at ?? 0) >= cutoff && String(e?.text ?? '').trim());
 }
 
 /**
@@ -190,7 +245,7 @@ export function markRelaySeen(at, env = process.env) {
 export function appendSpoken(role, text, { speak = true, env = process.env } = {}) {
   const clean = String(text ?? '').trim();
   if (!clean) return null;
-  const entry = appendChat(role, clean, env);
+  const entry = appendChat(role, clean, { env });
   // 只有"说给用户的话"才记：`meta`（诊断行）不该被当成"你上一句说过什么"
   if (role === 'assistant') lastSaid = { text: clean, at: Date.now() };
   // `origin: 'chat'` 告诉展示层"这条已经在流里了，别再写第二遍"

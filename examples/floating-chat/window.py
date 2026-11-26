@@ -3784,7 +3784,12 @@ class LiveGlass:
         self._refresh_feed()
 
     def _history_entries(self, sid: str) -> list[dict]:
-        """chat.jsonl 里属于 `sid` 的全部条目（按写入顺序，最多 500 条）。"""
+        """chat.jsonl 里属于 `sid` 的最近 500 条，按 `at` 排序后返回。
+
+        回填把旧条目追加在文件尾：原来的「按写入顺序取最后 500 条」会挑中最旧
+        的那批，把最近的挤出回顾页。所以必须先过滤、再按 `at` 排、最后取尾部；
+        同一毫秒的条目保持写入顺序（Python 的 sort 是稳定的）。
+        """
         try:
             lines = CHAT_FILE.read_text(encoding="utf-8").splitlines()[-4000:]
         except Exception:
@@ -3800,6 +3805,7 @@ class LiveGlass:
             if msg_key(sid, e.get("at")) in self._hidden_keys():
                 continue
             out.append(e)
+        out.sort(key=lambda e: int(e.get("at") or 0))
         return out[-500:]
 
     def _bind_header(self) -> None:

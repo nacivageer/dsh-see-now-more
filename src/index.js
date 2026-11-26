@@ -12,8 +12,9 @@ import { parseRegion } from './layout.js';
 import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC, TOOL_NAME, ACTION_VALUES } from './tool-spec.js';
 import { interjectNote, noteInterjected, replyReminder, clearInterjected } from './interject.js';
 import { appendSpoken, appendChat, appendNotice, lastSaidNote, lastSaidText, chatDir, chatWatcherShared,
-         chatWaiterCount, markDelivered, relaySeenHas, markRelaySeen } from './chat.js';
+         chatWaiterCount, isFloatUserEntry, markDelivered, pendingStartupEntries, relaySeenHas, markRelaySeen } from './chat.js';
 import { createTitleSync } from './titles.js';
+import { createSessionMirror } from './mirror.js';
 import { ensureConfiguredVoice, detachAdapters, attachedAdapters, configuredVoiceAdapter, lastVoiceError, lastVoiceErrorSpec } from './voice.js';
 import { speechSubscribers, onSpeech, emitSpeech } from './speech.js';
 import { describeAcoustic, describeCoverage, describeEvents, markSpeaking, soundText } from './listen.js';
@@ -588,6 +589,13 @@ async function registerAll(ctx) {
   const tuning = readTuning();
   if (tuning.warnings.length) log?.(`[see-now] ${tuning.warnings.join('；')}`);
   /**
+   * **浮窗镜像主窗用户消息**（2026-11-26）：`chat.jsonl` 加 `origin:"dsh"` 条目，
+   * 四个消费点用 `isFloatUserEntry` 挡住。方案与边界见
+   * `docs/tasks/session-mirror-quote.md`；开关是 `see-now.json` 的 `mirror` 段。
+   */
+  const mirror = createSessionMirror({ ctx, log, config: tuning.mirror });
+  disposers.push(() => mirror.dispose());
+  /**
    * 绑定的会话（`~/.dsh/see-now.json` 的 `session`，可选）。
    *
    * 有它：这个窗只属于那一个会话 —— 只有它的话会写进 `chat.jsonl`，
@@ -923,6 +931,16 @@ async function registerAll(ctx) {
         }
         mirrorAssistantText(event);
         /**
+         * 绑定会话里用户亲手打的字 → 浮窗聊天流（2026-11-26）。
+         *
+         * **只在有绑定会话时镜像**：没绑定时不猜（`boundSessionNow()` 为空就一条都不写）；
+         * 上面的过滤已经保证 `id === bound`。判据只认 `source.kind === "user"`，
+         * 插件自己的叫醒 / 卡片按钮都不算（`isTypedUserMessage`）。
+         */
+        try { if (bound) mirror.onEvent(bound, event); } catch (e) {
+          log(`镜像用户消息失败：${e?.message ?? e}`);
+        }
+        /**
          * **用户在这个会话里说话 = 人在**（上游 0.2.4 / issue #69）。
          *
          * 循环原来只盯悬浮窗那条 `chat.jsonl`：用户切回 DSH 主聊天窗聊十几分钟，
@@ -1052,6 +1070,8 @@ async function registerAll(ctx) {
     }
   };
 
+  /** 上一次回填过的绑定会话（`modeWatcher` 用它发现换绑）。 */
+  let lastMirrorSid = boundSessionNow();
   let lastModeAt = (() => { try { return readTuning().modeAt || 0; } catch { return 0; } })();
   const modeWatcher = setInterval(() => {
     let t = null;
@@ -1073,6 +1093,15 @@ async function registerAll(ctx) {
       try { runner.setAutoOpenWindow(onWindowCloseMode !== 'ears' && onWindowCloseMode !== 'ghost'); } catch { /* 老 runner */ }
       log(`关掉悬浮窗后默认行为：${onWindowCloseMode}`);
     }
+    /**
+     * 绑定会话变了 → 回填新会话的用户消息（窗口改 `session` / 第一次绑上都算）。
+     * 放在早退（`!mode` 那条）之前：换绑不一定伴随模式变化。
+     */
+    const boundNow = boundSessionNow();
+    if (boundNow !== lastMirrorSid) {
+      lastMirrorSid = boundNow;
+      if (boundNow) void mirror.backfill({ sid: boundNow, reason: 'rebind' });
+    }
     const mode = t.mode ?? null;
     const at = Number(t.modeAt) || 0;
     // 窗口每点一次都写 `modeAt`（同一个值也算一次）；手改配置没有 modeAt，
@@ -1084,6 +1113,17 @@ async function registerAll(ctx) {
   }, 1500);
   modeWatcher.unref?.();
   disposers.push(() => clearInterval(modeWatcher));
+
+  /**
+   * 启动 3 秒后回填一次用户消息（`readSession` 可能读几百毫秒，别挡 apply）。
+   * 回填幂等：水位 + `mid` 双保险，重复执行不会多出气泡。
+   */
+  const mirrorStartupTimer = setTimeout(() => {
+    const sid = boundSessionNow();
+    if (sid) void mirror.backfill({ sid, reason: 'startup' });
+  }, 3000);
+  mirrorStartupTimer.unref?.();
+  disposers.push(() => clearTimeout(mirrorStartupTimer));
 
   /**
    * **游戏模式**（2026-11-19 用户要求）：设置页里点开关 → 临时把节奏换成
@@ -1444,17 +1484,7 @@ async function registerAll(ctx) {
   const replayUnanswered = () => {
     let raw = '';
     try { raw = readFileSync(join(chatDir(), 'chat.jsonl'), 'utf8'); } catch { return []; }
-    const pending = [];
-    for (const line of raw.split('\n').reverse()) {
-      if (!line.trim()) continue;
-      let entry = null;
-      try { entry = JSON.parse(line); } catch { continue; }
-      const role = String(entry?.role ?? '');
-      if (role === 'user') { pending.unshift(entry); continue; }
-      if (role === 'assistant' || role === 'meta') break;
-    }
-    const cutoff = Date.now() - 10 * 60 * 1000;
-    return pending.filter((e) => Number(e?.at ?? 0) >= cutoff && String(e?.text ?? '').trim());
+    return pendingStartupEntries(raw, { cutoff: Date.now() - 10 * 60 * 1000 });
   };
 
   let relayBusy = false;
@@ -1486,7 +1516,7 @@ async function registerAll(ctx) {
         return;
       }
       const said = chatWatcherShared()()
-        .filter((e) => e?.role === 'user' && String(e?.text ?? '').trim());
+        .filter((e) => isFloatUserEntry(e) && String(e?.text ?? '').trim());
       for (const item of said) {
         const ok = await relayDeliver(item, 'chat');
         if (!ok) break;

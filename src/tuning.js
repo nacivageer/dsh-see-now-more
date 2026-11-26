@@ -230,6 +230,27 @@ function readLift(raw) {
 }
 
 /**
+ * `mirror` 段：浮窗镜像主窗用户消息（2026-11-26）。
+ *
+ * 两个开关都默认开 —— 格要的就是"用户在主窗说的话浮窗也看得见"；
+ * `users:false` 是一键 kill switch（实时 + 回填一起停），`backfill:false`
+ * 只停启动 / 换绑时的历史回填，实时镜像照旧。
+ *
+ * 不做设置页开关：设置页在共用的 `window.py` 里，越过扩展区；改配置即可。
+ */
+function readMirror(raw) {
+  const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  const out = { users: true, backfill: true };
+  const bad = [];
+  for (const key of ['users', 'backfill']) {
+    if (src[key] === undefined) continue;
+    if (typeof src[key] === 'boolean') out[key] = src[key];
+    else bad.push(`mirror.${key} 只能是 true / false，已用默认 true`);
+  }
+  return { mirror: out, warnings: bad };
+}
+
+/**
  * 绑定的会话 id（`session`）。
  *
  * 为什么要有它：`session/event` 钩子会把**每个会话**的模型正文都写进同一条
@@ -341,6 +362,9 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
   const liftCfg = readLift(raw.lift);
   warnings.push(...liftCfg.warnings);
 
+  const mirrorCfg = readMirror(raw.mirror);
+  warnings.push(...mirrorCfg.warnings);
+
   const session = readBoundSession(raw, warnings);
 
   /**
@@ -422,6 +446,7 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     packStretch,
     listen: listenCfg.listen,
     lift: liftCfg.lift,
+    mirror: mirrorCfg.mirror,
     path,
     warnings,
   };

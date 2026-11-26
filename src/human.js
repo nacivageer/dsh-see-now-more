@@ -31,6 +31,24 @@ export function isHumanMessage(event) {
 }
 
 /**
+ * 用户在宿主里**亲手打**的一条消息（浮窗镜像只认这一种）。
+ *
+ * 和 `isHumanMessage` 故意分开：后者把 `action-cards`（点卡片按钮）也算成
+ * "人的动作"，用来给常驻循环续命；镜像进浮窗的只能是真正的用户文字 ——
+ * 卡片按钮没有可读正文，混进来就是一条空气泡。两个判据各有单测，不许合并。
+ *
+ * `source.kind === 'user'` 同时覆盖宿主 UI 和 ACP bridge（`user-rpc` 的 kind 也是 `user`）。
+ *
+ * @param {{type?:string, data?:{source?:{kind?:string}}, source?:{kind?:string}}} event
+ * @returns {boolean}
+ */
+export function isTypedUserMessage(event) {
+  if (!event || event.type !== 'user/message') return false;
+  const src = event.data?.source ?? event.source;
+  return src?.kind === 'user';
+}
+
+/**
  * 这条消息是不是**本插件自己**投进去的（`see-now` 唤醒 / 提词）。
  *
  * 只给测试和排查用：真跑时 `isHumanMessage` 已经把这类挡在外面，留一个正名字

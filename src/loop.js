@@ -32,8 +32,8 @@
 import { startTicker, wakeWithRetry, deliveryMode } from './timer.js';import { windowAlive, windowPidAlive } from './window.js';
 import { transcriptPath, transcriptRelPath } from './transcript.js';
 
-import { appendSpoken, chatWatcherShared, chatWaiterCount, dshHome, lastSaidNote, markDelivered,
-         markRelaySeen } from './chat.js';
+import { appendSpoken, chatWatcherShared, chatWaiterCount, dshHome, isFloatUserEntry, lastSaidNote,
+         markDelivered, markRelaySeen } from './chat.js';
 import { noteInterjected } from './interject.js';
 import { onSpeech, speechSubscribers } from './speech.js';
 import { estimateSpeechMs, nextProactiveAt } from './pacing.js';
@@ -848,7 +848,8 @@ export function startLoop({
       const waiting = chatWaiterCount() > 0;
       const fresh = waiting ? [] : pollChat();
       for (const e of fresh) {
-        if (e?.role === 'user' && String(e.text ?? '').trim()) {
+        // 镜像条目（origin:"dsh"）不是"窗里有人插话"：它是用户在主窗说的历史，别叫醒
+        if (isFloatUserEntry(e) && String(e.text ?? '').trim()) {
           queue.push({ text: String(e.text).trim(), at: Number(e?.at) || 0 });
           lastUserAt = Date.now();
           lastUserSpokeAt = lastUserAt;

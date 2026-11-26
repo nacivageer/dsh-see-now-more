@@ -24,7 +24,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createPipeline } from './pipeline.js';
 import { cellSize } from './layout.js';
-import { chatWatcherShared, dshHome, enterChatWait, markDelivered, markRelaySeen } from './chat.js';
+import { chatWatcherShared, dshHome, enterChatWait, isFloatUserEntry, markDelivered, markRelaySeen } from './chat.js';
 import { noteInterjected } from './interject.js';
 import { openWindow, pidStamp, windowAlive, setWindowHidden } from './window.js';
 import { createListener } from './listen.js';
@@ -1738,7 +1738,8 @@ export function createRunner({
          * "eager 那段把话吃了但没带上"这种只在首帧复现的丢话。
          */
         const pollUser = () => {
-          const said = chatPoll().filter((e) => e.role === 'user');
+          // 镜像条目（origin:"dsh"）是主窗历史，不是"窗里插话"：不许截断这次出图
+          const said = chatPoll().filter((e) => isFloatUserEntry(e));
           if (!said.length) return null;
           return {
             text: said.map((e) => e.text).join(' / ').slice(0, 800),

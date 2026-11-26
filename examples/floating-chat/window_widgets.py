@@ -91,19 +91,19 @@ class ChatFeed:
         # 放到标题栏下面那行状态里，别把四条消息挤掉。
         if role == "meta":
             return {"role": "meta", "text": str(text or ""), "stamp": "",
-                    "at": raw.get("at"), "sid": sid}
+                    "at": raw.get("at"), "sid": sid, "mid": raw.get("mid")}
         # 居中「系统提示」气泡（绑定变更公告）；和 meta 一样不是聊天内容，
         # 但它要占一条、要显示，所以按消息收进流里。
         if role == "notice":
             if not isinstance(text, str) or not text.strip():
                 return None
             return {"role": "notice", "text": text.strip(), "stamp": "",
-                    "at": raw.get("at"), "sid": sid}
+                    "at": raw.get("at"), "sid": sid, "mid": raw.get("mid")}
         if not isinstance(text, str) or not text:
             return None
         return {"role": role, "text": text,
                 "stamp": clock(raw.get("at")) if raw.get("at") is not None else "",
-                "at": raw.get("at"), "sid": sid}
+                "at": raw.get("at"), "sid": sid, "mid": raw.get("mid")}
 
     def admit(self, msg: dict | None) -> bool:
         """这条归不归当前会话：meta 行不参与分组，其余必须 `sid` 对上。"""
@@ -115,10 +115,19 @@ class ChatFeed:
             return True          # 没绑会话：保持旧行为，全显示
         return msg.get("sid") == self.sid
 
+    @staticmethod
+    def _at_key(msg: dict) -> float:
+        """排序用的 `at`；缺失 / 非数字按 0 处理（老条目没有 at 也不许抛）。"""
+        try:
+            return float(msg.get("at") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
     def add(self, msg: dict | None) -> bool:
         if not self.admit(msg):
             return False
-        key = (msg.get("role"), msg.get("text"), msg.get("at"), msg.get("sid"))
+        # 镜像条目（origin:"dsh"）可能同文同毫秒，靠 `mid` 才能分开
+        key = (msg.get("role"), msg.get("text"), msg.get("at"), msg.get("sid"), msg.get("mid"))
         if key in self._seen:
             return False
         self._seen.add(key)
@@ -128,7 +137,12 @@ class ChatFeed:
             self.status = str(msg.get("text") or "")[:80]
             return True
         self.messages.append(msg)
+        # 回填的条目比文件尾旧：追加顺序 ≠ 时间顺序，发现逆序就按 `at` 稳定重排
+        if len(self.messages) > 1 and self._at_key(msg) < self._at_key(self.messages[-2]):
+            self.messages.sort(key=self._at_key)
         if len(self.messages) > self.KEEP:
+            # **先按 at 排再截**：按插入顺序截会把回填的旧条目留下、把最近的扔掉
+            self.messages.sort(key=self._at_key)
             self.messages = self.messages[-self.KEEP:]
         return True
 
@@ -154,6 +168,8 @@ class ChatFeed:
             lines = self.path.read_text(encoding="utf-8").splitlines()[-self.READ_LINES:]
             for line in lines:
                 self.add(self.parse(line))
+            # 回填条目可能插在中间：整份重读后统一按 `at` 排一次
+            self.messages.sort(key=self._at_key)
             self._pos = self.path.stat().st_size
         except Exception:
             self._pos = 0
