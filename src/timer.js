@@ -65,7 +65,8 @@ export function controllerOf(ctx) {
 function followupMessage(text, { kind = 'see-now', images = [] } = {}) {
   const content = [];
   const body = String(text ?? '');
-  if (body) content.push({ type: 'text', text: body });
+  // 图片在前、文字在后（2026-11-26 `.34`）：浮窗原文就是「图片 markdown 然后正文」，
+  // 这个顺序才和它一致；纯图补的 `[图片]` 也才会落在图片**下面**当图注，可搜可引用。
   for (const img of images) {
     const attachment = img?.attachment;
     if (attachment?.attachmentId) {
@@ -76,6 +77,7 @@ function followupMessage(text, { kind = 'see-now', images = [] } = {}) {
       throw new Error('图片没有附件引用：先 saveImage 拿 ref 再投（内联 data 会把会话永久打成 TRANSPORT）');
     }
   }
+  if (body) content.push({ type: 'text', text: body });
   if (!content.length) content.push({ type: 'text', text: '' });
   return {
     id: randomUUID(),

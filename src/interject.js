@@ -131,12 +131,15 @@ export function relayUserText(text) {
 }
 
 /**
- * 投给会话时，用户那条消息的**正文**（2026-11-26 `.33`）。
+ * 投给会话时，用户那条消息的**正文**。
  *
- * 浮窗发**纯图**（拆完 markdown 没有正文）时不再补 `[图片]`：主窗里图片自己就在，
- * 多一行 `[图片]` 只是噪音，还排在图片上面。没有图时才退回原话（历史行为）。
+ * - 有文字：照旧；
+ * - 纯图（拆完 markdown 没正文）：补一行 `[图片]`（2026-11-26 `.34` 改回来）—— 主窗里
+ *   图片在前、这行在后当图注，**搜索 / 引用才抓得到这条消息**（`.33` 试过留空，
+ *   结果是这条消息在主窗里彻底没有文字，搜不到也引用不了）；
+ * - 没有图也没有文字：退回原话（历史行为）。
  *
- * 说明那条（`relayInstruction`）仍用 `[图片]` 占位 —— 否则它会写成
+ * 说明那条（`relayInstruction`）也用 `[图片]` 占位 —— 否则它会写成
  * 「引用了一段内容，见上一条」，读起来像引用而不是一张图。
  *
  * @param {{text?:string, images?:unknown[], fallback?:string}} [o]
@@ -145,7 +148,8 @@ export function relayUserText(text) {
 export function relaySendText({ text = '', images = [], fallback = '' } = {}) {
   const body = String(text ?? '');
   if (body.trim()) return body;
-  return Array.isArray(images) && images.length ? '' : String(fallback ?? '');
+  if (Array.isArray(images) && images.length) return '[图片]';
+  return String(fallback ?? '');
 }
 
 /**

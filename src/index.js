@@ -1528,9 +1528,12 @@ async function registerAll(ctx) {
      *   ① 用户原话（`source.kind:"user"`）→ 主窗用户气泡、引用块正常渲染；
      *   ② 为什么必须用 `say` 回的说明（`see-now`）→ 仍然是触发卡，但只有它进卡。
      * 两条都投失败才算失败；说明那条失败时用户话已经进了会话，不能把回执标成失败。
+     *
+     * **例外（`.34`）**：② 只在 `steer`（原话是插进正在跑的一轮）时投，而且用 `steer`；
+     * `followup`（从空闲起一轮）不投 —— 否则它会排队，几分钟后变成一张旧卡片（见下面那段）。
      */
     const relayed = await loadRelayImages({ ctx, text: clean, log });
-    // 纯图不补 `[图片]` 正文（`.33`）：主窗里图片自己就在，多一行只是噪音；说明那条仍用占位
+    // 纯图补一行 `[图片]`（`.34` 回退 `.33` 的留空）：图在前、这行在后当图注，可搜可引用
     const sendText = relaySendText({ text: relayed.text, images: relayed.images, fallback: clean });
     const saidForInstruction = relayed.text || (relayed.images.length ? '[图片]' : clean);
     const r = await wakeWithRetry({
@@ -1542,12 +1545,20 @@ async function registerAll(ctx) {
       markDelivered(key, false);      // 窗口把「发送中」换成「发送失败」
       return false;
     }
-    const r2 = await wakeWithRetry({
+    /**
+     * **说明那条只在 steer 时投，而且用 steer 立刻 splice**（`.34`）。
+     *
+     * 两条消息里宿主只 splice 一条：第二条如果走 followup，会被排到空闲才拼进会话 ——
+     * 用户几分钟后突然收到一张「先说话，再干活」的旧卡片（23:04、23:29、23:39 各一次）。
+     * 反过来，从空闲开始的那一轮里，用户原话已经起了新回合，说明没有额外价值（`.31`
+     * 起正文也会镜像进浮窗）—— 所以 followup 场景直接不投。
+     */
+    const r2 = steer ? await wakeWithRetry({
       ctx, sessionId: sid,
       text: relayInstruction(saidForInstruction, { at: key ? Number(key) : null }),
-      log, steer,
-    });
-    if (!r2?.ok) relayLog(`warn(${source}): 说明那条没投进去：${r2?.reason ?? 'unknown'}`);
+      log, steer: true,
+    }) : { ok: true, skipped: 'idle' };
+    if (!r2?.ok && steer) relayLog(`warn(${source}): 说明那条没投进去：${r2?.reason ?? 'unknown'}`);
     markRelaySeen(key);               // 重启补投不许再投同一句
     markDelivered(key, true);         // 窗口把「发送中」换成「已送达」
     // via 写进日志：下次"投了却没反应"时，第一眼就能看出走的是插话还是排队

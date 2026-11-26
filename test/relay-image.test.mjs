@@ -118,14 +118,20 @@ test('内联 base64 形状投不进去 —— 这条就是 2026-11-26 事故的�
   assert.equal(seen.length, 0, '坏块一条都不许进会话');
 });
 
-test('relaySendText：纯图不再补 [图片] 正文，没图才退回原话', () => {
+test('relaySendText：纯图补 [图片]（可搜可引用），有字就照旧', () => {
   const img = [{ attachment: REF }];
   // 图文混排：正文照旧
   assert.equal(relaySendText({ text: '看图', images: img, fallback: '![图片](p)' }), '看图');
-  // 纯图：正文留空 —— 主窗里图片自己就在，多一行 `[图片]` 是噪音
-  assert.equal(relaySendText({ text: '', images: img, fallback: '![图片](C:\\x.png)' }), '');
+  // 纯图：补一行 `[图片]` —— `.34` 回退 `.33` 的留空，否则这条消息在主窗没有文字可搜
+  assert.equal(relaySendText({ text: '', images: img, fallback: '![图片](C:\\x.png)' }), '[图片]');
   // 没图：沿用原话（历史行为）
   assert.equal(relaySendText({ text: '', images: [], fallback: '原话' }), '原话');
   // 拆完只剩空白也算纯图
-  assert.equal(relaySendText({ text: '   ', images: img, fallback: 'x' }), '');
+  assert.equal(relaySendText({ text: '   ', images: img, fallback: 'x' }), '[图片]');
+});
+
+test('图片排在文字前面 —— 和浮窗原文顺序一致，[图片] 落在图下方', async () => {
+  const { ctx, seen } = ctxWithAgent();
+  await wakeSession(ctx, { sessionId: 'sid', text: '[图片]', images: [{ attachment: REF }] });
+  assert.deepEqual(seen[0].content.map((p) => p.type), ['image', 'text']);
 });
