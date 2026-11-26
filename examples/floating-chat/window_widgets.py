@@ -91,19 +91,22 @@ class ChatFeed:
         # 放到标题栏下面那行状态里，别把四条消息挤掉。
         if role == "meta":
             return {"role": "meta", "text": str(text or ""), "stamp": "",
-                    "at": raw.get("at"), "sid": sid, "mid": raw.get("mid")}
+                    "at": raw.get("at"), "sid": sid, "mid": raw.get("mid"),
+                    "origin": raw.get("origin")}
         # 居中「系统提示」气泡（绑定变更公告）；和 meta 一样不是聊天内容，
         # 但它要占一条、要显示，所以按消息收进流里。
         if role == "notice":
             if not isinstance(text, str) or not text.strip():
                 return None
             return {"role": "notice", "text": text.strip(), "stamp": "",
-                    "at": raw.get("at"), "sid": sid, "mid": raw.get("mid")}
+                    "at": raw.get("at"), "sid": sid, "mid": raw.get("mid"),
+                    "origin": raw.get("origin")}
         if not isinstance(text, str) or not text:
             return None
         return {"role": role, "text": text,
                 "stamp": clock(raw.get("at")) if raw.get("at") is not None else "",
-                "at": raw.get("at"), "sid": sid, "mid": raw.get("mid")}
+                "at": raw.get("at"), "sid": sid, "mid": raw.get("mid"),
+                "origin": raw.get("origin")}
 
     def admit(self, msg: dict | None) -> bool:
         """这条归不归当前会话：meta 行不参与分组，其余必须 `sid` 对上。"""

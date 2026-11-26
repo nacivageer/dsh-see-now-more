@@ -1555,6 +1555,9 @@ class LiveGlass:
         不参与排版：它画在时间戳那一行里，高度/宽度都不改条目尺寸，
         所以回执变化时只要 `_redraw_bubbles()` 就够，不用重排。
         """
+        # 主窗镜像来的用户消息不是从本窗发的：没有「发送中 / 未确认」这回事
+        if str((e.get("msg") or {}).get("origin") or "") == "dsh":
+            return
         label, col = self._send_state(e.get("key"))
         f9 = self.fonts.get(9)
         stamp_w = f9.measure(e.get("stamp") or "")
