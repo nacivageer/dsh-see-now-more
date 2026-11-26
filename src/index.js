@@ -330,6 +330,44 @@ export function linesText(sheet) {
 }
 
 /**
+ * 屏幕文字清单（P1 第 3 步：交付）。
+ *
+ * 与 `linesText` **同一套格子口径**（`#n` = 最接近第 n 格画面），但数据不是 ASR 而是
+ * 本机 OCR 认出来的字幕带 —— 所以措辞里要说明「OCR 认的」，别让它和台词混为一谈。
+ *
+ * **只在真有行时出现**：没字的时候凭空来一行标题，模型会以为 OCR 坏了。
+ */
+export function textLinesText(sheet) {
+  const got = sheet?.textLines;
+  if (!got?.length) return '';
+  const frames = sheet.frames ?? [];
+  const f0 = frames[0];
+  const origin = f0?.wall != null ? f0.wall - f0.t * 1000 : null;
+  const cellFor = (tRel) => {
+    if (!frames.length) return null;
+    let idx = 0;
+    for (let i = 0; i < frames.length; i += 1) if (frames[i].t <= tRel + 1e-6) idx = i;
+    return idx + 1;
+  };
+  const rows = got.map((l) => {
+    const tRel = origin === null ? null : (l.t0 - origin) / 1000;
+    const rel = tRel === null ? null : `${tRel.toFixed(1)}s`;
+    let clock = null;
+    try { clock = new Date(l.t0).toLocaleTimeString('zh-CN', { hour12: false }); } catch { /* 时区数据缺失 */ }
+    const stamp = [clock, rel].filter(Boolean).join(' / ');
+    const cell = tRel === null ? null : cellFor(tRel);
+    return `  ${cell === null ? '' : `#${cell}  `}${stamp || '—'}  ${l.text}`;
+  });
+  const dropped = Number(sheet.textStats?.dropped) || 0;
+  const seq = Number(sheet.textStats?.seq) || 0;
+  return '\n屏幕文字（这段时间画面上的字，本机 OCR 认的，可能有错字；'
+    + '`#n` = 最接近第 n 格画面）：\n'
+    + rows.join('\n')
+    + (dropped ? `\n（预算只列了 ${got.length} 行，另有 ${dropped} 行未列）` : '')
+    + (seq ? `\n（文字水位 ${seq}：唤醒消息里已经给过的行，这里不再重复。）` : '');
+}
+
+/**
  * 循环状态那一行。三种态要分清，别都写成"在跑"：
  *   - `listen`：采集停了，但窗口里的输入还收得到（用户打字仍然能叫醒模型）
  *   - `active`：正常在跑
@@ -458,7 +496,7 @@ export function sheetText(sheet, {
   // 血条读数（P2）：**只报告，不唤**。看图这一刻顺带把「此刻多少血」说出来，
   // 判断交给模型（`bloodbarNote()` 在没框 / 没采时返回 null，那时不写这一行）。
   const bloodNote = bloodbar ? `\n🩸 ${bloodbar}` : '';
-  return `${head}\n${lines.join('\n')}${linesText(sheet)}${soundText(sheet.sound)}${bloodNote}${ask}${lastSaidNote()}${loopNote}\n（${whyText}；想看下一段就再调一次 \`see_now({action:"watch"})\`。）${replyReminder({ answered: Boolean(say) })}`;
+  return `${head}\n${lines.join('\n')}${linesText(sheet)}${textLinesText(sheet)}${soundText(sheet.sound)}${bloodNote}${ask}${lastSaidNote()}${loopNote}\n（${whyText}；想看下一段就再调一次 \`see_now({action:"watch"})\`。）${replyReminder({ answered: Boolean(say) })}`;
 }
 
 /**
@@ -491,6 +529,8 @@ async function attachAndReturn(ctx, sheet, extra = {}) {
       fill: +sheet.fill.toFixed(3),
       why: sheet.why,
       bytes: sheet.png.length,
+      // 屏幕文字四数 + 水位（P1 第 3 步的账）：没有这一路时是 null，别写成 0
+      textStats: sheet.textStats ?? null,
     },
   };
 }

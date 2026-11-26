@@ -17,6 +17,7 @@
 import { startOcr, resolveOcrPython } from './ocr.js';
 import { bandFromFrame, sidecarSizeOf, tidyOcrLine } from './text-band.js';
 import { createTextGate } from './text-events.js';
+import { mergeIntervals } from './coverage.js';
 
 /** 一帧条带的识别上限：宽条比血条慢（实测血条 12–92ms），给 5 秒防卡死 */
 export const TEXT_OCR_TIMEOUT_MS = 5000;
@@ -50,6 +51,14 @@ export function createTextStream({
   let sampled = 0;        // 真正送进 OCR 的帧数
   let inFlight = null;    // 最近一个未完成的 Promise（测试等它）
   let lastSampleAt = 0;   // 抽帧节流（wall）
+  /**
+   * 覆盖率的两本账（P1 第 3 步）。口径与 `coverage.js` 同一形状：
+   *   - 分母 = **采样到「有字」的时长**（OCR 回了至少一行的那几帧，各算一个采样间隔）；
+   *   - 分子 = 这些时长里被**入流事件**盖住的部分。
+   * 不写「0 token」也不写「100%」：没采到字的时候是 null，不是满分。
+   */
+  const textSpans = [];   // 采样到有字的区间 [{from,to}]（epoch ms）
+  const eventSpans = [];  // 已确认事件的区间
 
   const intervalMs = Math.round(1000 / Math.max(0.5, Number(cfg.fps) || 1));
 
@@ -115,12 +124,20 @@ export function createTextStream({
     inFlight = engine.recognize(band.bgra)
       .then((out) => {
         const lines = Array.isArray(out?.lines) ? out.lines : (out?.text ? [out.text] : []);
+        if (lines.length) {
+          textSpans.push({ from: at, to: at + intervalMs });
+          prune(textSpans, at);
+        }
         for (const raw of lines) {
           // WinRT 的中文是一字一空格吐出来的（见 `text-band.js` 的 `tidyOcrLine`）
           const text = tidyOcrLine(raw);
           if (!text) continue;
           // `conf` 现在是 null：`py/ocr_sidecar.py` 不吐置信度，WinRT 的 OcrLine 也没有
-          gate.observe({ t: at, text, conf: null });
+          const r = gate.observe({ t: at, text, conf: null });
+          if (r.kind === 'confirmed' && r.event) {
+            eventSpans.push({ from: r.event.t0, to: r.event.t1 });
+            prune(eventSpans, at);
+          }
         }
         return lines;
       })
@@ -133,6 +150,34 @@ export function createTextStream({
       })
       .finally(() => { busy = false; });
     inFlight.catch(() => {});
+  }
+
+  /** 滚动窗：只留最近 10 分钟（文字事件不落盘，这本账也一样） */
+  function prune(arr, now) {
+    while (arr.length && arr[0].to < now - 10 * 60_000) arr.shift();
+  }
+
+  const overlap = (a, b) => Math.max(0, Math.min(a.to, b.to) - Math.max(a.from, b.from));
+
+  /**
+   * 屏幕文字覆盖率（P1 第 3 步的账）。
+   *
+   * **分母 = 采样到「有字的时长」**（不是总采样时长）：OCR 那一帧什么都没认出来，
+   * 说明屏幕上真的没字，不该拉低覆盖率。和 `coverage.js` 同一个形状，
+   * 报数时必须连分母一起说 —— 单说一个百分比是没法对账的。
+   */
+  function coverage() {
+    const has = mergeIntervals(textSpans);
+    const ev = mergeIntervals(eventSpans);
+    const hasMs = has.reduce((n, s) => n + (s.to - s.from), 0);
+    const covMs = Math.min(hasMs, has.reduce(
+      (n, s) => n + ev.reduce((m, e) => m + overlap(s, e), 0), 0,
+    ));
+    return {
+      hasTextSec: +(hasMs / 1000).toFixed(1),
+      coveredSec: +(covMs / 1000).toFixed(1),
+      pct: hasMs >= 1000 ? Math.round((100 * covMs) / hasMs) : null,
+    };
   }
 
   /** 交付点：`from → to` 之间还没交付过的行（预算在里面） */
@@ -152,6 +197,8 @@ export function createTextStream({
       busy,
       ocr: { available: Boolean(ocr) && !why, why },
       stats: gate.stats(),
+      /** 覆盖率账：`{hasTextSec, coveredSec, pct}`（pct 的分母就是 hasTextSec） */
+      coverage: coverage(),
     };
   }
 

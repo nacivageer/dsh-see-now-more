@@ -116,6 +116,25 @@ test('失败姿态：识别抛错 → 记原因、停引擎、下一帧不炸', 
   assert.doesNotThrow(() => s.onFrame(frameAt(6_001_000)));
 });
 
+test('覆盖率：分母是「采样到有字」的时长，不是总采样时长', async () => {
+  const f = fakeOcr({ lines: ['这是有字的这一帧'] });
+  const s = createTextStream({ config: CFG, startOcrFn: f.startOcrFn, resolveFn: () => ({ ok: true, python: 'py' }) });
+  for (let i = 0; i < 4; i += 1) { s.onFrame(frameAt(8_000_000 + i * 1000)); await s.settled(); }
+  const cov = s.status().coverage;
+  assert.equal(cov.hasTextSec, 4);          // 4 帧 × 1 秒（每帧都有字）
+  assert.ok(cov.coveredSec >= 2);           // 第 3 帧确认，事件盖住后两帧
+  assert.ok(cov.pct > 0 && cov.pct <= 100);
+});
+
+test('覆盖率：一帧都没有字时是 null，不报 0% 也不报 100%', async () => {
+  const f = fakeOcr({ lines: [] });
+  const s = createTextStream({ config: CFG, startOcrFn: f.startOcrFn, resolveFn: () => ({ ok: true, python: 'py' }) });
+  for (let i = 0; i < 3; i += 1) { s.onFrame(frameAt(9_000_000 + i * 1000)); await s.settled(); }
+  const cov = s.status().coverage;
+  assert.equal(cov.hasTextSec, 0);
+  assert.equal(cov.pct, null);
+});
+
 test('关掉时一帧都不送', async () => {
   const f = fakeOcr();
   const s = createTextStream({

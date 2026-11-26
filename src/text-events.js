@@ -157,6 +157,25 @@ export function budgetLines(lines, { maxLines = TEXT_DEFAULTS.maxLines, maxChars
   return { lines: kept, chars, dropped: lines.length - kept.length };
 }
 
+/**
+ * 只留水位之后的行（交付去重的第二道闸：唤醒里给过的，`watch`/`peek` 不再给）。
+ *
+ * 水位取 `max(seq)` 而不是最后一条的 `seq` —— `between()` 按 `t0` 排序，同帧双语行
+ * 的确认顺序会翻面（见上面 `between` 的注释）。
+ *
+ * @param {Array<{seq:number}>} lines
+ * @param {number} seq 已经交付过的最大 seq
+ * @returns {{lines:object[], seq:number, skipped:number}}
+ */
+export function unreadSince(lines, seq = 0) {
+  const all = Array.isArray(lines) ? lines : [];
+  const out = all.filter((l) => Number(l?.seq) > Number(seq || 0));
+  const next = out.length
+    ? Math.max(Number(seq) || 0, ...out.map((l) => Number(l.seq) || 0))
+    : (Number(seq) || 0);
+  return { lines: out, seq: next, skipped: all.length - out.length };
+}
+
 /* ---------- 闸门 ---------- */
 
 /**

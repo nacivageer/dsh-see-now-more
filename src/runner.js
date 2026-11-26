@@ -38,6 +38,7 @@ import { bloodbarBrief, pushTrack, ratioFromRgba } from './bloodbar.js';
 import { resolveOcrPython, startOcr } from './ocr.js';
 import { createTextStream } from './text-stream.js';
 import { normalizeTextConfig } from './text-band.js';
+import { unreadSince } from './text-events.js';
 import { encodePng } from './png.js';
 import {
   audioCapability, bloodbarCapability, liftCapability, ocrCapability, visionCapability,
@@ -504,6 +505,29 @@ export function createRunner({
     log,
   });
 
+  /**
+   * 交付水位：已经给过模型的最大 `textSeq`。
+   *
+   * **三处交付点共用这一个水位**（唤醒消息 / `watch` / `peek`）：先拿到的那一处消费，
+   * 后面的只补"这之后的新行"。不这么做，同一条字幕会在唤醒里出现一次、图里再一次，
+   * 模型会以为屏幕上说了两遍。
+   */
+  let textSeq = 0;
+
+  /**
+   * 取这段时间的屏幕文字（**消费**：给了就记水位）。
+   *
+   * `from/to` 与 `attachLines` 同一把尺（上一张 `wallTo` → 这一张 `wallTo`，两头各留 400/800 ms）。
+   * @returns {{lines:object[], dropped:number, seq:number, stats:object|null}}
+   */
+  function takeText(from, to) {
+    if (!textStream) return { lines: [], dropped: 0, seq: textSeq, stats: null };
+    const got = textStream.between(from, to);
+    const pick = unreadSince(got.lines, textSeq);
+    textSeq = pick.seq;
+    return { lines: pick.lines, dropped: got.dropped, seq: textSeq, stats: textStream.status().stats };
+  }
+
   function startBloodbarOcr(region) {
     if (bloodbarOcr) return;
     const probe = resolveOcrPython();
@@ -864,7 +888,7 @@ export function createRunner({
    *
    * 声音用的是同一个时间窗：分开算的话两段会漂几百毫秒，模型对不上"这句配那段声音"。
    */
-  function attachLines(sheet) {
+  function attachLines(sheet, { withText = true } = {}) {
     if (!sheet) return sheet;
     const to = sheet.wallTo ?? Date.now();
     /**
@@ -879,6 +903,17 @@ export function createRunner({
     if (snd) sheet.sound = snd;
     if (to > lastSheetWallTo) lastSheetWallTo = to;
     if (got.length) sheet.lines = got;
+    /**
+     * 屏幕文字：**同一个时间窗**，但走另一个水位（`textSeq`）。
+     *
+     * `withText:false` 只给「只读不消费」的路径（`missed.jsonl` 记账）—— 从那里读一次
+     * 就把这一窗的字标成已交付，真正的 `watch`/`peek` 反而拿不到了。
+     */
+    if (withText) {
+      const tx = takeText(from - 400, to + 800);
+      if (tx.lines.length) sheet.textLines = tx.lines;
+      sheet.textStats = { ...(tx.stats ?? {}), seq: tx.seq };
+    }
     return sheet;
   }
   /**
@@ -1393,7 +1428,7 @@ export function createRunner({
     try {
       const s = pipeline?.peek?.() ?? null;
       if (!s) return null;
-      attachLines(s);      // 把台词和声音挂上（只读不消费）
+      attachLines(s, { withText: false });      // 把台词和声音挂上（只读不消费）
       const from = Number.isFinite(s.from) ? +s.from.toFixed(1) : null;
       const to = Number.isFinite(s.to) ? +s.to.toFixed(1) : null;
       const recs = [];
@@ -1501,6 +1536,11 @@ export function createRunner({
      */
     textLines: (a, b) => textStream?.between(a, b) ?? { lines: [], dropped: 0 },
     textStatus: () => textStream?.status() ?? null,
+    /**
+     * 屏幕文字的**交付**口（唤醒消息用；`watch`/`peek` 走 `attachLines`）。
+     * 消费式：给了就记水位，后面只补新的。
+     */
+    textNote: (a, b) => takeText(a, b),
     /**
      * 血条简报（P2）：`{text, below, ratio, at}` 或 `null`。
      * 唤醒文案与 `watch` 结果都拼这一行 —— **只报告，不唤**。

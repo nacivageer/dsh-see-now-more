@@ -3,17 +3,17 @@
 
 # 屏幕文字事件流：让静默期不花 token
 
-状态：可验收（P1 第 2 步：条带 OCR 真机跑通 —— 10 分钟 196/196 行召回；等格验收）
+状态：进行中（P1 第 3 步：交付（唤醒 / watch / peek + `textSeq` 水位）与覆盖率账已落地；**A/B 待活会话**）
 对象：给 see-now-more 加一条**屏幕文字事件流**——把画面上的字（尤其底部字幕带）变成带时间码的文本事件，
 随唤醒 / 图交付而不是另开一路；做到「静默期只入队不进上下文、说话时少漏字、有本账能算清省了多少」。
 归属：session-40cc9db3-6a98-481e-8252-9da96f75f401（bilibili 工作区出方案）/ 执行在
 `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：P1 第 3 步（交付 + 账）：唤醒消息带摘要（≤12 行 / ≤300 字）+ `textSeq` 水位、`watch`/`peek` 只补未读、
-`textCoverage` 分母按「采样到有字」、A/B（peek 率 + 净省 + 行级召回）。P2 等 P1 的数字；P4 等发版时一起改 README。
-证据：`node --test` 459 项全过 / 0 失败 / **0 skip**（winrt 到位，原来 skip 的 3 条血条 OCR 也跑起来了）；
-验收脚本 `_scratch/accept-band.mjs`（日志 `_scratch/accept-band.log`）、`_scratch/accept-kill.mjs`。
-账：本步无采集、无 token 支出（单测 + 本地视频）；真实成本要等第 3 步的 A/B。
-更新：2026-11-27 05:52 CST
+下一步：P1 第 3 步只剩 A/B（同一场景开 / 关各 5 分钟，比 peek 率、图 token、文字 token、净省、文本-only
+回答数）——**这件必须在真实会话里跑**，脚本替代不了；跑完再进 P4（README 四档表，发版时一起改）。
+证据：`node --test` 464 项全过 / 0 失败 / **0 skip**；水位去重与渲染单测在 `test/text-deliver.test.mjs`；
+真机 OCR 验收见 05:52 条（10 分钟 196/196 召回）。
+账：`textCoverage` 已能算（分母 = 采样到有字的时长），**但「净省」还没有实测数字** —— 等 A/B。
+更新：2026-11-27 05:56 CST
 
 ## 为什么值得做（三条已核）
 
@@ -264,3 +264,14 @@ README 0 命中，只有 `README.md:86` 那句「点 × 只是这一次不看」
   **真机发现**：WinRT 的中文是一字一空格吐出来的（`我 们 得 先 回 去 ， 这 里 不 安 全 。`）；闸门的归一化
   本来就去空白（配对不受影响），但交付原文要收拾 → 新加 `tidyOcrLine()`（只去掉汉字旁边的空格，
   拉丁词之间的留着），单测钉住。
+- 2026-11-27 05:56 **P1 第 3 步（交付 + 账，代码）**。① `unreadSince()`：水位之后的行，水位取 `max(seq)`
+  （`between()` 按 t0 排序，同帧双语行的 seq 会翻面）；② runner 的 `takeText()` —— **三处交付点共用
+  一个水位**（唤醒消息 / `watch` / `peek`），先拿到的那处消费，后面的只补新行；③ `attachLines()` 挂
+  `sheet.textLines` / `sheet.textStats`，`withText:false` 给 `missed.jsonl` 那种只读路径（从那儿读一次
+  就把字标成已交付，真正的 watch 反而拿不到）；④ `watch`/`peek` 结果里渲染「屏幕文字」块（`#格子 /
+  时钟 / 相对秒`，与台词同一口径）+ `meta.textStats`；⑤ 两条唤醒消息（仅监听 / 看屏幕）各带一段
+  `screenTextBlock()` 摘要，写明「水位 N，这段字这里给过了」——**这就是省 token 的机制**：
+  字在唤醒里，模型就不必为它拉图。⑥ `textCoverage`：分母 = 采样到「有字」的时长，分子 = 被入流事件
+  盖住的时长（`text-stream` 里两本区间账，滚动 10 分钟，复用 `coverage.js` 的 `mergeIntervals`），
+  没采到字时报 `null` 而不是 0%。
+  **没做**：A/B（peek 率 / 净省 / 文本-only 回答数）—— 需要在真实会话里开 / 关各 5 分钟，脚本替代不了。

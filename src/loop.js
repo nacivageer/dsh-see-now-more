@@ -413,6 +413,26 @@ export function startLoop({
     try { runner.note?.(text); } catch { /* 记不进就算了 */ }
     log(`[listen] 目标会话正忙，改记待领说明（${String(text).slice(0, 70)}）`);
   };
+  /**
+   * 唤醒消息里的「屏幕文字」段（P1 第 3 步）。
+   *
+   * 为什么放在**唤醒**里而不是只随图：省 token 的机制就是「叫醒时字已经在手上 →
+   * 模型可以不拉图」。只随图的话，它还得先拉一张图才看得到字，图那笔一分没省。
+   *
+   * **消费式**：这里给了就记 `textSeq` 水位，之后 `watch`/`peek` 只补新的，
+   * 同一行不会在唤醒和图里各出现一次。
+   */
+  function screenTextBlock(from, to) {
+    try {
+      const got = runner.textNote?.(from, to);
+      if (!got?.lines?.length) return '';
+      return '\n屏幕文字（这段时间画面上的字，OCR 认的）：\n'
+        + got.lines.map((l) => `· ${l.text}`).join('\n')
+        + (got.dropped ? `\n（另有 ${got.dropped} 行未列）` : '')
+        + `\n（文字水位 ${got.seq}：这段字这里已经给过了，`
+        + '`watch`/`peek` 只补这之后的新行 —— 只想知道说了什么就不必再拉图。）';
+    } catch { return ''; }
+  }
   /** 上一张已经叫过的图（`#序号` 或 `p脉冲`），同一张永不重复叫 */
   let lastKey = null;
   /** pending 0→1 的脉冲计数：拿不到出图序号时靠它认"新的一张" */
@@ -725,6 +745,7 @@ export function startLoop({
       + (fresh.some((l) => l.spk) ? '（S1/S2 是按声纹聚出来的编号，不是名字）\n' : '')
       + '值得看就 `see_now({action:"watch"})` 看 2–3 张；不值得就什么都别做，我继续听。'
       + lastSaidHint()
+      + screenTextBlock(firstT0 - 2000, now)
       + bloodbarTail();
     if (targetBusy()) {
       parkAsNote(`[黑听·待领] ${clock} ${when}听见 ${fresh.length} 句：${merged.text}`);
@@ -1066,7 +1087,8 @@ export function startLoop({
         : `[看屏幕] 有新画面了（这一张攒了 ${st.secondsSinceWake ?? '?'} 秒）。\n`
           + '调 `see_now({action:"peek"})` 拿图看一眼，然后：值得说就用 `say` 说一句，'
           + '不值得说就什么都别做（沉默是允许的，别为了刷存在感而说话）。'
-          + lastSaidHint();
+          + lastSaidHint()
+          + screenTextBlock(lastWakeAt || Date.now() - 15_000, Date.now());
       const ok = await wake(text);
       if (ok) {
         lastKey = key;
