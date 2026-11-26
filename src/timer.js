@@ -48,14 +48,33 @@ export function controllerOf(ctx) {
   return serviceOf(ctx, 'sessionController');
 }
 
-/** 唤醒用的消息：DSH 的 `followup()` 要的是一条 user 角色的消息（`MessageBase`） */
+/**
+ * 唤醒用的消息：DSH 的 `followup()` 要的是一条 user 角色的消息（`MessageBase`）。
+ *
+ * ## 图片块只收附件引用（2026-11-26 事故）
+ *
+ * 合法形状只有 `{type:'image', attachment:{attachmentId,…}}` —— 由
+ * `attachments.saveImage()` 换来的引用。**内联 base64 的 `{data, mimeType}` 不是
+ * 合法形状**：`agent.followup()` 这条路上没有任何准入校验，投进去什么样就存什么样，
+ * 而 DeepSeek adapter 准备请求时要读 `block.attachment.width`，读到 undefined 直接
+ * TypeError → 被最外层兜底包成 `TRANSPORT`（界面文案「DeepSeek Messages transport
+ * failed」）。重试 5 次全废，坏块还留在持久历史里，之后**每一轮连纯文本都失败**，
+ * 会话等于被锁死。所以这里宁可让这一条投递失败（reason 会出现在 relay.log 和窗口上），
+ * 也绝不静默把图丢掉或者把字节塞进去。
+ */
 function followupMessage(text, { kind = 'see-now', images = [] } = {}) {
   const content = [];
   const body = String(text ?? '');
   if (body) content.push({ type: 'text', text: body });
   for (const img of images) {
-    if (!img?.data || !img?.mimeType) continue;
-    content.push({ type: 'image', data: img.data, mimeType: img.mimeType });
+    const attachment = img?.attachment;
+    if (attachment?.attachmentId) {
+      content.push({ type: 'image', attachment });
+      continue;
+    }
+    if (img?.data !== undefined) {
+      throw new Error('图片没有附件引用：先 saveImage 拿 ref 再投（内联 data 会把会话永久打成 TRANSPORT）');
+    }
   }
   if (!content.length) content.push({ type: 'text', text: '' });
   return {

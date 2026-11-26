@@ -2,6 +2,24 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.30] - 2026-11-26
+
+### Fixed — 浮窗发图把会话打成「DeepSeek Messages transport failed」
+
+- `src/index.js` 的 `loadRelayImages()` 原来把浮窗正文里的本地图片读成 base64，拼成
+  `{type:'image', data, mimeType}` 投进会话。**这不是 DSH 认的形状**（合法形状只有
+  `{type:'image', attachment:{attachmentId,…}}`），而 `agent.followup()` 这条路上没有准入
+  校验，坏块原样进了持久历史：DeepSeek adapter 准备请求时读 `block.attachment.width` 抛
+  TypeError，被最外层兜底包成 `TRANSPORT` —— 界面上是「DeepSeek Messages transport
+  failed」，重试 5 次全废，**并且之后每一轮连纯文本都失败**，会话被永久锁死
+  （2026-11-26 实炸 `session-cb8c0785`）。
+- `loadRelayImages()` 改成 async：逐张 `attachments.saveImage()` 换成附件引用再投；没有
+  附件服务 / 读不了 / 超 4MB / 格式不认 / 超 4 张一律退回原 markdown（路径留在正文里，
+  模型仍可沿路径自己读）。
+- `src/timer.js` 的 `followupMessage()` 只接 `{attachment}`；遇到内联 `{data}` 直接抛错，
+  让这一条投递失败（会出现在 `relay.log` 和窗口的「发送失败」上），不再静默把坏块塞进会话。
+- `test/relay-image.test.mjs`（新）：5 条守门测试，其中一条专测「内联 base64 形状必须投不进去」。
+
 ## [0.1.1-more.29] - 2026-11-26
 
 ### Added — 浮窗同步主窗用户消息（功能 1）
