@@ -1,9 +1,9 @@
 # 任务书：浮窗补齐会话里的模型正文（assistant 镜像 + 回填，0.1.1-more.31）
 
-状态：可验收（真机 A/B 已过；提交 + tag + Release 进行中）
+状态：已发版（`v0.1.1-more.31`，prerelease <https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.31>；真机 A/B 已过）
 对象：把绑定会话里 assistant 的正文也同步进浮窗的聊天流 —— 窗关着时照写、插件启动 / 换绑时回填，补掉「关窗一段再开，回看只有用户半边」的缺口。不碰窗口 UI。
 归属：session-8cca3e59-4846-40d9-bf73-893e55226978 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：提交（11 个路径）→ tag `v0.1.1-more.31` → prerelease Release（草稿 `_scratch/release-031.md`；提交信息按实际读数改 `Verified:`）。之后把本状态块改成「已发版」再补一笔文档提交，不挪 tag。
+下一步：无。唯一没亲眼看到的是「真机 live 写 assistant 的那一条」——本回合回复落盘后读 `chat.jsonl` 核（同一 handler 的 user 侧已 live 验过）。
 证据：
   - **真机（2026-11-26 22:15，格重启 DSH 后 `.31` 生效）**：`mirror.log` `14:15:06.215Z backfill session-8cca3e59 startup: wrote 0 users + 6 assistant / 0+6 scanned 1151 ms=4027`；`14:17:20.186Z wrote session-8cca3e59-…:1156（26 字）`（格在主窗发的那句，窗关着 → live 镜像）；`_scratch/verify_after_restart.mjs` PASS（9 条镜像：user 3 / assistant 6，0 重复 mid）；开窗截图 `_scratch/assistant-mirror-real-restart.png`（4 条回填的模型气泡 + 22:17 那条用户气泡）。
   - `node --test` → 408 tests / 405 pass / 0 fail / 3 skip（2026-11-26 21:50，含 `pushAssistantText` 接线测试）。
@@ -15,7 +15,7 @@
   - 重启后一条命令：`node _scratch/verify_after_restart.mjs`（查副本版本、`.31` 的 startup 回填行、绑定会话两侧条目、重复 mid）。当前跑出来是「还没重启」。
   - 代码落点：`src/mirror.js`（`assistantTextOf` / `onAssistant` / `pushAssistantText` / `assistantThroughSeq` / 回填合并），`src/chat.js`（`pendingStartupEntries` 跳过镜像 assistant），`src/index.js`（接线，朗读仍只在窗开时）。
 账：无需（实现轮）
-更新：2026-11-26 21:53 CST
+更新：2026-11-26 22:21 CST
 
 ## 验收（3 条，格确认过；中途要加先问）
 
@@ -88,3 +88,10 @@
   `origin:"dsh"` 的 assistant 条目 → 1.2 秒内出现在底部、时间戳正确、无投递状态
   （截图 `_scratch/assistant-mirror-live-append.png`）。窗口侧确实不用改。
   同时把「收起态回填会弹一次通知」这条已知边界写进 `docs/机制.md`（要动共用 `window.py`，不修）。
+- 2026-11-26 22:15 **真机验收**（格重启 DSH，`.31` 生效）：启动回填 `wrote 0 users + 6 assistant`；
+  格 22:17 那句在主窗发、窗关着，被 live 镜像成 `:1156`；开窗看回填的模型气泡与用户气泡按时间排对
+  （`_scratch/assistant-mirror-real-restart.png`）；`verify_after_restart.mjs` PASS。
+  B：把绑定换到不存在的会话再换回来，触发 `wrote 0 users + 0 assistant`（9 条镜像不变、0 重复 mid）。
+- 2026-11-26 22:20 **提交 + tag + prerelease**：commit `a389d49`（11 个路径，`git show --stat` 核过）、
+  tag `v0.1.1-more.31`、`git-push.ps1 -TagAtHead` 走代理推送（`21c2fd3..a389d49 main` + new tag）、
+  Release 已建并核 `isPrerelease: true`。tag 之后只动文档。
