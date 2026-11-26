@@ -49,11 +49,19 @@ export function controllerOf(ctx) {
 }
 
 /** 唤醒用的消息：DSH 的 `followup()` 要的是一条 user 角色的消息（`MessageBase`） */
-function followupMessage(text, { kind = 'see-now' } = {}) {
+function followupMessage(text, { kind = 'see-now', images = [] } = {}) {
+  const content = [];
+  const body = String(text ?? '');
+  if (body) content.push({ type: 'text', text: body });
+  for (const img of images) {
+    if (!img?.data || !img?.mimeType) continue;
+    content.push({ type: 'image', data: img.data, mimeType: img.mimeType });
+  }
+  if (!content.length) content.push({ type: 'text', text: '' });
   return {
     id: randomUUID(),
     role: 'user',
-    content: [{ type: 'text', text: String(text ?? '') }],
+    content,
     // `see-now` = 插件自己的叫醒 / 提词；`user` = 用户在浮窗亲手打的字（2026-11-26）
     source: kind === 'user' ? { kind: 'user' } : { kind: 'see-now' },
   };
@@ -167,7 +175,7 @@ export function deliveryMode({ running } = {}) {
  *   2. `agent.followup(message)` 排队下一轮并唤醒驱动器
  *   3. `sessions.flush(agent.session)` 确认真的落进会话（followup 只进收件箱）
  */
-export async function wakeSession(ctx, { sessionId, text, steer = false, sourceKind = 'see-now' } = {}) {
+export async function wakeSession(ctx, { sessionId, text, steer = false, sourceKind = 'see-now', images = [] } = {}) {
   const sc = controllerOf(ctx);
   if (!sc?.resolveAgent) return { ok: false, reason: 'no-session-controller' };
   if (!sessionId) return { ok: false, reason: 'no-session-id' };
@@ -182,7 +190,7 @@ export async function wakeSession(ctx, { sessionId, text, steer = false, sourceK
     // `followup` = 下一**回合**（模型正忙时排在后面）。窗口里的用户消息**不是永远走 steer**：
     // 只有会话真在跑回合时才能插话，判据见 `deliveryMode()`。
     const agent = resolved.agent;
-    const msg = followupMessage(text, { kind: sourceKind });
+    const msg = followupMessage(text, { kind: sourceKind, images });
     // 投之前就记：事件可能比 await 更早到达 mirror
     if (sourceKind === 'user') markRelayInjectedId(msg.id);
     let via = 'followup';
@@ -209,10 +217,10 @@ export async function wakeSession(ctx, { sessionId, text, steer = false, sourceK
  * 以前这里是 `void wakeSession(...)`，返回 `{ok:false}` 也没人看 ——
  * 用户看到的现象就是"突然不理我了"（陪看那边实报过）。
  */
-export async function wakeWithRetry({ ctx, sessionId, text, note = () => {}, appendMeta = null, steer = false, sourceKind = 'see-now' }) {
+export async function wakeWithRetry({ ctx, sessionId, text, note = () => {}, appendMeta = null, steer = false, sourceKind = 'see-now', images = [] }) {
   let r = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { r = await wakeSession(ctx, { sessionId, text, steer, sourceKind }); } catch (e) { r = { ok: false, reason: String(e?.message ?? e) }; }
+    try { r = await wakeSession(ctx, { sessionId, text, steer, sourceKind, images }); } catch (e) { r = { ok: false, reason: String(e?.message ?? e) }; }
     if (r?.ok) return r;
     if (attempt === 0) await new Promise((res) => setTimeout(res, 800));
   }

@@ -3,7 +3,7 @@
 状态：进行中
 对象：给 see-now-more 的悬浮窗补两条。① **消息同步**：绑定会话里、用户在 DSH 主窗发的消息，实时进浮窗主聊天窗（用户气泡），并在插件启动 / 换绑时回填最近的用户消息；② **选区引用**：气泡里选中文字后右键多一项「引用选中文字」，输入区出现引号 chip，可删；发送后正文是 DSH 同款的 Markdown blockquote（每行 `> `），DSH 主窗也按引用渲染。
 归属：session-a58208c0-82bc-48b0-ad40-6cbf7a9a7756（任务书）/ `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：按格选择 B 改了 relay 投递（浮窗消息在主窗显示成用户气泡，见日志 19:52）。需再装一次 profile → 重启 DSH → 复验 B/C（主窗出现用户气泡、引用按 Markdown 渲染；浮窗不重复）。之后打 tag `v0.1.1-more.29` + Release、交接文 / 存档。
+下一步：B 的新投递已实机验到（主窗用户气泡 + 引用预览，浮窗不重复）；按格要求补了**本地图片转图片内容块**（见日志 20:10）。需再装一次 profile → 重启 DSH → 验图片显示。之后打 tag `v0.1.1-more.29` + Release、交接文 / 存档。
 证据：
   - `src/index.js:877-898`：`mirrorAssistantText` 只镜像 `assistant/message` 的正文；`src/index.js:906-945` 的 `session/event` 钩子已经在按绑定会话过滤，但 `user/message` 只用于 `loop.noteUserSpoke`（937 行），没有写进聊天流。
   - `examples/floating-chat/window.py:685-690`：浮窗用户消息由窗口自己 `append_user` 写 `chat.jsonl`；`src/chat.js:80-89` 是插件侧唯一写入口。
@@ -13,7 +13,7 @@
   - 上游 `SAOS-3624/dsh-see-now` v0.2.9（2026-11-25）只同步 mic / window 三处修复；本仓 `mic.py:236` 仍写死 `D:/asr-local/models-sherpa`，`window.py:1615-1619` 仍每 250ms 清麦克风状态。
   - `git status --short` 空；HEAD `cb8ea1e`；版本 `0.1.1-more.27`（`package.json` / `dsh.plugin.json` 同值）。
 账：无需（本任务书只写方案，未跑实现 / 验收）
-更新：2026-11-26 19:52 CST
+更新：2026-11-26 20:10 CST
 
 ## 现状依据
 
@@ -375,4 +375,6 @@ def format_quote_text(text: str) -> str:
   - `src/mirror.js`：live 与回填都跳过 relay 代投的消息 id —— 否则浮窗刚发的话会被镜像回灌成第二条。
   - 测试：`session-mirror` 加 relay-id 跳过用例；`interject-quote` 加 `relayUserText` / `relayInstruction` 用例。`node --test` 390 tests / 387 pass / 0 fail / 3 skip。
   - 文档：README / 机制.md 第十节 / 决策记录 / CHANGELOG 同步。**待复验**：重启 DSH 后浮窗发一条，主窗应出现用户气泡、引用按 Markdown 渲染、浮窗不重复。
+- 2026-11-26 20:05 B 复验通过（重启后）：浮窗发「> 引用复验 / 这是浮窗发的原话」→ 主窗出现**用户气泡**，引用显示成 `“ 引用复验 这是浮窗发的原话` 的引用预览；`relay-user-ids.json` 生成、mirror 无新增（浮窗里那条只出现一次）。随后格从浮窗发「我看看」+ 本地图片，主窗把 `![图片](C:\…png)` 显示成一行路径 —— 格要求**现在补图片**。
+- 2026-11-26 20:10 图片支持：`interject.splitImageMarkdown` 把本地图 markdown 拆出来；`index.js` 的 `loadRelayImages` 读成 `{type:"image", data:base64, mimeType}`（单张 ≤4MB、最多 4 张，失败 / 超限保留原 markdown）；`timer.js` 的 `followupMessage` 支持 image 内容块；relay 原话那条带图投递。文档同步。验证：`node --test` 391 tests / 388 pass / 0 fail / 3 skip。**待重启复验**图片显示。
 

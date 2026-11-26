@@ -11,7 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  interjectNote, relayInstruction, relayUserText, splitLeadingQuote,
+  interjectNote, relayInstruction, relayUserText, splitImageMarkdown, splitLeadingQuote,
   pendingInterjected, __resetInterject,
 } from '../src/interject.js';
 
@@ -71,6 +71,17 @@ test('relayInstruction：说明单独一条，不重复引用块（引用只在�
   assert.ok(out.startsWith('[看屏幕·用户插话 @08:00:00] 「问题」'), out.slice(0, 40));
   assert.ok(out.endsWith('画面后到）。'));
   assert.equal(pendingInterjected().text, '问题', '待回执只记正文');
+});
+
+test('splitImageMarkdown：本地图拆出来、网络图留在正文', () => {
+  const r = splitImageMarkdown('看这个 ![图片](C:\\tmp\\a.png) 和 ![图片](https://x/y.png)');
+  assert.deepEqual(r.images.map((i) => i.path), ['C:\\tmp\\a.png']);
+  assert.ok(r.text.includes('https://x/y.png'), '网络图不搬，留在文字里');
+  assert.ok(!r.text.includes('C:\\tmp\\a.png'), '本地图从文字里拿掉');
+  assert.equal(r.text.trim(), '看这个  和 ![图片](https://x/y.png)'.trim());
+
+  const none = splitImageMarkdown('没有图片');
+  assert.deepEqual(none, { text: '没有图片', images: [] });
 });
 
 test('splitLeadingQuote：只认开头的引用块，正文中间的 > 不搬走', () => {

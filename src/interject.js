@@ -90,6 +90,35 @@ export function splitLeadingQuote(text) {
 }
 
 /**
+ * 浮窗正文里的**本地图片 markdown**：`![图片](C:\…\x.png)`。
+ *
+ * 2026-11-26：主窗不解析本地路径的 Markdown 图片（安全限制），会在气泡里显示成
+ * 一行路径。relay 投递前把本地图拆出来、读成图片内容块；网络图不搬（没法保证
+ * 内网可访问，也可能很大）。
+ *
+ * @param {string} text
+ * @returns {{text:string, images:Array<{path:string, raw:string}>}}
+ */
+export function splitImageMarkdown(text) {
+  const src = String(text ?? '');
+  const images = [];
+  let out = '';
+  let last = 0;
+  const re = /!\[[^\]]*\]\(([^)\s]+)\)/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const path = m[1];
+    if (/^[a-z]+:\/\//i.test(path)) continue;   // http(s) / file:// 不搬
+    images.push({ path, raw: m[0] });
+    out += src.slice(last, m.index);
+    last = m.index + m[0].length;
+  }
+  if (!images.length) return { text: src, images: [] };
+  out += src.slice(last);
+  return { text: out.replace(/[ \t]+\n/g, '\n').trim(), images };
+}
+
+/**
  * 浮窗消息投给会话时，**用户原话**单独发一条（`source.kind:"user"`）。
  *
  * 2026-11-26 用户要求：浮窗发的话要在 DSH 主窗显示成**用户的聊天气泡**，而不是

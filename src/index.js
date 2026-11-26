@@ -10,7 +10,7 @@ import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE, DEFAULT_QUALITY } from '
 import { resolveFfmpeg } from './binaries.js';
 import { parseRegion } from './layout.js';
 import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC, TOOL_NAME, ACTION_VALUES } from './tool-spec.js';
-import { interjectNote, relayInstruction, relayUserText, noteInterjected, replyReminder, clearInterjected } from './interject.js';
+import { interjectNote, relayInstruction, splitImageMarkdown, noteInterjected, replyReminder, clearInterjected } from './interject.js';
 import { appendSpoken, appendChat, appendNotice, lastSaidNote, lastSaidText, chatDir, chatWatcherShared,
          chatWaiterCount, isFloatUserEntry, markDelivered, pendingStartupEntries, relaySeenHas, markRelaySeen } from './chat.js';
 import { createTitleSync } from './titles.js';
@@ -34,7 +34,7 @@ import { readBloodbarOnce, readBloodbarWindowOnce } from './bloodbar-capture.js'
 import { todayCounts } from './lift/log.js';
 import { liftLine, liftGearLine } from './lift/status.js';
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, extname, isAbsolute, join } from 'node:path';
 import { createRequire } from 'node:module';
 
 /** ESM 里拿到同步 require（`node:sqlite` 只有同步 API，动态 import 是异步的）。 */
@@ -556,6 +556,47 @@ function writeLoadError(e) {
     if (old.length > 64 * 1024) old = old.slice(-32 * 1024);
     writeFileSync(path, `${old}${new Date().toISOString()} ${e?.stack ?? e}\n`, 'utf8');
   } catch { /* 记不住也不能再炸一次 */ }
+}
+
+/** 浮窗消息里的本地图片：一条最多搬几张、单张多大（base64 还会再涨约 1/3）。 */
+const RELAY_IMAGE_MAX = 4;
+const RELAY_IMAGE_BYTES = 4 * 1024 * 1024;
+const RELAY_IMAGE_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+};
+
+/**
+ * 把浮窗正文里的本地图片读成 DSH 的**图片内容块**（2026-11-26）。
+ *
+ * 主窗不解析本地路径的 Markdown 图片，不搬就只显示一行 `![图片](C:\…)`。
+ * 搬不动的（文件没了 / 超 4MB / 格式不认识 / 超过 4 张）**保留原 markdown**，
+ * 别让路径凭空消失 —— 模型还能沿路径自己读。
+ */
+function loadRelayImages(text, log) {
+  const parsed = splitImageMarkdown(text);
+  if (!parsed.images.length) return { text: parsed.text, images: [] };
+  const images = [];
+  const failed = [];
+  parsed.images.forEach((img, i) => {
+    if (i >= RELAY_IMAGE_MAX) { failed.push(img.raw); return; }
+    const mime = RELAY_IMAGE_MIME[extname(img.path).toLowerCase()];
+    if (!mime) { failed.push(img.raw); return; }
+    try {
+      const st = statSync(img.path);
+      if (!st.isFile() || st.size > RELAY_IMAGE_BYTES) {
+        log?.(`图片跳过（大小 ${st.size}）：${img.path}`);
+        failed.push(img.raw);
+        return;
+      }
+      images.push({ data: readFileSync(img.path).toString('base64'), mimeType: mime });
+    } catch (e) {
+      log?.(`图片读不了（${img.path}）：${e?.message ?? e}`);
+      failed.push(img.raw);
+    }
+  });
+  const parts = [parsed.text, ...failed].filter(Boolean);
+  return { text: parts.join('\n'), images };
 }
 
 async function registerAll(ctx) {
@@ -1469,8 +1510,11 @@ async function registerAll(ctx) {
      *   ② 为什么必须用 `say` 回的说明（`see-now`）→ 仍然是触发卡，但只有它进卡。
      * 两条都投失败才算失败；说明那条失败时用户话已经进了会话，不能把回执标成失败。
      */
+    const relayed = loadRelayImages(clean, log);
+    const sendText = relayed.text || (relayed.images.length ? '[图片]' : clean);
     const r = await wakeWithRetry({
-      ctx, sessionId: sid, text: relayUserText(clean), sourceKind: 'user', log, steer,
+      ctx, sessionId: sid, text: sendText, images: relayed.images,
+      sourceKind: 'user', log, steer,
     });
     if (!r?.ok) {
       relayLog(`FAILED(${source}) -> ${sid}: ${r?.reason ?? 'unknown'} | ${clean.slice(0, 80)}`);
@@ -1479,7 +1523,7 @@ async function registerAll(ctx) {
     }
     const r2 = await wakeWithRetry({
       ctx, sessionId: sid,
-      text: relayInstruction(clean, { at: key ? Number(key) : null }),
+      text: relayInstruction(relayed.text || sendText, { at: key ? Number(key) : null }),
       log, steer,
     });
     if (!r2?.ok) relayLog(`warn(${source}): 说明那条没投进去：${r2?.reason ?? 'unknown'}`);
