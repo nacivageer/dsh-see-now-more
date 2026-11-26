@@ -6,11 +6,10 @@
 
 ## 状态
 
-- 状态：**可验收**（功能都实机验过，**未发版**）。
+- 状态：**已发版** `v0.1.1-more.30`（prerelease，<https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.30>）。
 - 版本：`0.1.1-more.30`（`package.json` / `dsh.plugin.json` / CHANGELOG 三处同值）；profile 已装
   （`node scripts/install-dev.mjs --check` = current）。
-- 分支：`main`，领先 `origin/main` **9 个提交**（`cb135d0..81db996`）；**没有 .29/.30 的 tag**，
-  最新 tag 还是 `v0.1.1-more.28`。
+- 分支：`main` 已 push；tag `v0.1.1-more.30` 指向 `b11eb37`。tag 之后的文档提交只动文档，不挪 tag。
 - 测试：`node --test` 396 项 / 393 过 / 0 失败 / 3 skip；`py_compile` 三文件 OK；
   `python scripts/check-quote.py` / `scripts/check-feed-order.py` exit 0。
 - 任务书（living）：`docs/tasks/session-mirror-quote.md`（顶部状态块已更到 20:48）。
@@ -50,11 +49,10 @@
 
 ## 下一步
 
-1. **发版 `0.1.1-more.30`**（`docs/决策记录.md` 发版六步）：文档已对齐（README / 机制 / 决策记录 /
-   CHANGELOG）；`git tag -a v0.1.1-more.30` → push main + tag（走 `~/.dsh/tools/git-push.ps1`）→
-   GitHub Release 标 **prerelease**，正文取 CHANGELOG `.30` 段。
-2. **发版前复核**：`node --test`（应 396/393/0/3）；`node scripts/install-dev.mjs --check` = current。
-3. **发版后交接 / 存档**：按 `~/.dsh/skills/memory/SKILL.md` 存档本任务结论（若格要「存档」）。
+1. **已发版** `v0.1.1-more.30`（prerelease，20:52）：tag + push 完成，Release 已核
+   （`isPrerelease: true`）。之后只动文档的提交不要再挪 tag；真有代码修复就按 `-more.31` 递增。
+2. **存档**：若格要「存档本会话」，按 `~/.dsh/skills/memory/SKILL.md` 走三件套。
+3. **可选后续（P2）**：回顾窗里的引用；窗关着期间的 assistant 正文回填；大图先缩后存；一条多条引用。
 
 ## 坑 / 现场（务必看）
 
@@ -86,6 +84,6 @@
 
 ## 交接时现场
 
-- HEAD `81db996`；工作树干净（只有未跟踪 `tmp/`）；9 个提交未 push。
+- HEAD `b11eb37`（`v0.1.1-more.30` 已 push）；工作树干净（只有未跟踪 `tmp/`）。
 - profile 已装 `.30`（`--check` current）；浮窗关着；`see-now.json` 绑 `39caa84d`。
-- 时间 20:48。格的要求是「写交接文」+「继续」；发版按上面第 1 步做。
+- 时间 20:48；发版 20:52 完成。

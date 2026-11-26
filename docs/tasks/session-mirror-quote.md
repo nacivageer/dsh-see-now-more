@@ -1,9 +1,9 @@
 # 任务书：浮窗主聊天窗同步 DSH 会话 + 气泡选区「引用选中文字」
 
-状态：可验收（功能 1/2 + relay 用户气泡 + 图片附件都实机验过；剩发版与交接）
+状态：已发版（`v0.1.1-more.30`，prerelease；功能与图片修复均实机验过）
 对象：给 see-now-more 的悬浮窗补两条。① **消息同步**：绑定会话里、用户在 DSH 主窗发的消息，实时进浮窗主聊天窗（用户气泡），并在插件启动 / 换绑时回填最近的用户消息；② **选区引用**：气泡里选中文字后右键多一项「引用选中文字」，输入区出现引号 chip，可删；发送后正文是 DSH 同款的 Markdown blockquote（每行 `> `），DSH 主窗也按引用渲染。
 归属：session-a58208c0-82bc-48b0-ad40-6cbf7a9a7756（任务书）/ `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：版本已到 `0.1.1-more.30`（图片走附件引用，见日志 20:30），profile 已装、`node --test` 396/393/0/3。剩 tag `v0.1.1-more.30` + Release（prerelease）；交接文见 `docs/tasks/session-mirror-quote-handoff-2026-11-26-2048.md`。
+下一步：已发版 `v0.1.1-more.30` / prerelease <https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.30>；交接文 `docs/tasks/session-mirror-quote-handoff-2026-11-26-2048.md`。剩：按格需要做存档；P2 列表见交接文。
 证据：
   - `src/index.js:877-898`：`mirrorAssistantText` 只镜像 `assistant/message` 的正文；`src/index.js:906-945` 的 `session/event` 钩子已经在按绑定会话过滤，但 `user/message` 只用于 `loop.noteUserSpoke`（937 行），没有写进聊天流。
   - `examples/floating-chat/window.py:685-690`：浮窗用户消息由窗口自己 `append_user` 写 `chat.jsonl`；`src/chat.js:80-89` 是插件侧唯一写入口。
@@ -13,7 +13,7 @@
   - 上游 `SAOS-3624/dsh-see-now` v0.2.9（2026-11-25）只同步 mic / window 三处修复；本仓 `mic.py:236` 仍写死 `D:/asr-local/models-sherpa`，`window.py:1615-1619` 仍每 250ms 清麦克风状态。
   - `git status --short` 空；HEAD `cb8ea1e`；版本 `0.1.1-more.27`（`package.json` / `dsh.plugin.json` 同值）。
 账：无需（本任务书只写方案，未跑实现 / 验收）
-更新：2026-11-26 20:48 CST
+更新：2026-11-26 20:55 CST
 
 ## 现状依据
 
@@ -380,4 +380,5 @@ def format_quote_text(text: str) -> str:
 - 2026-11-26 20:20 **内联 base64 方案实炸**：DSH 主窗把 `{type:"image", data, mimeType}` 渲染成「附加内容块」的原始 JSON；更严重的是它被原样写进持久历史，DeepSeek adapter 准备请求时读 `block.attachment.width` 抛 TypeError → 兜底成 `TRANSPORT`（界面「DeepSeek Messages transport failed」），重试 5 次全废，之后每一轮连纯文本都失败，`session-cb8c0785` 被锁死。结论：DSH 只认 `{type:'image', attachment:{attachmentId,…}}`（`attachments.saveImage()` 换来的引用）；`agent.followup()` 这条路上没有准入校验，坏块投进去什么样就存什么样。
 - 2026-11-26 20:30 另一会话 `session-39caa84d` 修复（commit `81db996`）：`loadRelayImages` 改 async、逐张 `attachments.saveImage()` 换引用；`followupMessage` 只接 attachment，遇到内联 `data` 直接抛错让这条投递失败（窗口显示「发送失败」、relay.log 有原因）；新增 `test/relay-image.test.mjs` 5 条守门测试；版本 `0.1.1-more.30`。e2e：浮窗发图 `relay.log` 12:29:46Z `ok`；该会话 `user/message` 是 attachment（sha256:5f487f63…，1354×326，670236B），该轮请求正常返回。`node --test` 396 tests / 393 pass / 0 fail / 3 skip。
 - 2026-11-26 20:48 发版前文档对齐：README / 机制.md 第十节 / 决策记录把「读成 base64 内容块」改成「附件引用」，并写明内联块锁死会话的事故；交接文另写 `docs/tasks/session-mirror-quote-handoff-2026-11-26-2048.md`。剩 tag `v0.1.1-more.30` + Release。
+- 2026-11-26 20:52 **发版 `v0.1.1-more.30`**：tag `v0.1.1-more.30` 指向 `b11eb37`；`git-push.ps1 -TagAtHead` 走代理推送成功（`1d3cf69..b11eb37 main` + new tag）；Release 已建并核 `isPrerelease: true` <https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.30>。tag 之后的提交只动文档，不挪 tag。
 
