@@ -63,6 +63,20 @@
 - 通道降级写成一行的可读顺序：host → endpoint → command → **明说没有通道，不猜**
 - 幻觉词表（「谢谢观看」「字幕由…提供」等）命中就丢，但**要计数**
 
+## 第四批（P4，文档）：把「关窗后四档」写进 README
+
+**问题**：上游最招恨的不是功能，是那个窗——关掉就再也调不动（[#59](https://github.com/SAOS-3624/dsh-see-now/issues/59)）、进程活着却永远看不见（[#32](https://github.com/SAOS-3624/dsh-see-now/issues/32)）、纯色档还在 60fps 抓屏（[#35](https://github.com/SAOS-3624/dsh-see-now/issues/35)）、`calm` 下仍被连续唤醒「体感很吵」（[#5](https://github.com/SAOS-3624/dsh-see-now/issues/5)）。这几条我们已经修了：`hungUp` 守卫（`src/runner.js:181-201`）、`resumeFromReopen`（`:192`）、关窗后四档（`src/index.js:2601`）、留耳/隐身不自动支窗（`src/index.js:1160`）。**但 README 里查不到**：搜 `onWindowClose` / 留耳 / 隐身，README 0 命中，只有 `README.md:86` 那句「点 × 只是这一次不看」。
+
+**做什么**（只改文档，不改行为）：
+
+1. `README.md:86` 附近补一张四档表：档位 / 关窗后画面 / 听觉 / 会不会自动支窗。四档键名与文案对齐 `src/index.js:2601`：`stop` 收工（默认）/ `ears` 留耳 / `rise` 可抬头 / `ghost` 隐身；**每档的实际语义以设置页那行小字为准**（CHANGELOG「关窗后四档」那条），与代码不一致就先记差异，不要凭代码猜。
+2. 给一句推荐组合：**不想被窗口打扰** → `ghost`；或 `stop` + 每次手动 `node bin/see-window.mjs` 开窗。并写明默认 `stop` 是「连听觉一起停」，别让人以为关窗只是关画面。
+3. 行为与文档不一致时，**以行为为准改文档**，并把差异记进 `docs/决策记录.md`，不静默改文档去迁就代码。
+
+**验收**：README 里 `onWindowClose` / 留耳 / 隐身 各至少 1 处命中；四档表四行齐全；`node --test` 不红（发版第 1 步要求文档跟版本走）。
+
+**边界**：不改 `src/index.js` 的四档行为、不动设置页；README 与 `docs/机制.md` 的分工照旧（README 留「用户要做的判断」）。
+
 ## 不抄（有理由）
 
 - **SVG 转画面**（streamvision 的主路径）：精度低，我们有图；它自己也说 `sv_frame` 才看细节
@@ -80,10 +94,11 @@
 ## 边界
 
 - 本文件只到「做什么 + 验收」，不改代码；执行在 see-now-more，遵守那边 `AGENTS.md` 与 `docs/决策记录.md` 的发版六步
-- 第一批没跑出数字前不开第二批；第三批是日志/文档层，可以随时插
+- 第一批没跑出数字前不开第二批；第三批是日志层、第四批是纯文档，这两批随时可插
 - 不碰 `window.py`、不跑 `npm run sync:window`
 - 条带坐标只支持主屏（与 `region` 同一边界），副屏不做
 
 ## 日志
 
 - 2026-11-27 04:49 新建（进行中，未开工）。来源：bilibili 工作区评 `BV1WGyrzHExU` 时读的三个上游仓；本仓现状按 `docs/机制.md` §1/§3/§4 与 `src/ocr.js`、`src/coverage.js` 对表。未动代码。
+- 2026-11-27 04:56 加第四批（文档）。依据：上游 issues #59/#32/#35/#5 与 `README.md:86`、`src/index.js:2601`、`src/index.js:1160` 对表；由格要求加入。未动代码。
