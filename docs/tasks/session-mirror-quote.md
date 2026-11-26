@@ -3,7 +3,7 @@
 状态：进行中
 对象：给 see-now-more 的悬浮窗补两条。① **消息同步**：绑定会话里、用户在 DSH 主窗发的消息，实时进浮窗主聊天窗（用户气泡），并在插件启动 / 换绑时回填最近的用户消息；② **选区引用**：气泡里选中文字后右键多一项「引用选中文字」，输入区出现引号 chip，可删；发送后正文是 DSH 同款的 Markdown blockquote（每行 `> `），DSH 主窗也按引用渲染。
 归属：session-a58208c0-82bc-48b0-ad40-6cbf7a9a7756（任务书）/ `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：上游 `.28` 已发并装进 profile（**需重启 DSH 生效**）；下一步开工功能 1（判据层 + 镜像核心）。拍板项默认按推荐值走；格不同意就先改任务书再开工。
+下一步：上游 `.28` 已发并装进 profile（**需重启 DSH 生效**）；任务书已补 watch-together v0.3.7 的参考（`mid` 去重 / 启动扫 `mid` / 无 GUI 测试）。**等格说开工**再动功能 1。
 证据：
   - `src/index.js:877-898`：`mirrorAssistantText` 只镜像 `assistant/message` 的正文；`src/index.js:906-945` 的 `session/event` 钩子已经在按绑定会话过滤，但 `user/message` 只用于 `loop.noteUserSpoke`（937 行），没有写进聊天流。
   - `examples/floating-chat/window.py:685-690`：浮窗用户消息由窗口自己 `append_user` 写 `chat.jsonl`；`src/chat.js:80-89` 是插件侧唯一写入口。
@@ -13,7 +13,7 @@
   - 上游 `SAOS-3624/dsh-see-now` v0.2.9（2026-11-25）只同步 mic / window 三处修复；本仓 `mic.py:236` 仍写死 `D:/asr-local/models-sherpa`，`window.py:1615-1619` 仍每 250ms 清麦克风状态。
   - `git status --short` 空；HEAD `cb8ea1e`；版本 `0.1.1-more.27`（`package.json` / `dsh.plugin.json` 同值）。
 账：无需（本任务书只写方案，未跑实现 / 验收）
-更新：2026-11-26 08:18 CST
+更新：2026-11-26 08:35 CST
 
 ## 现状依据
 
@@ -88,6 +88,21 @@
 | 4 | 一条消息多个引用 | **v1 只保留一个**，再引用替换旧的并提示「已替换引用」 | 单行输入里排多个 chip 要重写输入布局，收益低 |
 | 5 | chip 位置 | **输入栏内、正文左侧固定**（引号 + 省略 + ×），正文从 chip 右边开始 | Tk 是单行隐藏 Entry，做不到 DSH 的原位原子节点；固定 chip 已达到「输入框里看到引文」的效果 |
 
+## 参考：watch-together v0.3.7（2026-11-26 看过，只借模式）
+
+仓库 [SAOS-3624/dsh-watch-together](https://github.com/SAOS-3624/dsh-watch-together)（32 个 `src` 模块，`window.py` 约 2.4k 行）。它自己**没有**用户消息镜像，也**没有**引用 / 选区菜单，所以两项功能仍按本任务书做。值得借的只有四个模式：
+
+- `chat-store.js` 的 **`at` 严格单调**（`tailStamp`）：同一毫秒连写两条会撞「新消息」判据；我们不改全局 `at`，改用 `mid` 进 ChatFeed 去重键。
+- `chat-store.js` 的 **`writtenKeys` 跨写路径共用去重账**：对应我们的 `mid` 集合，live / backfill 共用，启动时再从 `chat.jsonl` 尾部扫一遍补齐。
+- `CHANGELOG 0.3.3` 的 **outbox 水位**：只追加的动作通道重启会重放，只认比水位新的行；对应我们的 `throughSeq`。
+- **测试形状**：`test/interject-anywhere.test.mjs` 的「等待者优先」用例；`scripts/check-input-select.py` 的「`object.__new__` + 假字体 / 假 root」无 GUI 测真实方法。
+
+**不借 / 不误读**：
+
+- `window-outbox.jsonl` **不是聊天输入通道**。上游只拿它做 `pause` / `resume` 等控制动作，用户文字仍走 `chat.jsonl`；它不能替我们消掉四个消费点，功能 1 仍按 `origin:"dsh"` 过滤。
+- 不为两项功能引入 `window-events` 双写（窗口 250ms 轮询 `chat.jsonl` 够快，ChatFeed 已有按 `sid` 去重）；也不做整体 32 模块拆分。
+- 视频相关模块（`playhead` / `position-bridge` / `reply-guard` / `watch-loop`）语义绑在播放进度上，不搬。
+
 ## 方案一：把绑定会话的用户消息同步进浮窗
 
 ### 数据流
@@ -112,6 +127,8 @@ DSH session event（user/message，source.kind = user）
 1. **复用 `chat.jsonl`，加 `origin:"dsh"` 标记，不新开文件。** 窗口的显示 / 历史 / 收藏 / 隐藏 / 删除全都只认这一条流；新开文件要同步改五处列表逻辑，而且收藏快照、隐藏 key、删除会话都会分裂。代价是四个 JS 消费点要各加一道过滤（见下），这是可控的。
 2. **只镜像 `source.kind === "user"`。** 不镜像 `see-now`（插件自己的叫醒 / 投递 / 插话）和 `action-cards`（卡片按钮，不是用户打的字）。**新增 `isTypedUserMessage(event)`，不复用 `isHumanMessage()`**：后者故意把 `action-cards` 算进来，是给循环续命用的，语义不同（`src/human.js:26-31`）。两者都要有单测，防止以后有人把它们合并。
 3. **`mid` + 水位**。`mid` 写进条目（`<sid>:<seq>`），水位存 `~/.dsh/see-now/session-mirror.json`：`{v:1, sids:{sid:{throughSeq, updated}}}`，最多 50 个 sid。**写盘成功后才推进水位**；写失败不推进，下次重试。水位保证「在浮窗里删掉 / 隐藏的条目不会被回填重新灌回来」，也保证回填幂等。
+
+另加一道保险：**启动时扫一遍 `chat.jsonl` 尾部（最近 4000 行）的 `mid`**，回填先跳过这些。写盘成功、水位还没落盘就崩时，只靠水位会重复；`mid` 扫描把这段窗口补上（watch-together 的 `writtenKeys` 是同一思路）。
 4. **`at` 用事件时间，`ChatFeed` 按 `at` 稳定排序。** 回填的条目必然比文件尾旧，不能靠「追加顺序 = 时间顺序」；`ChatFeed.add()` 发现新条目 `at` 小于末条时，对 `messages` 做一次稳定排序（≤4000 条，一次排序可接受）；`reload()` 末尾也排一次。
 
 ### 事件 → 条目
@@ -143,6 +160,7 @@ DSH session event（user/message，source.kind = user）
 ### 窗口侧要跟着改的排序
 
 - `ChatFeed.add()`：追加后若 `at` 比末条小，按 `at` 对 `messages` 做稳定排序（Python `sort` 稳定，同毫秒保持写入顺序）。
+- **`ChatFeed` 去重键从 `(role, text, at, sid)` 扩成 `(role, text, at, sid, mid)`**：镜像消息可能同文同毫秒，现有 key 会把后一条当重复吞掉。`mid` 缺省为空串，浮窗自己写的条目行为不变。
 - `ChatFeed.reload()`：读完最后 4000 行后统一按 `at` 排一次。
 - `_history_entries(sid)`（`window.py:3684-3701`）：先按 `sid` 过滤，再按 `at` 排序，最后取 `[-500:]`。**这一步不能省**：回填把旧条目追加在文件尾，原来的「取最后 500 行」会拿到最旧的那批，把最近的挤掉。
 - `_history_sessions` / `_chat_sessions` 已经是 `min/max`（`window.py:3478-3500`、`5818-5845`），不用改。
@@ -268,24 +286,25 @@ def format_quote_text(text: str) -> str:
 | `src/index.js` | 钩子里调 `mirror.onEvent`；apply 后 3 秒回填；`modeWatcher` 里换绑回填；`replayUnanswered` / relay 两处过滤 | ~60 行 |
 | `src/loop.js` | `851` 行过滤镜像条目 | ~2 行 |
 | `src/runner.js` | `1741` 行过滤镜像条目 | ~2 行 |
-| `window_widgets.py` | `ChatFeed.add/reload` 按 `at` 排序 | ~15 行 |
+| `window_widgets.py` | `ChatFeed` 去重键加 `mid`；`add/reload` 按 `at` 排序 | ~20 行 |
 | `window.py`（同步） | `_history_entries` 先排序再取 500 | ~5 行 |
-| `test/session-mirror.test.mjs`（新） | 事件过滤、文本拼接、水位、回填映射、失败不推水位、fork 前缀 | ~160 行 |
-| `test/relay-seen.test.mjs` 或新增 | 镜像条目不被 relay 补投 / 不被当插话（四处消费点） | ~40 行 |
+| `test/session-mirror.test.mjs`（新） | 事件过滤、文本拼接、水位、回填映射、失败不推水位、fork 前缀、启动扫 `mid` 补崩溃窗口 | ~180 行 |
+| `test/relay-seen.test.mjs` 或新增 | 镜像条目不被 relay 补投 / 不被当插话（四处消费点）；**不唤醒 loop/watch**（照 `interject-anywhere` 的等待者用例） | ~60 行 |
 | `examples/floating-chat/quote_text.py`（新） | `format_quote_text` / `split_quote_blocks` / `quote_preview` 三个纯函数，不 import Tk | ~70 行 |
 | `examples/floating-chat/window.py`（引用） | 菜单项、`_draft_quote`、chip 绘制、输入布局偏移、退格/Delete、发送拼装、气泡引用段（主窗 + 回顾窗） | ~250 行 |
 | `src/interject.js` | 开头引用块原样保留、不参与 200 字截断 | ~25 行 |
 | `test/quote-text.test.mjs`（新） | 调 `python`（没有就 skip）验 `quote_text.py` 的编码 / 切分 / 预览 | ~70 行 |
+| `scripts/check-quote.py`（新） | 照 watch-together 的 `check-input-select.py`：`object.__new__` + 假字体 / 假 root，无 GUI 验引用编码、chip 命中矩形、发送拼装 | ~100 行 |
 | `test/interject-quote.test.mjs`（新） | `> a\n> b\n\n问题` 原样保留；无引用时输出与现在逐字一致 | ~40 行 |
 | `README.md` / `docs/机制.md` / `docs/决策记录.md` / `CHANGELOG.md` | 行为、边界、为什么这样选；版本三处同值 | 各 1 节 |
 
 ## 任务顺序
 
-0. **前置**：按「上游 v0.2.9」回移三处 mic / window 修复（模型目录回退链、`_on_mic_exit` 不再清状态、stderr 泵进内存且不落盘），单独验、单独提交（建议 `0.1.1-more.28`）。证据：麦克风异常退出时状态行出现 `麦没起来：…` 且不会被 250ms 轮询抹掉；子进程 stderr 被泵进内存（状态行显示最后一条错误，转写行不入内存）；模型目录回退链按 `--models-dir` → `DSH_ASR_MODELS` → `<DSH_HOME>/asr-models/sherpa` → 旧路径。
+0. **前置（已完成，`0.1.1-more.28`）**：按「上游 v0.2.9」回移三处 mic / window 修复（模型目录回退链、`_on_mic_exit` 不再清状态、stderr 泵进内存且不落盘），单独验、单独提交。证据：麦克风异常退出时状态行出现 `麦没起来：…` 且不会被 250ms 轮询抹掉；子进程 stderr 被泵进内存（状态行显示最后一条错误，转写行不入内存）；模型目录回退链按 `--models-dir` → `DSH_ASR_MODELS` → `<DSH_HOME>/asr-models/sherpa` → 旧路径。
 1. 判据层：`isTypedUserMessage` + `isFloatUserEntry` + 单测（先把「谁算人话、谁算浮窗条目」钉死）。
-2. 镜像核心：`mirror.js` + `appendChat` 扩展 + `session/event` 接线 + 四处过滤 + 单测。
-3. 窗口顺序：`ChatFeed` 排序 + `_history_entries` 排序；用「手工往 `chat.jsonl` 追加一条旧 `at` 的 user」验证不顶掉最近消息。
-4. 引用纯函数：`quote_text.py` + Python 侧测试；先不碰 UI。
+2. 镜像核心：`mirror.js` + `appendChat` 扩展 + `session/event` 接线 + **启动扫 `chat.jsonl` 尾部 `mid`** + 四处过滤 + 单测。
+3. 窗口顺序：`ChatFeed` 去重键加 `mid` + 排序 + `_history_entries` 排序；用「手工往 `chat.jsonl` 追加一条旧 `at` 的 user」验证不顶掉最近消息。
+4. 引用纯函数：`quote_text.py` + `scripts/check-quote.py` 无 GUI harness；先不碰 UI。
 5. 输入区：`_draft_quote`、chip、布局偏移、退格 / Delete、发送拼装；手工点验。
 6. 气泡渲染：主窗 + 回顾窗的引用段与颜色；回归 assistant 的 `>` 原样显示。
 7. relay：`interjectNote` 保留引用块 + 单测；在 DSH 主窗确认引用被渲染。
@@ -306,11 +325,11 @@ def format_quote_text(text: str) -> str:
 3. **实时同步**：绑定会话后开窗（`node bin/see-window.mjs --force`），格在 DSH 主窗发「同步测试 A」→ 1 秒内浮窗出现用户气泡；`chat.jsonl` 里该条带 `origin:"dsh"` 与 `mid`，`at` 与会话事件时间一致。
 4. **不重复**：在浮窗发「浮窗测试 B」→ `chat.jsonl` 里只有一条 `role:"user"` 的 B、不带 `origin`；5 秒后没有镜像回来的 B；`relay.log` 只有一条 `ok`。
 5. **不重投**：重启 DSH（或停用再启用插件）→ `relay.log` 的 `startup: 补投` 不包含任何 `origin:"dsh"` 条目；浮窗里 B 不重复。
-6. **回填幂等**：准备一个已有若干 user 消息的测试会话 → 清掉它在 `chat.jsonl` 的镜像条目、把水位设为 0、重启插件 → 最近 500 条按时间顺序回来；再重启一次不新增重复。
+6. **回填幂等**：准备一个已有若干 user 消息的测试会话 → 清掉它在 `chat.jsonl` 的镜像条目、把水位设为 0、重启插件 → 最近 500 条按时间顺序回来；再重启一次不新增重复。再单独验一次「写成功但水位没落盘」：手工留一条 `mid` 在 `chat.jsonl`、水位回退，重启后不重复。
 7. **菜单出现条件**：主窗气泡有选区时右键 → 「引用选中文字」在「复制选中文字」上面；没有选区时该项不出现；回顾窗不出现（v1 边界）。
 8. **chip 生命周期**：点菜单 → 输入区出现开引号 + 预览 + ×，正文从 chip 右边开始；点 × → 消失；再引用一次后按退格（光标在正文开头）→ 消失；只引用不打字也能发送。截图存 `_scratch/quote-chip.png`（截图只证明视觉，数据证据看第 9 条）。
 9. **发送格式**：引用「你好 / 世界」+ 正文「这句什么意思」→ `chat.jsonl` 正文逐字等于 `"> 你好\n> 世界\n\n这句什么意思"`；DSH 主窗把前两行渲染成引用块；500 字长引用在 relay 后仍是完整引用（不被 200 字截断）。
-10. **回归**：assistant 正文里的 `>` 仍原样显示；历史 / 收藏 / 隐藏 / 删除仍工作；`node --test` 与窗口开合、relay、watch 的既有用例全绿。
+10. **回归**：assistant 正文里的 `>` 仍原样显示；历史 / 收藏 / 隐藏 / 删除仍工作；`node --test` 与窗口开合、relay、watch 的既有用例全绿；**镜像条目在「有等待者 / 钟空转」两种状态下都不会被 loop / watch 当成用户插话**（单测 + 验收第 4/5 条）。
 
 ## 风险与后续
 
@@ -338,4 +357,5 @@ def format_quote_text(text: str) -> str:
 - 2026-11-26 07:58 按格要求停在任务书；因上游 v0.2.9 刚发，实现前先合上游，避免同一段 `window.py` 两轮改。
 - 2026-11-26 08:08 上游 v0.2.9 三处回移完成（**未提交，等格确认**）：`mic.py` 加 `resolve_models_dir`（显式目录缺文件报错 2、http 只查 `silero_vad.onnx`）；`window.py` 用 `_on_mic_exit` + stderr 泵（只留内存、跳过转写行）+ `_mic_models_from_asr`（asr.json 的 `--models` 是 SenseVoice，不能直接当 mic 目录）。验证：`py_compile` OK；ASR venv 跑 `mic.py --from-file 0.wav --dry-run` 转写成功、exit 0；空 `--models-dir` exit 2 且报缺文件；`node --test` 366 tests / 363 pass / 0 fail / 3 skip；无 Tk 探针把状态跑到 `麦没起来：挂了：Error querying device -1`（本机无输入端点），不再被 250ms 轮询抹掉。
 - 2026-11-26 08:18 发版：commit `e80403a` / tag `v0.1.1-more.28` / prerelease <https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.28>；`install-dev.mjs` 已把 desktop profile 同步到 `.28`（`--check` 报 current），**重启 DSH 后生效**。
+- 2026-11-26 08:35 补入 watch-together v0.3.7 参考（**未开工**）：ChatFeed 去重键加 `mid`；启动扫 `chat.jsonl` 尾部已有 `mid`（补「写成功但水位没落盘」的崩溃窗口）；加 `scripts/check-quote.py` 无 GUI harness（照 `check-input-select.py`）与「镜像条目不唤醒 loop/watch」测试（照 `interject-anywhere` 的等待者用例）。同时记下：outbox 不是聊天输入通道，不迁协议；视频模块与整体拆分不借。等格说开工再动功能 1。
 
