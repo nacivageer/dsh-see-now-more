@@ -2,6 +2,28 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.36] - 2026-11-27
+
+### Fixed — 【关联变更】预填「有时候」不是主窗当前会话
+
+- 根因是窗口进程直接扫 Electron Local Storage 的**磁盘副本**：`setItem` 同步写内存、
+  Chromium 异步落盘（刚切完会话马上开输入行会读到上一个）；leveldb 压缩成 `.ldb` 时键做
+  前缀压缩，`dsh.sessions.current` 可能只剩 `s.current`（本机实测），按完整键名扫描返回空。
+- `client.js` 现在在渲染层读 `localStorage['dsh.sessions.current']`（内存态），每 2 秒变了才
+  POST 到新增的 `POST /dsh-see-now-window/current`；`src/focused-session.js` 把它落成
+  `~/.dsh/see-now/current-session.json`。`session_hint.py` **优先读这份文件**，读不到才退回
+  leveldb 兜底。
+- 兜底同时修一个旧 bug：最新一条键记录是权威 —— 主窗清空选择（值 `{}`）时返回空串，
+  不再往前翻旧记录、把一个已取消的会话填回来。
+
+### Added — 从 GUI 打开悬浮窗 = 关联到当前会话
+
+- 左上角按钮的 `POST /dsh-see-now-window/open` 现在带 `sessionId`；Host 先写
+  `see-now.json` 的 `session`（核对过 sessions 目录存在才绑）再开窗。已经开着的窗不重启，
+  靠既有 2 秒轮询自己换绑，窗里落两条关联提示；按钮旁的状态文案会说明「已关联 / 已换绑」。
+- 单测：新增 `test/focused-session.test.mjs`；`open-window` / `session-hint` 两组补了路由、
+  优先级与清空语义。
+
 ## [0.1.1-more.35] - 2026-11-27
 
 ### Changed — 浮窗发图的源文件门槛 4MB → 32MB；回顾窗也能引用选中文字

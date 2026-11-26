@@ -13,9 +13,9 @@
  * 所有字段都可选；写错类型就退回默认值并记一条 warn —— 配置永远不该把插件弄挂。
  */
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /** 关掉悬浮窗之后的四档行为（`onWindowClose`）。顺序 = 卡片里的顺序。 */
 export const WINDOW_CLOSE_MODES = Object.freeze(['stop', 'ears', 'rise', 'ghost']);
@@ -271,6 +271,42 @@ function readBoundSession(raw, warnings) {
     warnings.push(`session 看着不像会话 id（应该形如 session-…），已按原样使用：${session}`);
   }
   return session;
+}
+
+/**
+ * 把绑定会话写回 `see-now.json`（2026-11-27：从 GUI 打开悬浮窗时用）。
+ *
+ * 读-改-写整份文件，保留 `mode` / `listen` 等别的键。写法和窗口侧
+ * `window.py` 的 `_write_bound_session` 逐字节一致（`indent=2`、无尾随换行、
+ * `.json.tmp` 再 rename），所以两边谁写都不会抹掉对方刚写的字段。
+ *
+ * 不在这里校验会话存在 —— 那是调用方（`open-window.js`）的事；这个函数只管落盘。
+ *
+ * @returns {{changed:boolean, path:string, session:string, error?:string}}
+ */
+export function writeBoundSession(sid, { env = process.env, log = () => {} } = {}) {
+  const id = String(sid ?? '').trim();
+  const path = tuningPath(env);
+  if (!id) return { changed: false, path, session: id };
+  let cfg = {};
+  try {
+    cfg = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) ?? {};
+  } catch { cfg = {}; }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) cfg = {};
+  if (cfg.session === id) return { changed: false, path, session: id };
+  cfg.session = id;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, JSON.stringify(cfg, null, 2), 'utf8');
+    renameSync(tmp, path);
+  } catch (e) {
+    const error = String(e?.message ?? e);
+    log(`写 ${path} 失败：${error}`);
+    return { changed: false, path, session: id, error };
+  }
+  log(`绑定会话写回配置：${id}`);
+  return { changed: true, path, session: id };
 }
 
 /**

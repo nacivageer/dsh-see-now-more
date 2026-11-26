@@ -7961,7 +7961,9 @@ class LiveGlass:
             self._bind_entry.delete(0, "end")
             # 预填**DSH 主窗当前打开的会话**（2026-11-20 用户指出「应该对齐当前窗」）：
             # 填的就是眼前那个，哪怕它已经是绑定会话（点确定 = 无操作）。
-            # 读不到（DSH 关了、Local Storage 里没有这个键）才退回旧判据「最新未绑定会话」。
+            # 首选插件从渲染层推来的 current-session.json（即时），读不到才退回
+            # Local Storage 的磁盘副本（见 `session_hint.py` 的说明）。都没有才用旧判据
+            # 「最新未绑定会话」。
             _cur = ""
             try:
                 _cur = self._dsh_focused_session()
@@ -8078,9 +8080,11 @@ class LiveGlass:
     def _dsh_focused_session(self) -> str:
         """DSH 主窗**当前打开**的会话（全 ID）；拿不到就空串。
 
-        宿主没给插件读这个状态的 API —— 渲染层把它存在 Electron 的 Local Storage
-        （`dsh.sessions.current`），读法见 `session_hint.py`。拿到之后还要在 sessions
-        目录里对得上：删掉的会话不该被预填进来，对不上就当没拿到。
+        两个来源，按可靠性排序（细节见 `session_hint.py`）：
+        1. 插件从渲染层推来的 `see-now/current-session.json` —— 即时，没有落盘延迟；
+        2. 读不到才扫 Electron 的 Local Storage（`dsh.sessions.current`）—— 磁盘副本，
+           刚切会话时可能还没写下去。
+        拿到之后还要在 sessions 目录里对得上：删掉的会话不该被预填进来，对不上就当没拿到。
         """
         try:
             sid = _read_dsh_current_session()
