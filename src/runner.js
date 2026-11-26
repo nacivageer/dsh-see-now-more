@@ -36,6 +36,8 @@ import { frameFile, pruneOld } from './lift/log.js';
 import { createLiftArchive } from './lift/archive.js';
 import { bloodbarBrief, pushTrack, ratioFromRgba } from './bloodbar.js';
 import { resolveOcrPython, startOcr } from './ocr.js';
+import { createTextStream } from './text-stream.js';
+import { normalizeTextConfig } from './text-band.js';
 import { encodePng } from './png.js';
 import {
   audioCapability, bloodbarCapability, liftCapability, ocrCapability, visionCapability,
@@ -239,6 +241,14 @@ export function createRunner({
    * 血条是每秒算一个比例（只出数，不出图、不进上下文）。
    */
   bloodbar = null,
+  /**
+   * 屏幕文字流（`see-now.json` 的 `text` 段，P1 第 2 步）。
+   *
+   * `{enabled, band, fps, scale, lang, minChars, …}`，null = 用默认（开）。
+   * 条带只按**整屏**算：`region` 模式下 width/height 是单格尺寸，那套坐标不是屏幕比例，
+   * 与其猜一个错的条带，不如不出字（任务书边界：条带只支持主屏）。
+   */
+  text = null,
   /**
    * 排布的宽高比容差（`see-now.json` 的 `packStretch`，默认 0 = 一格都不裁）。
    *
@@ -481,6 +491,18 @@ export function createRunner({
   let bloodbarOcr = null;
   let bloodbarOcrWhy = null;
   let bloodbarOcrBusy = false;
+
+  /**
+   * 屏幕文字流（P1 第 2 步）。
+   *
+   * **跨管线活着**：闸门的内存窗是 15 分钟，换清晰度重建管线不该把已经攒下的字清空；
+   * 里面的 sidecar 按条带尺寸懒起（第一次来帧才起），所以没在看的时候零成本。
+   * `text = null` 时用默认配置（开），`false` 显式关掉。
+   */
+  const textStream = text === false ? null : createTextStream({
+    config: normalizeTextConfig(text ?? undefined).config,
+    log,
+  });
 
   function startBloodbarOcr(region) {
     if (bloodbarOcr) return;
@@ -953,6 +975,8 @@ export function createRunner({
     // 留底跟着收工：`stop` 之后「取那一刻」不该再拿到上一场的帧（验收第 5 条）
     stopLiftCapture({ clear: true });
     stopBloodbarCapture({ why: '收工' });
+    // 文字流的 sidecar 跟着收工停（闸门里的字留着：换管线/重开采集继续用）
+    try { textStream?.stop(); } catch { /* 已经退了 */ }
     // 采集收工，声音也一起停：一个抓回环的进程常驻在后台，用户是看不见的
     if (keepAudio) log('收工：画面停了，耳朵留着');
     else listener.stop('采集收工');
@@ -1157,6 +1181,8 @@ export function createRunner({
     // oneShot 由调用方（watch）决定：**只有换清晰度**时置 true（缓冲区刚扔，等攒满等于白等一个窗口）
     const p = createPipeline({
       ...opts, width: w, height: h, ...regionOpts,
+      // 屏幕文字流：region 模式不出字（width/height 是单格尺寸，不是屏幕比例）
+      ...(textStream && !src.region ? { onFrame: (f) => textStream.onFrame(f) } : {}),
       // 按窗口抓：缩放成本压不住 12fps，管线按 8fps 建（`dtFrames` 一起改，见 WGC_FPS 的注释）
       ...(src.kind === 'window' ? { fps: WGC_FPS, dtFrames: WGC_FPS } : {}),
       // 音量条：直接问听声音那条链要 —— 那边已经在算 RMS 了（断句要用），
@@ -1469,6 +1495,12 @@ export function createRunner({
     lift: () => liftStatus(),
     /** 血条读数账本（P1c）：`{enabled, region, threshold, capturing, reading, error}` */
     bloodbar: () => bloodbarStatus(),
+    /**
+     * 屏幕文字流（P1 第 2 步）：`from → to` 之间还没交付过的行。
+     * 交付点三处共用（唤醒消息 / `watch` / `peek`）；**有副作用**，读一次就算交付。
+     */
+    textLines: (a, b) => textStream?.between(a, b) ?? { lines: [], dropped: 0 },
+    textStatus: () => textStream?.status() ?? null,
     /**
      * 血条简报（P2）：`{text, below, ratio, at}` 或 `null`。
      * 唤醒文案与 `watch` 结果都拼这一行 —— **只报告，不唤**。
@@ -1972,6 +2004,8 @@ export function createRunner({
         lift,
         // 血条读数（P1c）：框在哪、阈值、最近一次比例、采集活着没
         bloodbar,
+        // 屏幕文字流（P1 第 2 步）：条带 OCR 的四数 + 不可用时的一句话原因
+        text: textStream?.status() ?? null,
         /**
          * 能力状态（固定枚举，下游评估 §1 #4）：每个能力一个词 + 一句原因，
          * 不再让调用方从 `enabled/ok/available/ready/why` 里猜「现在能不能用、为什么」。

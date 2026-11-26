@@ -28,7 +28,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { pythonCandidates } from './window.js';
+import { dshRuntimePythons, pythonCandidates } from './window.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -64,7 +64,12 @@ export function resolveOcrPython({ env = process.env, force = false } = {}) {
     return cachedProbe;
   }
   const tried = [];
-  for (const python of pythonCandidates()) {
+  /**
+   * 先试 DSH runtime 里的那份：`winrt` 就装在那儿（本文件头的注释），而 PATH 上的
+   * `pythonw.exe` / `python.exe` 通常没有。顺序只影响 OCR —— `pythonCandidates()` 那份
+   * 列表是开悬浮窗用的，别动它的顺序。
+   */
+  for (const python of [...dshRuntimePythons(env), ...pythonCandidates()]) {
     if (!python || tried.includes(python)) continue;
     tried.push(python);
     const r = spawnSyncProbe(python, env);
@@ -105,6 +110,8 @@ function spawnSyncProbe(python, env) {
 export function startOcr({
   w, h, python = null, script = null, scale = OCR_SCALE, canvasH = OCR_CANVAS_H,
   lang = 'zh-Hans-CN', timeoutMs = OCR_TIMEOUT_MS, onStderr = null, onReady = null,
+  /** `bars`（默认，血条数字，多极性）/ `text`（字幕条带，只跑一遍 plain、按行返回） */
+  mode = 'bars',
 } = {}) {
   const py = python ?? resolveOcrPython().python;
   if (!py) throw new Error(resolveOcrPython().reason ?? '没有可用的 Python（OCR 需要 winrt）');
@@ -116,6 +123,8 @@ export function startOcr({
   const child = spawn(py, [
     sc, '--w', String(W), '--h', String(H),
     '--scale', String(scale), '--canvas-h', String(canvasH), '--lang', String(lang),
+    // 只在要文本模式时补一个参数：血条那条链的 argv 一个字节都不变
+    ...(mode === 'text' ? ['--mode', 'text'] : []),
   ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
 
   const pending = [];

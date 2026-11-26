@@ -3,17 +3,17 @@
 
 # 屏幕文字事件流：让静默期不花 token
 
-状态：可验收（P1 第 1 步已落地：`src/text-events.js` + `test/text-events.test.mjs`，15 条单测全绿；等格验收后 commit）
+状态：可验收（P1 第 2 步：条带 OCR 真机跑通 —— 10 分钟 196/196 行召回；等格验收）
 对象：给 see-now-more 加一条**屏幕文字事件流**——把画面上的字（尤其底部字幕带）变成带时间码的文本事件，
 随唤醒 / 图交付而不是另开一路；做到「静默期只入队不进上下文、说话时少漏字、有本账能算清省了多少」。
 归属：session-40cc9db3-6a98-481e-8252-9da96f75f401（bilibili 工作区出方案）/ 执行在
 `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：P1 第 2 步（条带 OCR）。`confirmGapMs` 已按格定降到 **900 ms**（临时值：1 fps 下相邻两帧即
-「认到两次」；**最终值仍等第 2 步量到真实字幕停留时长再定**）。P2 等 P1 的数字；P4 等 P1 做完、发版时一起改 README。
-证据：`node --test` 440 项 / 437 过 / 0 失败 / 3 skip（基线 425，本步 +15）；变异 / fuzz / 召回验证见
-日志 05:30 条（脚本 `_scratch/verify-gate.mjs`、`_scratch/debug-recall.mjs`）。
-账：本步无采集、无 token 支出（纯单测）；真实成本要等第 2 步的条带 OCR + 第 3 步的 A/B。
-更新：2026-11-27 05:30 CST
+下一步：P1 第 3 步（交付 + 账）：唤醒消息带摘要（≤12 行 / ≤300 字）+ `textSeq` 水位、`watch`/`peek` 只补未读、
+`textCoverage` 分母按「采样到有字」、A/B（peek 率 + 净省 + 行级召回）。P2 等 P1 的数字；P4 等发版时一起改 README。
+证据：`node --test` 459 项全过 / 0 失败 / **0 skip**（winrt 到位，原来 skip 的 3 条血条 OCR 也跑起来了）；
+验收脚本 `_scratch/accept-band.mjs`（日志 `_scratch/accept-band.log`）、`_scratch/accept-kill.mjs`。
+账：本步无采集、无 token 支出（单测 + 本地视频）；真实成本要等第 3 步的 A/B。
+更新：2026-11-27 05:52 CST
 
 ## 为什么值得做（三条已核）
 
@@ -238,3 +238,29 @@ README 0 命中，只有 `README.md:86` 那句「点 × 只是这一次不看」
   输出里**没有 conf**（WinRT 的 `OcrLine` 也只有 text），`fuller()` 的「同字数取 conf 高」实际用不上 →
   第 2 步要么让 sidecar 造一个可用信号（两版共有的字/词、行框大小），要么改「更完整版」的判据。
   两条都要第 2 步的真实 OCR 数据才定，本轮不改行为。
+- 2026-11-27 05:39 **P1 第 2 步代码**（未 commit，等格点头）：新增 `src/text-band.js`（条带矩形 /
+  rgb24→BGRA / 配置校验 / status 一行）、`src/text-stream.js`（1 fps 抽帧、忙时丢帧、喂闸门、失败姿态）；
+  `pipeline.push()` 加 `onFrame` 钩子（每帧都调，1 fps 节流在流里，抛错不影响出图）；`runner` 跨管线持有
+  文字流并进 `status().text`；`index.js` 的 status 多一行「屏幕文字」；`py/ocr_sidecar.py` 加 `--mode text`
+  （只跑一遍 plain、多回一个 `lines` 数组；默认 bars 路径的 argv 与输出一个字节不变）。
+  **协议增量的理由**：血条那条链把 `res.lines` 用空格拼成一行，字幕要的是「一行一个事件」；而 WinRT 的
+  `OcrLine` 没有置信度，`conf` 只能是 null —— 第 1 步「同字数取 conf 高」在真链路上用不上。
+  18 条新单测（1080p/1440p/4K 条带绝对值、裁剪像素、BGRA 通道序、配置越界回默认、1 fps 节流、
+  忙时丢帧、双语两行、无 winrt 与识别抛错两种失败姿态、`onFrame` 每帧必调）。
+  **卡住**：真实验收（10 分钟真实视频 + 中途杀 sidecar、报四数）跑不了 —— 本机 `python` 与 DSH runtime
+  的 3.12 都没有 winrt，`resolveOcrPython()` 返回 `ok:false`；两种模式起不来时报同一句
+  `ERR OCR 起不来：ModuleNotFoundError: No module named 'winrt'`（exit 2），说明新参数没挡住启动路径。
+  缺的是 `winrt-runtime` 那几个包；装进 DSH runtime python 是 `src/ocr.js:22` 写明的既定做法，需格点头。
+- 2026-11-27 05:52 **P1 第 2 步验收（真机）**。装了 winrt 到 DSH runtime python 3.12（pip 5 秒，
+  `winrt-runtime 4.2.1` + Media.Ocr / Graphics.Imaging / Storage.Streams / Globalization / Foundation）；
+  新增 `window.js` 的 `dshRuntimePythons()` 并**只让 OCR 这条链排在前面**（开窗用的候选列表一个字没动，
+  否则会换掉谁去开窗）。造了一条 10 分钟 1280×720 / 12fps、烧入中文字幕的测试视频（196 条，
+  `_scratch/band-test.mp4` + `.srt` 当 ground truth）。
+  **全片（合成时间轴）**：入流 196 / 挡下 0 / 未确认 0 / 判重 39 / 预算丢 0；**行级召回 196/196 = 100%**，
+  匹配行平均相似度 **0.97**，600 帧送 OCR（1 fps × 600 秒），单次条带 OCR ≈ 162 ms（1536×173 → 2×）。
+  **真管线 60 秒（实时节拍）**：720 帧进管线、出图 1 张；第 25 秒杀掉引擎 → `status.ocr.available=false`，
+  继续喂 35 秒：帧照收、引擎自动重起、已送 OCR 58 帧。局限写清楚：静态素材本来就没几个切点，
+  杀前杀后都只有 1 张图，所以「杀引擎后仍出图」这条**没证到**，只证到采集/管线的帧计数照走、OCR 不拖累主链。
+  **真机发现**：WinRT 的中文是一字一空格吐出来的（`我 们 得 先 回 去 ， 这 里 不 安 全 。`）；闸门的归一化
+  本来就去空白（配对不受影响），但交付原文要收拾 → 新加 `tidyOcrLine()`（只去掉汉字旁边的空格，
+  拉丁词之间的留着），单测钉住。

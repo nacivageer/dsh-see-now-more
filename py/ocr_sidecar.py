@@ -140,6 +140,9 @@ class Ocr:
         cur, mx = parse_hp(text)
         return {
             "text": text,
+            # 逐行原文：`text` 把行拼成一行了，字幕要的是**一行一个事件**。
+            # 血条那条链不读它（多一个字段不影响），条带那一边按行入闸门。
+            "lines": [str(line.text) for line in res.lines],
             "cur": cur,
             "max": mx,
             "ms": int((time.perf_counter() - t0) * 1000),
@@ -196,6 +199,9 @@ def main() -> int:
     ap.add_argument("--scale", type=int, default=4)
     ap.add_argument("--canvas-h", type=int, default=240)
     ap.add_argument("--lang", default="zh-Hans-CN")
+    # bars = 血条数字（多极性试到认出数字为止，默认）；text = 字幕条带（只跑一遍 plain，
+    # 按行返回）。**默认值不变**，血条那条链一行不改。
+    ap.add_argument("--mode", choices=("bars", "text"), default="bars")
     args = ap.parse_args()
 
     if args.w <= 0 or args.h <= 0:
@@ -221,7 +227,14 @@ def main() -> int:
             return 0
         arr = numpy.frombuffer(raw, dtype=numpy.uint8).reshape(args.h, args.w, 4)
         try:
-            out = asyncio.run(ocr.recognize_any(arr, args.scale, args.canvas_h))
+            if args.mode == "text":
+                # 字幕只跑一遍 plain：反色那几种是给"深字压亮条"的数字准备的，
+                # 字幕带上试反色只会把黑底白字变成白底黑字再认一遍（白付 15–80ms）。
+                rgb = numpy.ascontiguousarray(arr[:, :, [2, 1, 0]])
+                pad = max(16, min(60, round(args.scale * 8)))
+                out = asyncio.run(ocr.recognize(_to_bgra(rgb, args.scale, args.canvas_h, pad)))
+            else:
+                out = asyncio.run(ocr.recognize_any(arr, args.scale, args.canvas_h))
         except Exception as e:  # noqa: BLE001
             out = {"error": f"{type(e).__name__}: {e}"}
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")

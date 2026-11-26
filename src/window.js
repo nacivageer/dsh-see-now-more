@@ -345,6 +345,26 @@ function storePython() {
   return out;
 }
 
+/**
+ * DSH 自带 runtime 里的 Python（`~/.dsh/dsh-runtimes/<名字>/dependencies/python/python.exe`）。
+ *
+ * 为什么单独一个函数而不是并进 `pythonCandidates()`：那份列表是**开悬浮窗**用的，
+ * 要求 tkinter；往前面插一个新的解释器会改变"谁去开窗"。OCR 只关心 winrt ——
+ * `src/ocr.js` 的注释写明 winrt 就装在这个 runtime 里（DSH 升级后要重装），
+ * 所以只有 OCR 这条链把它排在前面。
+ */
+export function dshRuntimePythons(env = process.env) {
+  const out = [];
+  const base = join(dshHome(env), 'dsh-runtimes');
+  let names = [];
+  try { names = readdirSync(base); } catch { return out; }
+  for (const name of names) {
+    const exe = join(base, name, 'dependencies', 'python', 'python.exe');
+    if (existsSync(exe)) out.push(exe);
+  }
+  return out;
+}
+
 export function pythonCandidates() {
   const cfg = seeConfig();
   const list = [];

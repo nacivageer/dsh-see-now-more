@@ -17,6 +17,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { normalizeTextConfig } from './text-band.js';
+
 /** 关掉悬浮窗之后的四档行为（`onWindowClose`）。顺序 = 卡片里的顺序。 */
 export const WINDOW_CLOSE_MODES = Object.freeze(['stop', 'ears', 'rise', 'ghost']);
 
@@ -401,6 +403,13 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
   const mirrorCfg = readMirror(raw.mirror);
   warnings.push(...mirrorCfg.warnings);
 
+  /**
+   * 屏幕文字流（P1 第 2 步）：`text` 段的校验在 `text-band.js` 里（纯函数、单测过），
+   * 这里只把警告并进 tuning 的总账 —— 和 listen / lift / mirror 一个姿势。
+   */
+  const textCfg = normalizeTextConfig(raw.text);
+  warnings.push(...textCfg.warnings);
+
   const session = readBoundSession(raw, warnings);
 
   /**
@@ -483,6 +492,8 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     listen: listenCfg.listen,
     lift: liftCfg.lift,
     mirror: mirrorCfg.mirror,
+    /** 屏幕文字流：`{enabled, band, fps, scale, lang, minChars, maxLines, maxChars, …}` */
+    text: textCfg.config,
     path,
     warnings,
   };

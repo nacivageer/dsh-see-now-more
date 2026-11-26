@@ -30,6 +30,7 @@ import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { pointAndWait, pointerEnabled } from './pointer.js';
 import { captureCrop, validateCropRegion } from './crop.js';
 import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
+import { textStatusLine } from './text-band.js';
 import { readBloodbarOnce, readBloodbarWindowOnce } from './bloodbar-capture.js';
 import { todayCounts } from './lift/log.js';
 import { liftLine, liftGearLine } from './lift/status.js';
@@ -799,6 +800,8 @@ async function registerAll(ctx) {
     lift: tuning.lift,
     // 血条读数（P1c）：框过才有；没框时不采（startBloodbarCapture 会直接拒）
     bloodbar: loadBloodbar(),
+    // 屏幕文字流（see-now.json 的 text 段，P1 第 2 步）：默认开，条带底部 0.84–1.0
+    text: tuning.text,
   });
   disposers.push(() => runner.stop());
 
@@ -2642,6 +2645,8 @@ async function registerAll(ctx) {
               lastBelowAt: s.bloodbar?.lastBelowAt,
               ocr: s.bloodbar?.ocr && s.bloodbar.ocr.available === false ? false : null,
             })}`
+            // 屏幕文字流（P1 第 2 步）：四个数 + OCR 可用性 —— 「字怎么没进来」先看这行
+            + `\n${textStatusLine(s.text)}`
             // 声音单独一行：听不到声音时第一个要看的就是这里
             + `\n声音：${voice.speakers > 0
               ? `已接上 ${voice.adapters.join(', ') || '适配器'}（${voice.speakers} 个会出声的订阅者）`

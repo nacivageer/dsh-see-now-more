@@ -1125,6 +1125,15 @@ export function createPipeline(opts = {}) {
     /** 喂一帧。`buf` 必须是 width*height*3 的 rgb24。 */
     push({ t, buf }) {
       stats.frames += 1;
+      /**
+       * 屏幕文字流（P1 第 2 步）：**每一帧原始画面**都给它看一眼，1 fps 的节流在
+       * `text-stream.js` 里做。不能只喂 keep 帧 —— keep 会被去重挡掉（见上面 `keep()`
+       * 的注释），而「图不变、字幕可以变」正是要抓的那种情况。
+       * 文字流出任何错都不许弄挂出图：这里吞掉异常。
+       */
+      if (o.onFrame) {
+        try { o.onFrame({ t, buf, width, height, wall: Date.now() }); } catch { /* 文字流不许拖垮出图 */ }
+      }
       tiers.tick(t);
       const r = scorer(buf);
       const s = r.score;
