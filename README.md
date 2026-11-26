@@ -545,7 +545,7 @@ see_now({ action: "pointer", x: 960, y: 540, label: "点这里", wait: "click" }
 
 这些是"每次会话都一样的偏好"，不该让模型每次传参：多久自己收工、默认用哪一档节奏、
 哪些回复要被念出来。写进这个文件（**不用重开 DSH**：`speakScope` 每条回复都重读、下一句就生效，
-其余字段在下一轮采集/唤醒时生效；不进 profile，`dsh plugin update` 不会覆盖）：
+`collapsedBubble` 每条新消息现读，其余字段在下一轮采集/唤醒时生效；不进 profile，`dsh plugin update` 不会覆盖）：
 
 ```json
 {
@@ -554,6 +554,7 @@ see_now({ action: "pointer", x: 960, y: 540, label: "点这里", wait: "click" }
   "defaultPace": "calm",
   "speechPacing": true,
   "showPriceChip": true,
+  "collapsedBubble": true,
   "speakScope": "off"
 }
 ```
@@ -565,6 +566,7 @@ see_now({ action: "pointer", x: 960, y: 540, label: "点这里", wait: "click" }
 | `defaultPace` | `normal` | 新会话/重开采集时的默认节奏：`calm` / `normal` / `dense` / `game-economic`。调用里显式传 `pace` 仍然优先 |
 | `speechPacing` | `true` | 按上一句的估计时长排下一轮（中文约 5 字/秒）。`"guard"` = 只在长句时推迟、不比旧节奏密；`false` = 退回固定间隔 |
 | `showPriceChip` | `true` | 悬浮窗底栏的「高峰期 / 半价期」标签；`false` 关掉。它由 `window.py` 自己算，**不依赖 `dsh-price-period`**（那个是 DSH 标题栏的独立插件） |
+| `collapsedBubble` | `true` | 折叠时收到模型的新消息弹不弹预览气泡；`false` 只收不弹，消息照常进历史 / 收藏。设置页的「折叠气泡」改的就是这一项，**即时生效** |
 | `speakScope` | `off` | 哪些回复会被念出来：`off` / `notify` / `reaction` / `full`，语义同上一节「朗读范围」；设置页改的就是这一项 |
 | `mirror` | 都开 | 浮窗镜像主窗用户消息：`{"users": false}` 一键关掉实时 + 回填，`{"backfill": false}` 只停启动 / 换绑时的回填。改完下一拍生效 |
 

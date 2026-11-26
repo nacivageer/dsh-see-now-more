@@ -386,6 +386,18 @@ except IndexError:
 
 
 
+def notify_bubble_enabled(cfg) -> bool:
+    """折叠态「新消息」气泡的开关（`~/.dsh/see-now.json` 的 `collapsedBubble`）。
+
+    默认**开**（和加这个开关之前的行为一致）。放在模块层是为了让
+    `scripts/check-notif-toggle.py` 不起 Tk 也能直接测这条判据。
+    **只认真正的布尔**：写成字符串 `"false"` 是真值，宁可回默认也不能静默反着来
+    （和 `src/tuning.js` 里 `enabled` 的类型口径一致）。
+    """
+    val = (cfg or {}).get("collapsedBubble", True)
+    return val if isinstance(val, bool) else True
+
+
 def price_chip_enabled() -> bool:
     """底栏价格标签是否显示。
 
@@ -2954,6 +2966,33 @@ class LiveGlass:
         self._notif_img_hits = []
         self._notif_scroll = 0
 
+    def _hide_notification(self) -> None:
+        """立刻收回折叠态气泡、窗高回到折叠条。
+
+        `_clear_notification` 只清状态，窗还停在气泡撑出来的高度上（`_layout_notification`
+        把窗拉长过）；设置页关掉「折叠气泡」时要连窗一起缩回去，否则会留一截空框。
+        """
+        if getattr(self, "_notif_msg", None) is None and getattr(self, "_notif", None) is None:
+            return
+        self._clear_notification()
+        if not self._collapsed:
+            return
+        self._sync_pos()
+        w, h = self._geo.width, collapsed_height()
+        self._defer_canvas_size = True
+        try:
+            self._set_geometry(Geometry.for_size(w, h))
+        finally:
+            self._defer_canvas_size = False
+        self._grab_collapsed_bg()
+        self._collapsed_frame = None
+        self._coll_prev = None
+        try:
+            self.root.geometry(f"{w}x{h}+{self._x}+{self._y}")
+        except Exception:
+            pass
+        self._layout()
+
     def _layout_notification(self) -> None:
         """按新消息重排：换几何 → 换窗高（往下长）→ 重抓底图 → 重画。"""
         if not self._collapsed or not getattr(self, "_notif_msg", None):
@@ -3129,8 +3168,14 @@ class LiveGlass:
             cx += self._run_font(style).measure(txt)
 
     def _maybe_notify(self, msgs) -> None:
-        """刚进来的消息里挑最后一条 DSH 消息 → 收起态显示气泡。"""
+        """刚进来的消息里挑最后一条 DSH 消息 → 收起态显示气泡。
+
+        折叠时弹不弹是用户选项（`see-now.json` 的 `collapsedBubble`，默认开）。
+        **每条消息现读**：设置页点一下，下一条消息就按新值走，不用重启 DSH。
+        """
         if not self._collapsed or not msgs:
+            return
+        if not notify_bubble_enabled(self._settings_read()):
             return
         last = None
         for m in msgs:
@@ -8975,6 +9020,8 @@ class LiveGlass:
         #   模型调不动它，只有这张卡片能打开（插件 1.5 秒内读到，**不用重启**）。
         # - 「关窗后」决定窗被关掉之后还听不听；四档的小字必须写清实际功能，
         #   「收工 / 隐身」这种短名单看不出区别。
+        # - 「折叠气泡」是窗自己的显示开关（`_maybe_notify` 每条消息现读），不用重启；
+        #   关掉只影响折叠时弹不弹预览，历史 / 收藏 / 朗读都不受影响。
         ("enabled", "屏幕读取", (True, False), {True: "开", False: "关"}, True,
          {True: "模型能看屏幕（watch / peek / region 都可用）",
           False: "关掉后一律拒绝；模型自己打不开，只有这里能开"}),
@@ -8984,6 +9031,9 @@ class LiveGlass:
           "ears": "停画面、保留听觉；有料时只在会话里说，不开窗",
           "rise": "停画面、保留听觉；有料时自己重开窗并说明",
           "ghost": "窗收起，画面和听觉都继续"}),
+        ("collapsedBubble", "折叠气泡", (True, False), {True: "开", False: "关"}, True,
+         {True: "折叠时收到新消息，弹出预览气泡",
+          False: "折叠时不弹；消息照常进历史 / 收藏"}),
         ("defaultPace", "节奏", ("calm", "normal", "dense", "game-economic"),
          {"calm": "省", "normal": "常规", "dense": "密", "game-economic": "游戏"}, "normal"),
         ("quality", "清晰度", ("low", "standard", "high", "ultra"),
@@ -9105,11 +9155,13 @@ class LiveGlass:
                 rows.append({"kind": "scopeopt", "value": _val, "label": _label,
                              "disabled": _val == "full" and _vmode == "deepseek", "h": 44})
         rows.append({"kind": "sep", "h": 8})
-        # 提示分两行：**一行放不下**（卡片最窄 380px，10 号字一行只有 ~35 个汉字），
+        # 提示按行拆短：**一行放不下**（卡片最窄 380px，10 号字一行只有 ~35 个汉字），
         # 挤成一行会被右边界直接截断（2026-11-26 格在实机上看到的就是这个）。
+        # 2026-11-27 加「折叠气泡」后即时项变三项，再拼回一行会超宽 → 拆成三行。
         rows.append({"kind": "hint", "text": "以下选项存进 see-now.json", "h": 24})
         rows.append({"kind": "hint",
-                     "text": "屏幕读取 / 关窗后即时生效，其余重启 DSH 后生效", "h": 24})
+                     "text": "屏幕读取 / 关窗后 / 折叠气泡：即时生效", "h": 24})
+        rows.append({"kind": "hint", "text": "其余选项：重启 DSH 后生效", "h": 24})
         rows.append({"kind": "sep", "h": 8})
         for row in self.SETTINGS_ROWS:
             # 带小字的行高 68（标题上层、说明下层）；两行文字只能这么排，Tk 没有 tooltip
@@ -9523,6 +9575,10 @@ class LiveGlass:
         nxt = options[(options.index(cur) + 1) % len(options)] if cur in options else options[0]
         r["value"] = nxt
         self._settings_write(_key, nxt)
+        # 折叠气泡关掉时，把正在飘的那条预览也收回去（正常路径下设置卡只在展开态
+        # 能开、那时本来就没有气泡；这条兜住协议折叠等边角）。
+        if _key == "collapsedBubble" and not nxt:
+            self._hide_notification()
         if hints:
             # 带小字的行：值和说明都要换，就地重画整张卡（行数不变，不闪）
             self._settings_rebuild()

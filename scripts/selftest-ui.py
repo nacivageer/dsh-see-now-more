@@ -232,9 +232,14 @@ def read_state_file():
         bad.append('mode=%r' % mode)
     if pace not in PACE_OK:
         bad.append('defaultPace=%r' % pace)
+    # 折叠气泡只认真正的布尔：写成字符串 "false" 是真值，窗会当成开（2026-11-27）
+    bubble = raw.get('collapsedBubble', True)
+    if not isinstance(bubble, bool):
+        bad.append('collapsedBubble=%r (want true/false)' % (bubble,))
     if bad:
         return 'FAIL', 'bad values: ' + ', '.join(bad), raw
-    return 'PASS', 'mode=%s defaultPace=%s' % (mode or '-', pace or '-'), raw
+    return 'PASS', 'mode=%s defaultPace=%s collapsedBubble=%s' % (
+        mode or '-', pace or '-', 'on' if bubble else 'off'), raw
 
 
 def check_bound_session(raw):
