@@ -135,10 +135,12 @@ from glass_geometry import (
 )
 from window_widgets import ChatFeed, Fonts, TextLayer
 from quote_text import format_quote_text, quote_preview, split_quote_blocks
-# 纯算术 / 纯数据两件（2026-11-27 抽出）：落位与滚轮、chat.jsonl 的行→条目→会话。
-# 都不碰 Tk，能离开窗口验（scripts/check-window-math.py / check-chat-index.py）。
+# 纯算术 / 纯数据 / 纯 I/O 三件（2026-11-27 抽出）：落位与滚轮、行→条目→会话、
+# chat.jsonl 的增量读。都不碰 Tk，能离开窗口验（check-window-math.py / check-chat-index.py /
+# check-history-scroll.py）。
 from window_math import clamp_into, place_dialog, wheel_scroll
-from chat_index import aggregate_sessions, parse_lines, tail_lines
+from chat_index import aggregate_sessions
+from chat_log import ChatLog
 try:  # 单文件拷走 window.py 时也别让整个窗起不来：读不到就退回旧的预填判据
     from session_hint import current_session as _read_dsh_current_session
     from session_hint import prefill as _bind_prefill
@@ -4162,7 +4164,7 @@ class LiveGlass:
         同一毫秒的条目保持写入顺序（Python 的 sort 是稳定的）。
         """
         try:
-            entries = parse_lines(tail_lines(CHAT_FILE.read_text(encoding="utf-8")))
+            entries = self._chat_entries()
         except Exception:
             return []
         hid = self._hidden_keys()          # 循环外问一次：它是 stat 缓存，但别问 4000 遍
@@ -6324,40 +6326,42 @@ class LiveGlass:
         st["close"] = (w - 58, 22, w - 22, 58)
         c.create_line(28, 76, w - 28, 76, fill="#ffffff", width=1, tags=("hhead",))
 
+    def _chat_log(self) -> ChatLog:
+        """`chat.jsonl` 的增量读（`chat_log.py`）。窗里所有「最近 4000 行」共用它。"""
+        log = getattr(self, "_chat_log_obj", None)
+        if log is None:
+            log = ChatLog(CHAT_FILE)
+            self._chat_log_obj = log
+        return log
+
     def _chat_entries(self) -> list[dict]:
-        """`chat.jsonl` 最近 4000 行的解析结果，按 (mtime_ns, size) 缓存。
+        """`chat.jsonl` 最近 4000 行的解析结果（`ChatLog` 增量缓存）。
 
         为什么要有它（2026-11-27 实测）：回顾列表每滚一格都会重画整页，而画之前要同时问
         `_history_sessions()`（列有哪些会话）和 `_chat_sessions()`（谁最新）—— 两个函数各自
         把 1.7 MB / 2236 行整份 `json.loads` 一遍，**各 47 ms**，一滚就是近百毫秒，
-        手感就是「卡手」。文件没变（mtime + size 都没动）就没必要重新解析。
+        手感就是「卡手」。文件没变就不该再解析。
+
+        2026-11-27 再进一步：旧版按 `(mtime_ns, size)` 缓存**整份解析结果**，文件一变
+        （正常追加也算）就整份重读。现在追加只读新追加的那截 —— 默认清理关着、文件只增
+        不减，复盘 `see_now/chat.jsonl` 已经 1.8 MB，每来一条消息重付一次没有道理。
         """
-        try:
-            st = CHAT_FILE.stat()
-            sig = (st.st_mtime_ns, st.st_size)
-        except OSError:
-            return []
-        if sig == getattr(self, "_chat_sig", None):
-            return self._chat_cache
-        entries = []
-        try:
-            entries = parse_lines(tail_lines(CHAT_FILE.read_text(encoding="utf-8")))
-        except Exception:
-            entries = []
-        self._chat_sig, self._chat_cache = sig, entries
-        return entries
+        log = self._chat_log()
+        log.refresh()
+        return log.entries()
 
     def _chat_sessions(self) -> dict:
         """{sid: {sid, firstAt, lastAt}} —— 从 chat.jsonl 现算（最多 4000 行）。
 
-        和 `_chat_entries()` 同一个签名缓存：滚一格重画一次，不能每次再扫 2240 行
+        和 `_chat_entries()` 同一个版本号：滚一格重画一次，不能每次再扫 2240 行
         （`_latest_other_session` 每画一次就要问它一遍）。
         """
-        sig = getattr(self, "_chat_sig", None)
-        if sig is not None and sig == getattr(self, "_chat_sess_sig", None):
+        log = self._chat_log()
+        log.refresh()
+        if getattr(self, "_chat_sess_ver", None) == log.version:
             return self._chat_sess_cache
-        out = aggregate_sessions(self._chat_entries())
-        self._chat_sess_sig = getattr(self, "_chat_sig", None)
+        out = aggregate_sessions(log.entries())
+        self._chat_sess_ver = log.version
         self._chat_sess_cache = out
         return out
 

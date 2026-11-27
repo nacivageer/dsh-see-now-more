@@ -6,7 +6,7 @@
 开 Tk 壳；搬出来之后 `scripts/check-chat-index.py` 用假数据直接跑。
 
 **这里只做纯变换**：不读文件、不碰 `CHAT_FILE`、不认识缓存。读多少字节、什么时候失效
-是调用方的事（那部分和 `chat.jsonl` 只增不减的增长曲线绑在一起，属于另一笔账）。
+是 `chat_log.py` 的事（那部分和 `chat.jsonl` 只增不减的增长曲线绑在一起）。
 """
 
 from __future__ import annotations
@@ -23,6 +23,15 @@ def tail_lines(text: str, limit: int = MAX_ENTRIES) -> list:
     return text.splitlines()[-limit:]
 
 
+def parse_line(line: str):
+    """单行 → 条目；坏行 / 非对象行 → None（`parse_lines` 的单行版）。"""
+    try:
+        e = json.loads(line)
+    except Exception:
+        return None
+    return e if isinstance(e, dict) else None
+
+
 def parse_lines(lines) -> list:
     """逐行 `json.loads`，坏行 / 非对象行跳过。
 
@@ -31,11 +40,8 @@ def parse_lines(lines) -> list:
     """
     out = []
     for line in lines:
-        try:
-            e = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(e, dict):
+        e = parse_line(line)
+        if e is not None:
             out.append(e)
     return out
 
