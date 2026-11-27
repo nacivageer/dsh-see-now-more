@@ -3,11 +3,11 @@
 
 # 上游 0.2.x 差距与采纳计划
 
-状态：进行中（P1-B 代码已落、单测绿，**等格确认后提交**；P1-A 与清理分档未开工）
+状态：可验收（P1-B 已发版 `v0.1.1-more.40`、真机验过；P1-A 与清理分档未开工，排进 `.41`）
 对象：把上游 `SAOS-3624/dsh-see-now` 从 v0.1.2 到 v0.2.9 之间、与本仓方向相符的能力列成判定表（搬 / 只抄数据 / 不搬），并挑出一批能立刻开工的。
 归属：session-7ef46cbe-1f6f-458e-a891-337033107248 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：格确认 P1-B → 提交 → 开工 P1-A（offload）→ 再把 `docs/tasks/history-retention-tiers.md` 的清理分档并进来；
-三件改完按发版六步出 `.40`。口径已于 2026-11-27 12:25 定下（见「日志」两条）。
+下一步：开工 P1-A（offload，先探宿主有没有 `image/offload`）→ 再把 `docs/tasks/history-retention-tiers.md`
+的清理分档并进来 → 两件一起出 `.41`。P1-B 的口径与实现记录见「日志」的 12:25 / 12:32 / 12:38 三条。
 证据：
   - 本仓无 offload：`Test-Path src\offload.js` = False；`src` 里 `图库|imageTrigger|imageKeep` 0 命中
   - 本仓只有一套阈值：`src/tiers.js:38` `LEVEL_THRESHOLDS = [0.26,0.6,0.9,1.2,1.8,2.4,3.0]`（= 上游 `docx` 那套）
@@ -15,7 +15,7 @@
   - 已经等价、不必搬：`src/index.js:211-229` 已有 define-tool 三段兜底；`src/index.js:1851` 已有 `disabled-by-user` 总开关
   - 上游侧：v0.2.9 的 `CHANGELOG.md`，`[0.2.0]` 段在第 448 行，0.1.2–0.2.9 共 12 个版本
 账：无需（本轮只读上游 + 写这份文档）
-更新：2026-11-27 12:32 CST
+更新：2026-11-27 12:38 CST
 
 ## 为什么现在写
 
@@ -28,7 +28,7 @@
 | 上游能力 | 上游位置 | 本仓现状 | 判定 |
 |---|---|---|---|
 | 图库自动省略（offload） | `src/offload.js` + `test/offload.test.mjs` | 无（`src` 里 `imageTrigger`/`imageKeep`/`图库` 0 命中） | **搬（P1）** |
-| 第二套阈值 `tierCurve` | `src/tiers.js` 双表 | 只有 `docx` 那套（`src/tiers.js:38`） | **只抄数据（P1）** |
+| 第二套阈值 `tierCurve` | `src/tiers.js` 双表 | 只有 `docx` 那套（`src/tiers.js:38`） | **只抄数据（P1）→ 已发 `v0.1.1-more.40`** |
 | `tierMode: 'weight'` 按面积分档 | `src/pack.js` | 排布只有行式（`rowOptions`/`precompute`） | 抄算法（P2，先 A/B） |
 | 设置页（档位/阈值进 GUI） | `src/settings-api.mjs`、`settings-trust.js` | 无 GUI 表单；有 `src/tuning.js` 校验层 | **不搬**（见下） |
 | 托盘（窗收进通知区） | `examples/floating-chat/tray.py` | 无托盘；**等价入口已有**：标题栏左上角按钮（`client.js:19` → `src/open-window.js`） | **不搬**（见下） |
@@ -92,4 +92,6 @@
 - 2026-11-27 12:25 待办（挂在发版那笔，别漏）：`.40` 的第 1 步（对齐文档）补两处——① `docs/决策记录.md` 的「分发与版本」加一句「版本前缀跟 merge 基线走，不跟 cherry-pick 数量走；跟没跟上上游看断言集，不看版本号」；② `README.md` 的「维护状态与上游关系」补「分叉基线 v0.1.1，已选择性移植上游 0.2.x 的 …」。版本号本身不改，`.40` 仍是 `0.1.1-more.40`。决策会话：session-75d744a0。
 - 2026-11-27 12:32 P1-B 落了代码（**未提交**，等格点头）：`src/tiers.js` 加 `PERCEPTUAL_THRESHOLDS` / `TIER_CURVES` / `TIER_CURVE_KEYS` / `thresholdsFor()` / `tierCurveNote()`；`src/tuning.js` 加 `tierCurve`（二选一、坏值 warn 退 `docx`）；`src/pipeline.js` 让 `createTiers` 走 `o.thresholds ?? thresholdsFor(o.tierCurve)`（另留显式 `thresholds` 入口，离线 A/B 用）；`src/runner.js` 一路带进管线；`src/index.js` 接 `tuning.tierCurve`，`status` 的「模式」行只报非默认层。新单测 `test/tier-curve.test.mjs` 六条（表形状 / `thresholdsFor` / 同密度不同档位 / 配置退回 / 端到端接线 / status 段）；`node --test` 485 全过（本轮实测）。README 的 `see-now.json` 表加了 `tierCurve` 行（发版六步第 1 步）。
   端到端接线用合成素材验（每 0.5 秒整屏换色 → 密度约 2 帧/秒）：两套表留帧数一样、perceptual 稳态档位高一档；单测断言的是**方向**不是具体档位，具体数看 `scripts/sim.mjs --tierCurve=perceptual` 的真素材 A/B。
-  **真机没验**：`status` 那行要装进 profile（`install-dev` + 重开 DSH）才看得到，这一批没装。
+  **真机没验**（12:38 补验，见下条）：`status` 那行要装进 profile（`install-dev` + 重开 DSH）才看得到，当时没装。
+- 2026-11-27 12:38 P1-B 发版 `v0.1.1-more.40`（CHANGELOG 该段 + `docs/决策记录.md` 的同名小节 +「分发与版本」里新增的「前缀跟 merge 基线走」那条）。真机验证：`install-dev` 同步后重启（宿主 96980 → 100224，20 秒），`status` 的「模式」行多出 `· 阈值 perceptual`，其余行与重启前一字不差；配置已删掉 `tierCurve` 键（备份 `~/.dsh/see-now.json.bak-20261127-1236`）。
+  坑：`install-dev --check` **只比版本号**（`scripts/install-state.mjs:39`）—— 没升版本时它说 "current"，副本却可能还是旧代码。验装没装上新代码要 grep profile 副本，别信那行。
