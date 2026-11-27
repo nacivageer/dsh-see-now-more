@@ -3,17 +3,17 @@
 
 # 屏幕文字事件流：让静默期不花 token
 
-状态：**可验收**（P1 三步 + A/B 两版 + 设置页预设都落地，真机已验证；剩 P4 README 四档表，发版时一起改）
+状态：**已发版**（功能分两批上线：读字幕主体在 `[0.1.1-more.38]` CHANGELOG 段，字幕框 `text.region` 在 `[0.1.1-more.42]`；P4 的 README 关窗四档表 2026-11-27 19:44 补齐）
 对象：给 see-now-more 加一条**屏幕文字事件流**——把画面上的字（尤其底部字幕带）变成带时间码的文本事件，
 随唤醒 / 图交付而不是另开一路；做到「静默期只入队不进上下文、说话时少漏字、有本账能算清省了多少」。
 归属：session-40cc9db3-6a98-481e-8252-9da96f75f401（bilibili 工作区出方案）/ 执行在
 `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：P4（README 的四档表 / 读字幕档说明，发版时一起改）；发版前还要核 `src/tool-spec.js` 有没有要跟的描述。
+下一步：无功能项。发版时按 `AGENTS.md`「发版前核 README / schema」走一遍（这一轮已核过：README 关窗四档已补，`src/tool-spec.js` 本轮未涉及）。
 证据：`node --test` 464 项全过 / 0 失败 / **0 skip**；水位去重与渲染单测在 `test/text-deliver.test.mjs`；
 真机 OCR 验收见 05:52 条（合成素材 196/196 召回）与 08:04 条（真实画面：条带 0.84 切顶、分辨率下限 480px）。
 账：`textCoverage` 已能算（分母 = 采样到有字的时长）；「净省」只有**估算**量级（1.2–1.5k token / 5 分钟，
 见 08:50 条），不是实测——要实测得让模型真去补那 10 张图再对账。
-更新：2026-11-27 08:50 CST
+更新：2026-11-27 19:44 CST
 
 ## 为什么值得做（三条已核）
 
@@ -348,3 +348,9 @@ README 0 命中，只有 `README.md:86` 那句「点 × 只是这一次不看」
   那行在三种状态下全 ✓：配置 2 fps / 运行 2 fps、配置 关 / 运行 关、配置 1 fps / 运行 1 fps。
   **结论：`text.fps` 的 1.5 秒轮询 → `setFps()` → `gate.retune()` 整条链是通的**（运行值真的跟着变，
   不是只写了配置）。P1 到此可验收。
+- 2026-11-27 19:43–19:44 **P4 落地（纯文档）**：README 第 89 行那一节原来只有一句「点 × 只是这一次
+  不看」，现在换成关窗四档表（画面 / 听觉 / 循环 / 弹窗四项）+ 三个坑 + 推荐组合。表按
+  `src/loop.js:898-903` 的注释表逐格核；「弹窗」列按 `src/loop.js:917`
+  （`setAutoOpenWindow(closeMode === 'rise')`）；「总开关下 ghost 退化成留耳」按 `src/index.js:1124-1125`。
+  验收：README 里 `onWindowClose` / 留耳 / 隐身 各命中；`node --test` **528 pass / 0 fail / 0 skip**
+  （11.7s）。没动代码、没动 `src/tool-spec.js`（本轮不涉及 schema）。

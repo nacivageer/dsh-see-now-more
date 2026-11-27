@@ -3,10 +3,10 @@
 
 # 悬浮窗做 DSH 的监护进程：独立启动 / 重启 DSH / 回来自核
 
-状态：可验收（三环都真机验过：窗发起 / 模型发起 `action:"restart"` / 回执自动进会话；未发版）
+状态：已发版（代码随 `v0.1.1-more.39` 上线 —— `git tag --contains 7d7c11c` 命中 `.39/.40`，故也在 `.41/.42` 里；CHANGELOG 有「悬浮窗能重启 DSH」段；三环真机验过：窗发起 / 模型发起 `action:"restart"` / 回执自动进会话）
 对象：把悬浮窗从「DSH 的附属 UI」变成「活得更久、能操作 DSH 的监护进程」。第一版只做两件：**能把 DSH 重启、回来自己核一遍并回报**（独立启动已降 P2，理由见下）。**不做第二个 agent，不做 DSH 的 fork。**
 归属：session-7ef46cbe-1f6f-458e-a891-337033107248 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：无功能项；剩 push 与发版（格 11:33 说先不发版）
+下一步：无（已随 `.39` 发版；`git tag --contains` 核过，不是估的）
 证据：
   - 窗比 DSH 活得久：`src/window.js:495` `detached: true`
   - 窗有自己的对话记录：`src/chat.js:31` → `~/.dsh/see-now/chat.jsonl`
@@ -18,7 +18,7 @@
   - 真机（2026-11-27 11:35）：`restart.log` 记「Electron 91168: 成功 / spawn pid=94112」，
     新 Electron 的父进程是窗口 `92276` —— 窗口没被收掉，跨过了整次重启
 账：真机两轮重启（11:35 一轮；验收回执还要一轮），离线脚本可反复跑
-更新：2026-11-27 10:55 CST
+更新：2026-11-27 19:44 CST
 
 ## 为什么这件事值得单开一份
 
@@ -153,3 +153,6 @@
 - 2026-11-27 11:52 补模型侧发起口（格指出的原点）：`see_now({action:"restart"})` 只写 `queued` 就返回，窗的新线程 `_watch_restart_requests` 每 2 秒看一次、回合结束后执行。离线：`node --test` 全绿、`check-restart.py` 26 条全过（含 by=agent 沿用）。
 - 2026-11-27 11:56 格指出回执没闭环（「你居然不是自动从窗里收回执的吗」）：原实现只写窗和 `restart.json`，模型要下一次 `status` 自己去要。改成新宿主启动时用 `wakeSession` 投一条「系统回执」进**排队时那个会话**（`run.agent.id` 优先，退回绑定）；`restartWakeText` 单测覆盖。`node --test` 479 全绿，已 install-dev，待下一次重启验自动收到。
 - 2026-11-27 11:59 闭环真机成立：模型调 `see_now({action:"restart"})` → 窗等空闲（我这一轮在写文档，等了 49 秒）→ 11:59:03 杀 96124 → 拉起 97160 → 新宿主 96980 写回 host.json 并**主动把回执投进会话**（`restart.json` done，`elapsedMs 62043`）。新 Electron 的父进程是窗 90420 —— 第三次跨重启。
+- 2026-11-27 19:44 **状态更正**：交付时状态写「未发版」，实际这批代码（`4aa3fd9` / `5003a78` / `7d7c11c`）
+  随 `v0.1.1-more.39` 就上线了（`git tag --contains 7d7c11c` → `.39/.40`，因此也在 `.41/.42`），
+  CHANGELOG 第 136 行起有「悬浮窗能重启 DSH」段。状态改「已发版」、下一步清空。代码没动。
