@@ -72,6 +72,9 @@ class ChatFeed:
         self.offset = 0          # 相对最新一条的滚动量
         self._seen: set = set()
         self._pos = 0
+        # 正在跟的是哪一份文件（st_dev, st_ino）。删除 / 重命名会话、自动清理都会
+        # `os.replace` 整份重写 chat.jsonl —— 索引变了就说明旧字节位置不能再用。
+        self._key = None
 
     # ---- 解析 ----
 
@@ -161,37 +164,74 @@ class ChatFeed:
         return True
 
     def reload(self) -> None:
-        """重读最近若干行（文件被清短 / 首次加载 / 换绑）。"""
+        """重读最近若干行（文件被清短 / 首次加载 / 换绑 / 被整份重写）。"""
         self.messages = []
         self._seen.clear()
         self._pos = 0
         self.offset = 0
         self.status = ""
         try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()[-self.READ_LINES:]
-            for line in lines:
-                self.add(self.parse(line))
-            # 回填条目可能插在中间：整份重读后统一按 `at` 排一次
-            self.messages.sort(key=self._at_key)
-            self._pos = self.path.stat().st_size
-        except Exception:
-            self._pos = 0
+            st = self.path.stat()
+            with open(self.path, "rb") as f:
+                chunk = f.read()
+        except OSError:
+            self._key = None
+            return
+        self._key = (st.st_dev, st.st_ino)
+        # 只认完整行：末尾那半行可能正被写、也可能断在多字节字符中间
+        cut = chunk.rfind(b"\n")
+        head = chunk[:cut + 1] if cut >= 0 else chunk
+        try:
+            lines = head.decode("utf-8").splitlines()[-self.READ_LINES:]
+        except UnicodeDecodeError:
+            lines = []
+            head = b""
+        self._pos = len(head)
+        for line in lines:
+            self.add(self.parse(line))
+        # 回填条目可能插在中间：整份重读后统一按 `at` 排一次
+        self.messages.sort(key=self._at_key)
 
     def poll(self) -> bool:
-        """增量读；返回是否有变化。"""
+        """增量读；返回是否有变化。
+
+        **按行边界推进，不按字节位置硬切**（2026-11-27）。原来是 `open(..., "r")` +
+        `f.seek(self._pos)`（`_pos` 来自 `stat().st_size` / `tell()`，是字节），后果两条：
+
+        1. 删除 / 重命名会话、自动清理会 `os.replace` 整份重写这个文件；旧字节位置去新
+           文件里 seek 可能正好落在多字节字符中间 → `UnicodeDecodeError`（日志里那个
+           `0x8b` 就是续字节），而异常发生在 `_pos` 赋值之前 —— 于是**每一次轮询都撞同一
+           颗地雷，一直卡到窗重启**，用户看到的是「浮窗不再显示新消息」。
+        2. 写入方正在追加时读到半行：`parse()` 认不出 → 那条消息被丢掉，而且 `_pos` 已经
+           越过它，**永久丢失**。
+
+        现在：文件索引变了就整份重读；只解码到最后一个换行；剩下的留给下一次。
+        """
         try:
-            size = self.path.stat().st_size
+            st = self.path.stat()
         except OSError:
             return False
-        if size < self._pos:
+        if (st.st_dev, st.st_ino) != self._key or st.st_size < self._pos:
             self.reload()
             return True
-        if size == self._pos:
+        if st.st_size == self._pos:
             return False
-        with open(self.path, "r", encoding="utf-8") as f:
-            f.seek(self._pos)
-            data = f.read()
-            self._pos = f.tell()
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self._pos)
+                chunk = f.read()
+        except OSError:
+            return False
+        cut = chunk.rfind(b"\n")
+        if cut < 0:
+            return False                # 只有半行：等它写完，位置不动
+        chunk = chunk[:cut + 1]
+        try:
+            data = chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            self.reload()               # 位置已经不可信（被别的写者改过），整份重来
+            return True
+        self._pos += len(chunk)
         changed = False
         for line in data.splitlines():
             if self.add(self.parse(line)):
