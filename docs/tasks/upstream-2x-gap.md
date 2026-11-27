@@ -3,7 +3,7 @@
 
 # 上游 0.2.x 差距与采纳计划
 
-状态：可验收（P1-B 已发版 `v0.1.1-more.40`、真机验过；P1-A 与清理分档未开工，排进 `.41`）
+状态：可验收（P1-B 已发版 `v0.1.1-more.40` 并装进 profile 验完；P1-A 与清理分档未开工，排进 `.41`）
 对象：把上游 `SAOS-3624/dsh-see-now` 从 v0.1.2 到 v0.2.9 之间、与本仓方向相符的能力列成判定表（搬 / 只抄数据 / 不搬），并挑出一批能立刻开工的。
 归属：session-7ef46cbe-1f6f-458e-a891-337033107248 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
 下一步：开工 P1-A（offload，先探宿主有没有 `image/offload`）→ 再把 `docs/tasks/history-retention-tiers.md`
@@ -15,7 +15,7 @@
   - 已经等价、不必搬：`src/index.js:211-229` 已有 define-tool 三段兜底；`src/index.js:1851` 已有 `disabled-by-user` 总开关
   - 上游侧：v0.2.9 的 `CHANGELOG.md`，`[0.2.0]` 段在第 448 行，0.1.2–0.2.9 共 12 个版本
 账：无需（本轮只读上游 + 写这份文档）
-更新：2026-11-27 12:38 CST
+更新：2026-11-27 12:44 CST
 
 ## 为什么现在写
 
@@ -95,3 +95,4 @@
   **真机没验**（12:38 补验，见下条）：`status` 那行要装进 profile（`install-dev` + 重开 DSH）才看得到，当时没装。
 - 2026-11-27 12:38 P1-B 发版 `v0.1.1-more.40`（CHANGELOG 该段 + `docs/决策记录.md` 的同名小节 +「分发与版本」里新增的「前缀跟 merge 基线走」那条）。真机验证：`install-dev` 同步后重启（宿主 96980 → 100224，20 秒），`status` 的「模式」行多出 `· 阈值 perceptual`，其余行与重启前一字不差；配置已删掉 `tierCurve` 键（备份 `~/.dsh/see-now.json.bak-20261127-1236`）。
   坑：`install-dev --check` **只比版本号**（`scripts/install-state.mjs:39`）—— 没升版本时它说 "current"，副本却可能还是旧代码。验装没装上新代码要 grep profile 副本，别信那行。
+- 2026-11-27 12:44 `.40` 装进 profile 并重启验完：回执「已回到 v0.1.1-more.40（会话发起，宿主 100224 → 96200，用时 24 秒）」；`status` 的「模式」行是 `… · 亮度归一开（暗场/黑边已补偿）`，**没有** `· 阈值` —— 默认 `docx` 那条路也对。CHANGELOG 的真机验收两半都齐了（非默认见到那段字、默认回到无字）。
