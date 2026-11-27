@@ -3,19 +3,30 @@
 
 # 上游 0.2.x 差距与采纳计划
 
-状态：可验收（P1-B 已发版 `v0.1.1-more.40` 并装进 profile 验完；P1-A 与清理分档未开工，排进 `.41`）
+状态：可验收（`.41`：offload 与清理分档都已实现、**真机验过**（宿主 96200 → 100932）；未提交、未发版）
 对象：把上游 `SAOS-3624/dsh-see-now` 从 v0.1.2 到 v0.2.9 之间、与本仓方向相符的能力列成判定表（搬 / 只抄数据 / 不搬），并挑出一批能立刻开工的。
 归属：session-7ef46cbe-1f6f-458e-a891-337033107248 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：开工 P1-A（offload，先探宿主有没有 `image/offload`）→ 再把 `docs/tasks/history-retention-tiers.md`
-的清理分档并进来 → 两件一起出 `.41`。P1-B 的口径与实现记录见「日志」的 12:25 / 12:32 / 12:38 三条。
+下一步：等格点头 → 提交两份实现（offload + 清理分档）→ `install-dev` + 重启真机验 → 打 tag `v0.1.1-more.41` + Release（prerelease）。
 证据：
-  - 本仓无 offload：`Test-Path src\offload.js` = False；`src` 里 `图库|imageTrigger|imageKeep` 0 命中
+  - 宿主**有** `image/offload`：`@deepseek-ai/dsh-compaction-image-offload` 在 asar 里（`dsh/node_modules/...`，
+    含投影 / 校验 / 重试），`dsh-base/cordis.patch.yml` 的 `- id: image-offload` 挂载它，
+    且 profile 的 bundles 第一条就是 `@deepseek-ai/dsh-base`
+  - 宿主 API 形状核对：`Agent.id` 就是 SessionId（`dsh-agent` 的 typert 声明）、`session.snapshotEvents()` 在、
+    `tool/result` 的 data 是 `{turn, step, message}`；`image/offload` 的校验读 `context.nodes` / `events`
+  - 本仓实现：`src/offload.js`（计划 / 触发 / 调度 / `status` 行）、`src/tuning.js` 的 `imageTrigger` / `imageKeep`、
+    `src/index.js` 在 `execute` 尾部挂交付后检查 + `status` 的「图库」行
+  - `node --test` 515 全过（新增 `test/offload.test.mjs` 30 条）；清理分档见 `history-retention-tiers.md`
+  - **真机**（`install-dev` → 重启到 `.41`，宿主 96200 → 100932，22 秒）：把阈值临时改成 `imageTrigger:2 / imageKeep:1`，
+    两次 `watch` 之后会话日志出现一条 `image/offload`：`targets=[{seq:1240,imageIndexes:[0]}]`
+    （解压 `session.v4.jsonl.zstd` 数：`surface 节点=441，image/offload 事件=1，已标记 1 张`）——
+    省的是旧那张、最新一张留着；改回 300 / 100 不用重启就生效（热读），测完删掉了这两个键。
+    `status` 对应两行读数：「图库：本次采集出 2 张 · 省略：涨到 2 张省到 1 张」→「…涨到 300 张省到 100 张」。
+  - 旧证据（开工前）：`Test-Path src\offload.js` = False；`src` 里 `图库|imageTrigger|imageKeep` 0 命中
   - 本仓只有一套阈值：`src/tiers.js:38` `LEVEL_THRESHOLDS = [0.26,0.6,0.9,1.2,1.8,2.4,3.0]`（= 上游 `docx` 那套）
   - 本仓排布只有行式：`src/pack.js:79` `rowOptions` / `:158` `precompute`；`skyline` 全仓 0 命中
-  - 已经等价、不必搬：`src/index.js:211-229` 已有 define-tool 三段兜底；`src/index.js:1851` 已有 `disabled-by-user` 总开关
   - 上游侧：v0.2.9 的 `CHANGELOG.md`，`[0.2.0]` 段在第 448 行，0.1.2–0.2.9 共 12 个版本
-账：无需（本轮只读上游 + 写这份文档）
-更新：2026-11-27 12:44 CST
+账：本轮（2026-11-27 12:49 起）无真机重启；`node --test` 一轮约 15 秒
+更新：2026-11-27 13:00 CST
 
 ## 为什么现在写
 
@@ -96,3 +107,13 @@
 - 2026-11-27 12:38 P1-B 发版 `v0.1.1-more.40`（CHANGELOG 该段 + `docs/决策记录.md` 的同名小节 +「分发与版本」里新增的「前缀跟 merge 基线走」那条）。真机验证：`install-dev` 同步后重启（宿主 96980 → 100224，20 秒），`status` 的「模式」行多出 `· 阈值 perceptual`，其余行与重启前一字不差；配置已删掉 `tierCurve` 键（备份 `~/.dsh/see-now.json.bak-20261127-1236`）。
   坑：`install-dev --check` **只比版本号**（`scripts/install-state.mjs:39`）—— 没升版本时它说 "current"，副本却可能还是旧代码。验装没装上新代码要 grep profile 副本，别信那行。
 - 2026-11-27 12:44 `.40` 装进 profile 并重启验完：回执「已回到 v0.1.1-more.40（会话发起，宿主 100224 → 96200，用时 24 秒）」；`status` 的「模式」行是 `… · 亮度归一开（暗场/黑边已补偿）`，**没有** `· 阈值` —— 默认 `docx` 那条路也对。CHANGELOG 的真机验收两半都齐了（非默认见到那段字、默认回到无字）。
+- 2026-11-27 13:00 P1-A 落了代码（**未提交**，等格点头）：新建 `src/offload.js`（`imagesIn` / `replaySurface` / `planOffload` / `planOffloadWithTrigger` / `applyOffload` / `createOffloadScheduler` / `offloadLine` / `isMissingCapability`）；`src/tuning.js` 加 `imageTrigger`（0–2000，0 = 关）/ `imageKeep`（0–2000，坏值退默认），`keep ≥ trigger` 只 warn 不夹；`src/index.js` 在 `execute` 尾部（出过图才）调 `offload.afterDelivery(run.agent.id)`，`status` 加「图库」行、`meta` 带 `offload` 状态。新单测 `test/offload.test.mjs` 30 条；`node --test` **515 全过**。
+  **宿主能力先探过（不是假设）**：`app.asar` 里 57 个文件提 `image/offload`，解释器是 `@deepseek-ai/dsh-compaction-image-offload`（投影 `projection.js` + 提交前校验 `surface.ts:planSurfaceEvent`），`dsh-base` 的 patch 用 `- id: image-offload` 挂载它，而 profile bundles 第一条就是 `@deepseek-ai/dsh-base` —— 这个宿主**有**。
+  **一处和上游不同**：`imagesIn` **只数 content 顶层**（上游那份会递归进嵌套 content）。宿主的 `offloadMessageImages` 只遍历 `message.content` 那一层，多算一个下标就是 `target ... does not exist`；单测里有一条专门盯这个。
+  **退化路径**：宿主没装解释器时 `append` 抛 `requires a message projection`；`isMissingCapability()` 认这句 → 记成 `missing`，之后不再试、`status` 说「宿主没有 image/offload」，不报错。
+- 2026-11-27 13:00 兜掉 12:25 那条 `.40` 待办（两处都已在新树里）：① `docs/决策记录.md` 的「分发与版本」有「版本前缀跟 merge 基线走，不跟 cherry-pick 数量走」（2026-11-27 定那条）；② `README.md` 的「维护状态与上游关系」已写「分叉基线记作上游 `v0.1.1`；之后从上游后来的版本里挑过几件，逐件记版本」。核对时间：本行落笔时两处都在，不是回忆。
+- 2026-11-27 13:00 同批的另一半（清理分档 3/7/14/30）也落进工作树：`examples/floating-chat/window.py` + `scripts/check-cleanup-tiers.py`，记录见 `docs/tasks/history-retention-tiers.md`。两件一起出 `.41`。
+- 2026-11-27 13:15 真机验完（两笔已提交 `a9dd814` / `786f1f4`，`install-dev` → 重启到 `.41`，宿主 96200 → 100932，22 秒）：
+  - offload：临时阈值 2 / 1，两次 `watch` 后会话日志出现 `image/offload`，`targets=[{seq:1240,imageIndexes:[0]}]`（省旧留新）；改回 300 / 100 热读生效，测完删键。
+  - 清理分档：真机第一次点，**卡弹出来却被主窗 topmost 看门狗盖住**（枚举能看到 460×258、Esc 能关，截屏里却是聊天）——`_cleanup_dlg` 漏了 `_dialog_alive()` 和 `_pin_topmost`，已修并补静态守卫；重启**窗进程**后重验通过（菜单四项、直接写盘、确认卡「会删掉 1448 条」、取消不动）。
+  - 一处要记的坑：`window.py` 改了只重启 DSH 不够 —— 窗进程是 detached 起的、跨 DSH 重启常驻，得单独重启窗进程才换到新代码。

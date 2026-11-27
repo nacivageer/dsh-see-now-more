@@ -3,21 +3,27 @@
 
 # 历史自动清理：从「30 天」改成 3 / 7 / 14 分档
 
-状态：待开工（口径已齐：分档 3/7/14/30、默认 30、改短档要二次确认；与 offload 同批）
+状态：可验收（`.41` 工作树里已实现并**真机点过**：菜单 / 直接写盘 / 确认卡 / 取消不动都验了；未提交、未发版）
 对象：悬浮窗历史列表底部那行「☐ 自动清理超过 30 天的记录」。现在只有开关，天数只能手改
 `~/.dsh/see-now/cleanup.json`；30 天太宽容，要能选 3 / 7 / 14 天这种更短的口径。
 **与上游图库 offload（`docs/tasks/upstream-2x-gap.md` 的 P1-A）同批改**：两者拧的是同一个旋钮
 ——「留多少 / 留多久」，口径要一次讲清，别一边留 300 张图、一边留 30 天记录。
 归属：session-7ddde171-5173-4bc3-bb17-4da93474712d / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：格拍板分档集合 + 默认值 → 与 offload 一起开工
+下一步：随 `.41` 一起提交 → 打 tag `v0.1.1-more.41` + Release（prerelease）。
 证据：
-  - 现状 UI：`window.py:6837` `_hist_draw_cleanup_row`（一行勾选 + 「超过 N 天」）
-  - 现状配置：`~/.dsh/see-now/cleanup.json` = `{"enabled": false, "days": 30}`
-  - 默认值写死：`window.py:6426` `CLEANUP_DEFAULT = 30`
-  - 执行点：`window.py:6486` `_run_cleanup(days)` —— 按 `at` 删 `chat.jsonl` 的旧行，删前整份备份到 `trash/`
-  - 触发：`_maybe_cleanup()` 60 秒节流；开关关着什么都不做
-账：无需（本轮只写文档）
-更新：2026-11-27 12:06
+  - 实现（2026-11-27 13:00）：`window.py` 的 `CLEANUP_TIERS = (3, 7, 14, 30)` / `_cleanup_count` /
+    `_show_cleanup_tiers` / `_set_cleanup_days` / `_apply_cleanup_days` / `_show_cleanup_confirm`；
+    `_hist_draw_cleanup_row` 拆成 `cleanup_rect`（开关）与 `cleanup_days_rect`（档位菜单）两个热区，
+    `_hist_press` **先判天数区**，否则永远被整行开关吃掉
+  - 无 Tk 检查：`python scripts/check-cleanup-tiers.py` → `check-cleanup-tiers: all passed`
+    （分档集合 / 计数口径 / 确认时机 / 热区顺序 / 菜单项，六组）
+  - 开工前现状（旧证据，行号已随本轮改动漂移）：`window.py:6837` `_hist_draw_cleanup_row`、
+    `window.py:6426` `CLEANUP_DEFAULT = 30`、`window.py:6486` `_run_cleanup`、`_maybe_cleanup()` 60 秒节流
+  - 计数来源核对：`_history_sessions()`（`window.py` 的「历史记录：分组元数据」段）**每次从
+    `chat.jsonl` 现算 count**，`session-groups.json` 只存 `sid` / `boundAt` —— 清理后分组计数自动缩，
+    不存在需要回写的 count 字段
+账：本轮无 Tk 起窗；检查脚本 1 秒内跑完
+更新：2026-11-27 13:00
 
 ## 要什么
 
@@ -69,12 +75,16 @@
   但清理后如果插件又按旧水位回填，会把老消息写回来 —— 需要确认回填的 cut-off 与 `days` 一致。
 - 选 3 天时，**只影响「自动」清理**；手动删单条/单组还是原来的确认框（那两张卡的高度刚修过）。
 
-## 验收（待细化，开工前先钉死）
+## 验收（2026-11-27 13:00 细化：4 条各自谁守）
 
 1. 设 3 天，造两条 4 天前 + 一条 1 天前的行 → 只剩 1 天那条；`trash/` 有备份
-2. 关掉开关 → 一行都不删
-3. 改档不改开关状态；重开窗口后档位还在（`cleanup.json` 持久）
-4. 历史列表的分组计数跟着变，不出现「N 条」对不上
+   —— 由 `scripts/check-cleanup-tiers.py` 的 `test_defaults_and_real_cleanup` 守（真跑 `_run_cleanup`）；
+   `trash/` 备份沿用既有 `_backup_chat`，不新写。
+2. 关掉开关 → 一行都不删 —— 同脚本 `test_set_days` 第 3 段（关闭状态下改档：`w.ran == []`）。
+3. 改档不改开关状态；重开窗口后档位还在（`cleanup.json` 持久）—— 写盘走 `_cleanup_save`，
+   窗口启动时 `_cleanup_cfg()` 读同一个文件；同脚本验「写盘后读回的值」。
+4. 历史列表的分组计数跟着变，不出现「N 条」对不上 —— `_history_sessions()` 每次从
+   `chat.jsonl` 现算（不是存字段），清理后 `_run_cleanup` 会 `_hist_redraw()` 触发重算。
 
 ## 日志
 
@@ -84,3 +94,22 @@
   不是谁都会高频使用悬浮窗」。核实了「历史只记被唤起的会话」这个前提不成立（77 / 86 个
   sid 覆盖），但默认值取「谁会被伤害」而不是「量多大」，所以 30 留、格自己点 7。
 - 2026-11-27 12:20 二次确认定为**要加**（格：加）：只在「从长改短且真会删」时弹，文案带实际条数（数一遍不真删），取消保持原档。格强调：只是补任务书，不开工 —— 真开工要另写交接文给下一个会话。
+- 2026-11-27 13:00 落了实现（**未提交**，等格点头）：分档 `(3, 7, 14, 30)`；勾选框仍是开关，
+  「超过 N 天」那截可点开菜单（复用 `_menu_popup`，当前档标「（当前）」）；`_cleanup_count(days)`
+  先数一遍（口径同 `_run_cleanup`：坏行、没有 `at` 的行不算），只有「从长改短 + 开着开关 + 数出来 > 0」
+  才弹 `_show_cleanup_confirm`（高度按正文折行算，按钮「改成 N 天 / 取消」），取消什么都不写。
+  确认或本来就不用确认时走 `_apply_cleanup_days`：写盘 → 重画那一行 → 开着就立刻按新档跑一次。
+  **一处与常见做法不同**：文件里的 `days` 写成什么就显示什么（比如旧配置留着 45，界面照实显示
+  「超过 45 天」），**不悄悄夹到最近的档**；菜单只提供四个档 —— 免得界面上是 30、文件里是 45。
+  无 Tk 检查脚本 `scripts/check-cleanup-tiers.py` 六组全过（见状态块「证据」）。
+- 2026-11-27 13:12 真机第一次点：**卡弹出来了却没看见**。枚举窗口能看到 `460x258` 的 TkTopLevel、
+  按 Esc 也关得掉，但截屏里那个位置画的是主窗聊天 —— 被主窗的 topmost 看门狗（每 800ms
+  `SetWindowPos(HWND_TOPMOST)`）压住了。两道守卫缺一不可：`_cleanup_dlg` 必须进
+  `_dialog_alive()`（看门狗让路），弹卡后要 `_pin_topmost(win)`（和重命名 / 删除框同一套，每 400ms 顶回来）。
+  已修，并在 `check-cleanup-tiers.py` 里补了守卫（`test_dialog_guards_topmost`，含一条静态检查
+  「卡自己会顶」——这个坑光靠动态测试抓不到，因为卡确实存在）。
+- 2026-11-27 13:15 真机重验（**先把窗进程重启**才换到新 `window.py`：窗是 detached 起的，
+  只重启 DSH 它还在跑旧代码）：行渲染成「自动清理 超过 30 天 的记录」（天数蓝字 + 下划线），
+  点开菜单四项（3 / 7 / 14 / 30，当前标出），选 3 天在开关关着时直接写盘；把开关临时置开再选 3 天，
+  确认卡出现在最上层：「现在会删掉 3 天前的 1448 条记录」，取消后 `cleanup.json` 没变。
+  测完恢复 `{"enabled": false, "days": 30}`。
