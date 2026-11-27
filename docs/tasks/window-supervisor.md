@@ -3,7 +3,7 @@
 
 # 悬浮窗做 DSH 的监护进程：独立启动 / 重启 DSH / 回来自核
 
-状态：可验收（真机两轮：重启 + 回执都验到；`0.1.1-more.39` 已装进 profile，未 commit、未发版）
+状态：可验收（真机两轮：重启 + 回执都验到；`.39` 已装进 profile，已 commit `4aa3fd9`，未发版）
 对象：把悬浮窗从「DSH 的附属 UI」变成「活得更久、能操作 DSH 的监护进程」。第一版只做两件：**能把 DSH 重启、回来自己核一遍并回报**（独立启动已降 P2，理由见下）。**不做第二个 agent，不做 DSH 的 fork。**
 归属：session-7ef46cbe-1f6f-458e-a891-337033107248 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
 下一步：再点一次「重启 DSH」——这次宿主起来的是 `.39`，会写 `host.json` 并落回执
@@ -83,10 +83,10 @@
 **重启本身成立**。但窗口 120 秒没等到 `host.json`（`.38` 没这段代码），报了一次 `host-not-back`
 —— 那是误报，已改成 `degraded`（见日志 11:43）。
 
-还剩两件（都不是功能）：
+还剩一件（不是功能）：
 
-1. commit（规则：能跑的小功能先让格确认；她已用真机点过两次）
-2. 发版（tag + Release）等她点头；`-more.N` 是预发布，Release 标 prerelease
+- 发版（tag + Release）等她点头；`-more.N` 是预发布，Release 标 prerelease。代码已 commit
+  `4aa3fd9`，`main` 领先 tag 是本仓常态（见 `docs/决策记录.md` 的发版六步）。
 
 ## 真机第二轮（2026-11-27 11:42，`.39` 已在 profile）
 
