@@ -15,7 +15,7 @@
   - 别人家有：`dshmarket/lib/restart.js`（`restartAllowed` / `detectedSupervisor` / `scheduleRestart`）
   - 桌面端位置：`H:\DSH\Current\DeepSeek Harness.exe`（Electron）
 账：无需（本轮只读代码 + 写文档）
-更新：2026-11-27 10:51 CST
+更新：2026-11-27 10:55 CST
 
 ## 为什么这件事值得单开一份
 
@@ -51,7 +51,7 @@
 ### 2. 窗能发起重启（独立启动已降 P2，不挡这一步）
 
 - **重启动作走已有的 outbox 通道**（`window-outbox.jsonl`，`window_protocol.py:1-14`）：不新开路由、不动工具契约。
-- **编排**：确认旧 pid 真退出 → 按 `host.json` 的坐标 spawn → 轮询心跳/端口直到回来（上限 60 秒）→ 失败报原因并**停手**。回来时按 `hostStart` 的姿态（见 P2）：静默就不弹主窗、不抢焦点。
+- **编排**：确认旧 pid 真退出 → 按 `host.json` 的坐标 spawn → 轮询心跳/端口直到回来（上限 60 秒）→ 失败报原因并**停手**。回来时窗口会亮一下——桌面端没有静默启动，见 P2 的判定。
 
 ### 3. 回来之后自核三件，写回窗里
 
@@ -71,11 +71,13 @@
 ## P2（降级，不挡 P1）
 
 - **独立启动**：一个 `.lnk` / `.bat` 拉起 `window.py`，不依赖 DSH；连不上宿主时给「DSH 没开，要我拉起来吗」，而不是静默空转。只在「连窗也关掉了、又想不手开 DSH」时才有用。
-- **跟着静默启动宿主**（格 2026-11-27 补）：从窗启动时，可以让 DSH 一起起来，但**不出主窗、不抢焦点、不进任务栏**。定义先写死，否则各人理解不同。
-  - 选项形状：`hostStart: 'ask' | 'silent' | 'never'`，存 `see-now.json`，默认 `ask`（第一次从窗启动且没宿主时问一次，记住选择）。
-  - 无宿主时才生效；DSH 已在跑（单实例）就是 no-op。
-  - **同一个姿态也管 P1 的重启**：窗发起的重启回来时，也按这个选项——静默就等它起来但不弹主窗，否则你正看着别的东西会被抢焦点。
-  - **待验**：桌面端 Electron 壳是否支持静默启动（`--hidden` / `--minimized` 之类）。查不到就走备选：拉起的是 headless 主机（`resources/runtime/cli` 那套 CLI），窗连它，桌面端仍由你哪天自己开。两条路的差别要写进实现前的验证里，不能假设。
+- **跟着静默启动宿主 —— 判定：不做**（格 2026-11-27 收，11-27 10:55 验完）。桌面端没有静默启动：
+  - `lib/main.js:20405` 全文件唯一读命令行开关的地方是 `--updated`，没有 `--hidden` / `--minimized`；
+  - `lib/main.js:21515-21521` `enterWorkspace({activate=true})` → `window.show()`，启动路径 `openInitialWindow()` 不传 `activate`，所以窗口必亮；
+  - 中文文案（`:13072-13206`）里没有「启动时最小化 / 开机自启 / 托盘设置」这类开关；
+  - 备选「起 headless 主机代替」也被 `:13127` 的 `startupAddressInUse` 堵死：桌面端与 `dsh web` **不能同时跑**；
+  - 只剩「起了再从外面 `ShowWindow(SW_HIDE)` 藏掉」，要为一次闪窗维护一套跟窗口逻辑漂移的 hack，格 10:55 说「算了」。
+  - 结论：从窗拉起 DSH 时，**接受它弹一下**。
 - **常驻形态**（托盘 / 热键）：要等独立启动真做了再说；现在判过不搬上游的托盘。
 
 ## 已知的坑（写进代码注释，别靠记性）
@@ -105,3 +107,4 @@
 - 2026-11-27 10:39 交接卡迁到全局：`C:\Users\Administrator\.dsh\offline-card.md`（模板 `~/.dsh/templates/offline-card.md`），本区 `docs/offline-card.md` 删除；规则同步写进全局 `AGENTS.md` 的动作反射，本区不再重复。
 - 2026-11-27 10:41 砍掉「独立启动」：交接卡落到全局 `C:\Users\Administrator\.dsh\offline-card.md` 之后，格关 DSH 时不再需要窗里有模型；而窗平时一直开着（detached），重启的执行端已经在场。所以 P1 从三件减到两件，独立启动与常驻形态并入 P2。
 - 2026-11-27 10:51 补「跟着静默启动宿主」（格提）：从窗启动时可让 DSH 一起起来但不出主窗、不抢焦点。选项 hostStart: ask|silent|never，默认 ask；同一个姿态也管 P1 重启回来时的样子。桌面端是否支持静默启动**待验**，备选是拉起 headless 主机连它。
+- 2026-11-27 10:55 验完并否掉「跟着静默启动」：桌面端无静默启动（唯一 argv 开关是 --updated；启动路径 enterWorkspace 默认 show），headless 备选被 startupAddressInUse 堵死（桌面端与 dsh web 不能同时跑）。剩下的外部隐藏窗口 hack 不值得维护，格说「算了」。从窗拉起 DSH 时接受弹一下。
