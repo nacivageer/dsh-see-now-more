@@ -3,11 +3,11 @@
 
 # 字幕条带图认字幕框：`preset:"subtitle"` 按 `text.region` 裁
 
-状态：可验收（已实现 `246550d`：全屏 / 窗口化 / 文件源 / 小框兜底四项真机通过；未发版）
+状态：已发版（`v0.1.1-more.43` → `6dd91be`；四项真机读数见「证据」）
 对象：让 `see_now({preset:"subtitle"})` 出的长条图**跟着 `text.region` 走**——用户框一次字幕行，
       OCR 和长条图都对上；窗口化播放时也能出对图。不设框 / 窗口源 / 文件源时行为完全不变。
 归属：session-8cf3c4c4-c2cf-4dc8-bd31-702697f46ef0 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：发版时升 `0.1.1-more.43` + Release（prerelease）；按「发版六步」再核一遍 README / schema 后发。
+下一步：无（已随 `.43` 发版）。
 证据：
   - `preset:"subtitle"` 现在固定帧比例带：`src/index.js:175` `SUBTITLE_BAND = [0.84, 1.0, 0.10]`
   - 框存的是屏幕像素 + 取框时的屏幕尺寸：`see-now.json` 的 `text.region = {x,y,w,h,sw,sh}`
@@ -24,7 +24,7 @@
     ④ 小框 100×30（帧内 41×12）→ 图 1276×144 + 图注「字幕框在帧内只有 12px 高（< 16px），按底部条带」
   - 离线：`node --test` **532 pass / 0 fail / 0 skip**（新增 `test/band-region.test.mjs` 4 条）；spec 7476 / 7500
 账：真机 2 次 ffplay（全屏 / 窗口化各一轮）+ 1 次 file 源 + 1 次小框；离线测试 2 轮（14.6s、12.6s）
-更新：2026-11-27 19:58 CST
+更新：2026-11-27 20:14 CST
 
 ## 为什么做
 
@@ -111,3 +111,5 @@
   `sheet` 带 `regionRect` / `bandNote`；`src/index.js` 只在整屏源认框、图注按实际裁法；`src/tool-spec.js`
   加一句（7476 / 7500）；新增 4 条单测。离线 532 全过；重启（23 秒）后四项真机全过，读数见「证据」。
   测完已清掉 `text.region`、停 ffplay、停采集。
+- 2026-11-27 20:1x 随 `.43` 发版：tag `v0.1.1-more.43` → `6dd91be`，Release 标 prerelease；
+  同版带上 README「功能概览」+ 文档精简（`efbf621` / `7cb2c8e` / `8f2edd8`）。profile 副本已装 `.43`。
