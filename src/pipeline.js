@@ -18,7 +18,7 @@
  */
 
 import { bgBorderChanged, bgKeep, changedArea, createScorer, scorePair } from './cuts.js';
-import { createTiers, applyStrategy } from './tiers.js';
+import { createTiers, applyStrategy, thresholdsFor } from './tiers.js';
 import { solve, toRects, splitOneBin } from './pack.js';
 import { composePacked, drawAudioStrip, stripHeight } from './sheet.js';
 import { encodePng } from './png.js';
@@ -357,6 +357,18 @@ export const DEFAULTS = Object.freeze({
   smoothFrames: 6,
   strategy: 'native',
   /**
+   * 档位阈值表（`~/.dsh/see-now.json` 的 `tierCurve`）：`docx`（默认）/ `perceptual`。
+   *
+   * 只决定**一格多大**（档位 1..8 → 格子占比 1/k²），不碰切点门槛（那在 `pacing.js`）。
+   * 建管线时定死，改配置要重开 DSH。
+   */
+  tierCurve: 'docx',
+  /**
+   * 直接给七道阈值（帧/秒）。**给了就以它为准，`tierCurve` 只当名字用** ——
+   * 离线标定（`scripts/sim.mjs`）走这条，不必先加一套曲线。
+   */
+  thresholds: null,
+  /**
    * **积分假切点的档位加成**（照抄 storyboard 的 `MARK_BOOST`，但加了帧数门槛）。
    *
    * 真切点是"换镜头"，假切点是"这一段一直在变、攒够了才切"——后者没有硬边界，
@@ -478,6 +490,7 @@ export function createPipeline(opts = {}) {
   });
   const tiers = createTiers({
     fps, dtFrames: o.dtFrames, smoothFrames: o.smoothFrames,
+    thresholds: o.thresholds ?? thresholdsFor(o.tierCurve),
   });
 
   let q = [];                  // 待判的帧（未来帧确认时最多 ~delay*fps 帧）

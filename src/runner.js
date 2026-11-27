@@ -259,6 +259,14 @@ export function createRunner({
    */
   packStretch = 0,
   /**
+   * 档位阈值表（`~/.dsh/see-now.json` 的 `tierCurve`，默认 `docx`）。
+   *
+   * 和 `packStretch` 同一个理由必须一路带进 `createPipeline`：`tiers` 在建管线时定死
+   * （和 `maxFrames` / `strategy` 一样，运行中改不了）。配置只在启动时读一次，
+   * 所以改 `tierCurve` 要重开 DSH —— 这一点与上游一致。
+   */
+  tierCurve = 'docx',
+  /**
    * 采集函数（默认 `capture.js` 的 `spawnFrames`）。**只为测试**：留底那一路和 `start()`
    * 都从这里起，测试可以塞一个假采集，不必真的开屏 —— 否则每个生命周期用例都要跑 ffmpeg。
    */
@@ -1225,6 +1233,8 @@ export function createRunner({
       audio: { levels: (a, b) => listener.levelsBetween(a, b) },
       scoreNormalize: opts.scoreNormalize ?? scoreNormalize,
       stretch: opts.stretch ?? packStretch,
+      // 档位阈值表（see-now.json 的 tierCurve）：和上面两个同一个理由，必须带进管线
+      tierCurve: opts.tierCurve ?? tierCurve,
     });
     // 记下"这次建管线用的调用方参数"（不含 oneShot）——watch 靠它发现"模式变了"。
     runOpts = { ...opts };

@@ -18,6 +18,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { normalizeTextConfig } from './text-band.js';
+import { TIER_CURVE_KEYS } from './tiers.js';
 
 /** 关掉悬浮窗之后的四档行为（`onWindowClose`）。顺序 = 卡片里的顺序。 */
 export const WINDOW_CLOSE_MODES = Object.freeze(['stop', 'ears', 'rise', 'ghost']);
@@ -90,6 +91,17 @@ export const TUNING_DEFAULTS = Object.freeze({
    * 觉得自己不需要边缘、只想要密度时写 0.2 / 0.3。论证与曲线见 `pack.js` 注释。
    */
   packStretch: 0,
+  /**
+   * 档位阈值表：`docx`（默认，按文档截图那套标定）/ `perceptual`（按人眼瞬时记忆重标，
+   * 一格最多代表 3 秒，中间六道更低 —— 详见 `tiers.js` 的 `PERCEPTUAL_THRESHOLDS`）。
+   *
+   * **只影响一张图里格子多大**，不改切点门槛、不改「一格代表多少秒」的采帧口径。
+   * **只走配置文件，不进工具 schema**（2026-11-27 定）：上游也是这个位置（`tuning.js` + `status`，
+   * schema 里只有逐次调用的 `tier`）；模型单次调用没有标定数据判断该切哪套。
+   *
+   * 建管线时定死（和 `maxFrames` / `strategy` 一样），**改完要重开 DSH**。
+   */
+  tierCurve: 'docx',
 });
 
 /**
@@ -457,6 +469,22 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     }
   }
 
+  /**
+   * 档位阈值表（`tierCurve`）：两套里选一套，认不出的值退回 `docx` 并报出来。
+   *
+   * 上游还有第三个值 `custom`（自填 7 个帧/秒的阈值），**故意没搬**：`perceptual` 还没在
+   * 本机真实素材上出过数，先不开这条后门（见 `docs/tasks/upstream-2x-gap.md` 的 P1-B）。
+   */
+  let tierCurve = TUNING_DEFAULTS.tierCurve;
+  if (raw.tierCurve !== undefined) {
+    const want = typeof raw.tierCurve === 'string' ? raw.tierCurve.trim() : '';
+    if (TIER_CURVE_KEYS.includes(want)) tierCurve = want;
+    else {
+      warnings.push(`tierCurve 只能是 ${TIER_CURVE_KEYS.join(' / ')}`
+        + `（收到 ${JSON.stringify(raw.tierCurve)}），已用默认 ${TUNING_DEFAULTS.tierCurve}`);
+    }
+  }
+
   return {
     enabled,
     onWindowClose,
@@ -489,6 +517,8 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     idleCaptureMin,
     scoreNormalize,
     packStretch,
+    /** 档位阈值表：`docx` / `perceptual`（见上面的校验块与 `tiers.js`） */
+    tierCurve,
     listen: listenCfg.listen,
     lift: liftCfg.lift,
     mirror: mirrorCfg.mirror,

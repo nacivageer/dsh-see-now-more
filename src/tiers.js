@@ -36,6 +36,42 @@
 
 /** 帧/秒。docx 的 7 道阈值 × 30fps。 */
 export const LEVEL_THRESHOLDS = Object.freeze([0.26, 0.6, 0.9, 1.2, 1.8, 2.4, 3.0]);
+
+/**
+ * 第二套阈值（`tierCurve: 'perceptual'`，数据来自上游 0.2.0）：**按人眼瞬时记忆的边界重标**。
+ *
+ * 端点收在里面：3.333 / 0.333 帧每秒 = 一格最多代表 3.0 秒、最少 0.3 秒（旧表是 3.9 / 0.33 秒）。
+ * 中间六道按**等比**排（时长辨别服从 Weber 律，等比比等距更贴近感知）：
+ * `r = (3.333/0.333)^(1/6) = 1.4678`，于是每格代表 `3.00 / 2.04 / 1.39 / 0.95 / 0.65 / 0.44 / 0.30` 秒。
+ *
+ * **中间比旧表低** —— 同样的密度更早进小格子（每张塞更多帧、单帧更小）。上游实测：
+ * PV 11 张→9 张（-18% token/分）、游戏 7→6（-14%），平均档位 +0.5。注意低密度那头反而
+ * 略高（0.333 > 0.26），也就是"安静画面给更大的格子" —— 不是整体变密。
+ *
+ * 只在 `~/.dsh/see-now.json` 写 `"tierCurve": "perceptual"` 时生效；默认仍是 `docx`。
+ */
+export const PERCEPTUAL_THRESHOLDS = Object.freeze([0.333, 0.489, 0.718, 1.054, 1.547, 2.271, 3.333]);
+
+/** 可选的两套表。改默认值之前先看 `scripts/sim.mjs` 的对比数据（`--tierCurve=perceptual`）。 */
+export const TIER_CURVES = Object.freeze({
+  docx: LEVEL_THRESHOLDS,
+  perceptual: PERCEPTUAL_THRESHOLDS,
+});
+
+/** 合法的曲线名（`tuning.js` 的校验与报错文案共用一份，别在两边各写一遍）。 */
+export const TIER_CURVE_KEYS = Object.freeze(Object.keys(TIER_CURVES));
+
+/** 名字 → 七道阈值。**认不出的名字退回 `docx`**：配置写坏了不该把出图弄停。 */
+export function thresholdsFor(curve) {
+  return Object.hasOwn(TIER_CURVES, curve ?? '') ? TIER_CURVES[curve] : LEVEL_THRESHOLDS;
+}
+
+/** `status` 里那一小段：默认 `docx` 一个字符都不占，非默认才报（照上游"只报非默认层"）。 */
+export function tierCurveNote(curve) {
+  if (!curve || curve === 'docx') return '';
+  return ` · 阈值 ${curve}`;
+}
+
 export const HYSTERESIS = 0.05;
 export const TIER_MIN = 1;
 export const TIER_MAX = 8;

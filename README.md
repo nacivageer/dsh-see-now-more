@@ -593,6 +593,7 @@ OCR（Windows 自带识别器，不联网、不下载模型），认出的字随
 | `idleStopMin` | 3 | 没开悬浮窗时，用户这么久没说话 → 收工。`0` = 关掉这条 |
 | `defaultPace` | `normal` | 新会话/重开采集时的默认节奏：`calm` / `normal` / `dense` / `game-economic`。调用里显式传 `pace` 仍然优先 |
 | `speechPacing` | `true` | 按上一句的估计时长排下一轮（中文约 5 字/秒）。`"guard"` = 只在长句时推迟、不比旧节奏密；`false` = 退回固定间隔 |
+| `tierCurve` | `docx` | 档位阈值表：`docx`（按文档截图那套标定）/ `perceptual`（按人眼瞬时记忆重标——端点收在 3.0 秒 / 0.3 秒，中间六道更低）。**只改「一格多大」**：同样的密度更早进小格子，省图但单帧更小；低密度那头反而给更大的格子。不动「多久看一眼」，也不进工具参数（模型看不到它）。建管线时定死，**改完要重开 DSH**；`status` 那一行只在非默认时多出 `· 阈值 perceptual` |
 | `showPriceChip` | `true` | 悬浮窗底栏的「高峰期 / 半价期」标签；`false` 关掉。它由 `window.py` 自己算，**不依赖 `dsh-price-period`**（那个是 DSH 标题栏的独立插件） |
 | `collapsedBubble` | `true` | 折叠时收到模型的新消息弹不弹预览气泡；`false` 只收不弹，消息照常进历史 / 收藏。设置页的「折叠气泡」改的就是这一项，**即时生效** |
 | `speakScope` | `off` | 哪些回复会被念出来：`off` / `notify` / `reaction` / `full`，语义同上一节「朗读范围」；设置页改的就是这一项 |

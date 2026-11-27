@@ -32,6 +32,7 @@ import { pointAndWait, pointerEnabled } from './pointer.js';
 import { captureCrop, validateCropRegion } from './crop.js';
 import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
 import { textStatusLine } from './text-band.js';
+import { tierCurveNote } from './tiers.js';
 import { readBloodbarOnce, readBloodbarWindowOnce } from './bloodbar-capture.js';
 import { todayCounts } from './lift/log.js';
 import { liftLine, liftGearLine } from './lift/status.js';
@@ -837,6 +838,8 @@ async function registerAll(ctx) {
     scoreNormalize: tuning.scoreNormalize,
     // 排布容差（see-now.json 的 packStretch）：默认 0 = 一格都不裁，调高才换密排
     packStretch: tuning.packStretch,
+    // 档位阈值表（see-now.json 的 tierCurve）：docx 默认 / perceptual。建管线时定死，改了要重开
+    tierCurve: tuning.tierCurve,
     // 黑听抬头（see-now.json 的 lift 段）：enabled 决定仅监听时要不要留底
     lift: tuning.lift,
     // 血条读数（P1c）：框过才有；没框时不采（startBloodbarCapture 会直接拒）
@@ -2756,6 +2759,9 @@ async function registerAll(ctx) {
             + `最多 ${sceneMode ? 4 : PACES[paceMode].wakeGapSec} 秒叫一次）`
             // 门槛是常数，归一之后它的含义变了（"参考亮度下"的 12）—— 不写出来会对不上账
             + (tuning.scoreNormalize ? ' · 亮度归一开（暗场/黑边已补偿）' : ' · 亮度归一关')
+            // 档位阈值表：**只报非默认层**（照上游）—— 默认 docx 不占字，换成 perceptual 才出现，
+            // 否则"格子怎么变小了"要去翻 see-now.json 才知道
+            + tierCurveNote(tuning.tierCurve)
             // 收工线：用户改过 see-now.json 时要能看出来，否则"怎么陪我一会儿就停了"查不到
             + `\n收工线：连续 ${tuning.maxAutonomousWakes} 次叫醒没人理`
             // 本轮当前值：#69 那条线唯一的实时读数（用户在主窗说话 → 这里回到 0）
