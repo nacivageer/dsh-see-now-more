@@ -27,7 +27,7 @@ import { isHumanMessage } from './human.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine, openWindow } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
 import { writeHostInfo, finishRestart, queueRestart, readRestartState, restartLine, restartWakeText } from './host-info.js';
-import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
+import { pickRegion, loadRegion, clearRegion, regionText, saveTextRegion, clearTextRegion } from './region.js';
 import { pointAndWait, pointerEnabled } from './pointer.js';
 import { captureCrop, validateCropRegion } from './crop.js';
 import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
@@ -1164,6 +1164,13 @@ async function registerAll(ctx) {
   let lastCfgTextFps = (() => {
     try { return Number(readTuning().text?.fps) || 1; } catch { return 1; }
   })();
+  /** 字幕框现值（`text.region`）的指纹：框变了才热更新文字流 */
+  let lastCfgTextRegion = (() => {
+    try {
+      const r = readTuning().text?.region;
+      return r ? `${r.x},${r.y},${r.w},${r.h},${r.sw},${r.sh}` : '';
+    } catch { return ''; }
+  })();
 
   /**
    * 把一档模式**真的做出来**（2026-11-19 用户要求：设置页要能"一眼开始看"）。
@@ -1260,6 +1267,21 @@ async function registerAll(ctx) {
       lastCfgTextFps = textFps;
       try { runner.setTextFps(textFps); } catch { /* 同上 */ }
       log(`屏幕文字：读字幕采样 ${textFps} fps（即时生效）`);
+    }
+    /**
+     * 字幕框（`text.region`）：框完之后下一帧就按新框取字。
+     * 和 `text.fps` 同一个 1.5 秒轮询 —— 手改配置、或者 `action:"region", for:"text"` 写盘，都从这里进。
+     */
+    const textRegion = (() => {
+      try {
+        const r = t.text?.region;
+        return r ? `${r.x},${r.y},${r.w},${r.h},${r.sw},${r.sh}` : '';
+      } catch { return ''; }
+    })();
+    if (textRegion !== lastCfgTextRegion) {
+      lastCfgTextRegion = textRegion;
+      try { runner.setTextRegion(t.text?.region ?? null); } catch { /* 同上 */ }
+      log(`屏幕文字：字幕框 ${textRegion || '无（按底部条带）'}（即时生效）`);
     }
     // 窗口每点一次都写 `modeAt`（同一个值也算一次）；手改配置没有 modeAt，
     // 就退回按 `mode` 值变化判断。
@@ -2407,15 +2429,39 @@ async function registerAll(ctx) {
        */
       if (action === 'region') {
         /**
+         * `for:"text"`（2026-11-27，`.42`）：这次框的是**字幕那一行**，不是 `watch` 抓哪块。
+         *
+         * 为什么不复用 `region`：两件事的语义完全不同 —— `region` 改的是采集范围（整屏 vs 一块），
+         * 字幕框只改 OCR 从整屏帧的哪一块取字。混在一起，框完字幕 `watch` 就只截那一条了。
+         */
+        const forText = String(args.for ?? '').trim().toLowerCase() === 'text';
+        if (args.for !== undefined && args.for !== '' && !forText) {
+          return {
+            text: `for 只有 "text" 一个值（现在收到「${args.for}」）。框完整屏要抓哪块就别传 for。`,
+            meta: { ok: false, reason: 'bad-for' },
+          };
+        }
+        /**
          * **取消框选（`region:"off"`）不拦**：它不抓屏，只是把存的那块删掉 ——
          * 关着总开关时用户/模型收个尾，没有理由拒。
          * 取框窗要先截一张全屏给你看（`pick_region.py`），那就是"看一眼"，必须拦。
          */
-        if (!/^(off|none|clear)$/i.test(String(args.region ?? '').trim())
-            && !runner.enabled()) {
+        const offArg = /^(off|none|clear)$/i.test(String(args.region ?? '').trim());
+        if (!offArg && !runner.enabled()) {
           return disabledByUser('选择器要先抓一张屏，所以也开不了。');
         }
-        if (/^(off|none|clear)$/i.test(String(args.region ?? '').trim())) {
+        if (offArg) {
+          if (forText) {
+            const had = clearTextRegion();
+            try { runner.setTextRegion(null); } catch { /* 下一帧生效，失败也不挡 */ }
+            lastCfgTextRegion = '';
+            return {
+              text: had
+                ? '字幕框已清掉：读字幕回到「整屏底部那条」的老路子。'
+                : '本来就没设字幕框，读字幕还是按底部那条。',
+              meta: { ok: true, textRegion: null },
+            };
+          }
           const had = loadRegion();
           clearRegion();
           lastRegionKey = null;
@@ -2424,7 +2470,13 @@ async function registerAll(ctx) {
             meta: { ok: true, region: null },
           };
         }
-        const r = await pickRegion({ log });
+        const r = await pickRegion(forText
+          ? {
+            log,
+            hint: '框住字幕那一行（只给读字幕用，不改 watch 抓哪块） · 松手确认 · Esc 取消',
+            save: saveTextRegion,
+          }
+          : { log });
         if (!r.ok) {
           const why = {
             cancelled: '用户取消了框选（Esc / 右键），什么都没改。',
@@ -2434,6 +2486,23 @@ async function registerAll(ctx) {
             failed: `取框失败：${r.detail ?? ''}`,
           }[r.reason] ?? `取框没成（${r.reason}）。`;
           return { text: why, meta: { ok: false, reason: r.reason, detail: r.detail ?? null } };
+        }
+        if (forText) {
+          const box = r.region;
+          const key = `${box.x},${box.y},${box.w},${box.h},${box.sw},${box.sh}`;
+          lastCfgTextRegion = key;
+          try { runner.setTextRegion(box); } catch { /* 下一帧生效 */ }
+          log(`字幕框已选：${key}`);
+          return {
+            text: `字幕框好了：**${box.x},${box.y} ${box.w}×${box.h}**（主屏 ${box.sw}×${box.sh}，物理像素）。\n`
+              + '从下一次采帧起，读字幕只认这一块里的字。\n\n'
+              + '三件事要说给用户：\n'
+              + '- **`watch` 抓哪块没变**：没设采集区域就还是整屏，别以为从此只看这一条。\n'
+              + '- 只对**整屏采集**生效；如果当前是 `region` 模式，读字幕本来就不喂帧。\n'
+              + '- 窗口挪了、分辨率或缩放变了，框会偏 —— 重框一次。\n'
+              + '不要了：`see_now({action:"region", for:"text", region:"off"})`。',
+            meta: { ok: true, textRegion: box },
+          };
         }
         const t = regionText(r.region);
         lastRegionKey = t;

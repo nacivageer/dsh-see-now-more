@@ -133,11 +133,16 @@ export function seeNowToolSpec() {
       region: {
         type: 'string',
         description: '只抓一块矩形，格式 "x,y,w,h"（屏幕物理像素）。通常不用你填 —— 用户说"框这块"'
-          + '就调 `{action:"region"}`，他拖完自动存盘，之后 `watch` 默认用它；`"off"` 取消、回整屏。'
-          + '`crop` 时**必填**：要截的那一块（一次性，不落盘）。'
-          + '配 `source:"window"` 时表示窗口内的那一块（仍按屏幕像素写）。\n'
-          + '限制（要如实告诉用户）：抓的是屏幕上此刻的像素，被别的窗口挡住就只看到遮挡物；'
-          + '抓不到后台 / 最小化窗口；只支持主屏。带区域时帧不再缩小，token 更贵，要省就降 `quality`。',
+          + '就调 `{action:"region"}`，拖完自动存盘，之后 `watch` 默认用它；`"off"` 取消。'
+          + '`crop` 时必填（一次性，不落盘）。配 `source:"window"` 时是窗口内那一块（仍按屏幕像素）。\n'
+          + '限制：只抓此刻屏幕像素，被遮挡就只看得到遮挡物；抓不到后台/最小化窗口；只支持主屏；'
+          + '带区域时帧不缩小、token 更贵，要省就降 `quality`。',
+      },
+      for: {
+        type: 'string',
+        enum: ['text'],
+        description: 'With `action:"region"`: `text` = 框**字幕那一行**（只给读字幕用，不改 `watch` 抓哪块；'
+          + '配 `region:"off"` 清掉）。',
       },
       pace: {
         type: 'string',
@@ -161,17 +166,16 @@ export function seeNowToolSpec() {
         type: 'string',
         enum: ['subtitle'],
         description: '换的是**拿屏幕的哪一块**，不是清晰度：`"subtitle"` = 只取底部 16% 那条'
-          + '（左右各裁 10%），按时间从上到下叠成一张长条图，最多 4 条，默认 quality "ultra"。'
-          + '用户在看带字幕的对话 / 影视时用 —— 整屏 4 帧会把 32px 的字缩成 5px，只能靠猜。'
-          + '代价：条带以上的画面你看不到，别猜那里发生了什么。`preset:""` 或不传即关闭。'
-          + '它不改采集引擎：帧仍来自你给的那个源（屏幕 / 窗口），被别的窗口压住就只看到压住它的东西 —— '
-          + '要稳就用 `source:"window"`。',
+          + '（左右各裁 10%），按时间叠成一张长条图，最多 4 条，默认 quality "ultra"。'
+          + '看带字幕的对话/影视时用 —— 整屏 4 帧会把 32px 字缩成 5px。'
+          + '代价：条带以上看不到，别猜。`preset:""` 或不传即关闭。'
+          + '帧仍来自你给的源，被别的窗口压住就只看到遮挡物 —— 要稳就用 `source:"window"`。',
       },
       task: {
         type: 'string',
         description: 'With `watch`: 用户分配了「盯着」的任务（"我走开一会儿，你帮我看着"）时填一句描述。'
           + '填了循环不停工、不降级，直到用户说「我回来了」；期间每张图记一行到 '
-          + '`~/.dsh/see-now/missed.jsonl`（两张之间的空档另记 `kind:"gap"`），回来时读它汇报错过了什么。',
+          + '`~/.dsh/see-now/missed.jsonl`（空档另记 `gap`），回来时读它汇报错过了什么。',
       },
       mode: {
         type: 'string',
@@ -188,10 +192,9 @@ export function seeNowToolSpec() {
         type: 'string',
         enum: ['screen', 'obs', 'camera', 'file', 'window'],
         default: 'screen',
-        description: '"screen"（默认，整屏）/ "window"（**按窗口抓**，配 `window` 给标题：窗口化游戏、'
-          + '常切到别的窗口、或那一路画面会被压住时用它 —— 抓的是窗口表面，被遮挡照样有）/ "obs" / '
-          + '"camera" / "file"（配 `path` 回放视频，调试用）。改它会重开采集；窗口最小化抓不到，'
-          + 'D3D 独占全屏会自动改抓屏幕。',
+        description: '"screen"（默认，整屏）/ "window"（**按窗口抓**，配 `window` 给标题；'
+          + '被遮挡照样有）/ "obs" / "camera" / "file"（配 `path` 回放视频，调试用）。'
+          + '改它会重开采集；窗口最小化抓不到，D3D 独占全屏会自动改抓屏幕。',
       },
       path: {
         type: 'string',
@@ -204,8 +207,7 @@ export function seeNowToolSpec() {
       window: {
         type: 'string',
         description: '窗口标题里的一段（不用全名），配 `source:"window"` 或 `action:"bloodbar"` 用。\n'
-          + '- `source:"window"`：按这个窗口抓画面 —— 窗口化游戏、常切到别的窗口、窗会被别的窗口压住时用它，'
-          + '抓的是窗口表面，被遮挡照样有。窗口最小化抓不到；D3D 独占全屏会自动改抓屏幕。\n'
+          + '- `source:"window"`：抓这个窗口的画面（被遮挡照样有；最小化抓不到，独占全屏会改抓屏幕）。\n'
           + '- `bloodbar`：抓血条的方式。不传 = 按屏幕抓（`gdigrab`）—— 悬浮窗或别的窗口压到血条上，'
           + '读到的就是压住它的那块；玩全屏游戏、或窗可能压住血条时传标题走 WGC。`"off"` 回到抓屏幕。',
       },

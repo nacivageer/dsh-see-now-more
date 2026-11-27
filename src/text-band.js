@@ -68,6 +68,51 @@ export function bandRect(width, height, band = TEXT_BAND_DEFAULTS.band) {
 }
 
 /**
+ * 字幕框 → 帧内像素矩形（`text.region` 的唯一一份换算）。
+ *
+ * `text.region` 存的是**主屏物理像素 + 取框那一刻的屏幕尺寸**（`sw/sh`），而文字流拿到的帧
+ * 是整屏 `scale` 到画布之后的（`src/capture.js:215`，不裁不补），所以比例是线性的：
+ * `fx = x / sw`。**换采集引擎前先复核这一条**：一旦加了 crop / pad，这个换算法就要重写。
+ *
+ * @param {{x,y,w,h,sw,sh}} region
+ * @returns {{x:number,y:number,w:number,h:number}|null} 宽高不足 8px 或换算不出来时返回 null
+ */
+export function rectFromRegion(width, height, region) {
+  if (!region || typeof region !== 'object') return null;
+  const sw = Number(region.sw);
+  const sh = Number(region.sh);
+  if (!(sw > 0) || !(sh > 0)) return null;
+  const W = Math.max(1, Math.round(Number(width) || 0));
+  const H = Math.max(1, Math.round(Number(height) || 0));
+  const clamp = (v, hi) => Math.max(0, Math.min(hi, Math.round(v)));
+  const x0 = clamp((Number(region.x) / sw) * W, W);
+  const y0 = clamp((Number(region.y) / sh) * H, H);
+  const x1 = clamp(((Number(region.x) + Number(region.w)) / sw) * W, W);
+  const y1 = clamp(((Number(region.y) + Number(region.h)) / sh) * H, H);
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w < 8 || h < 8) return null;
+  return { x: x0, y: y0, w, h };
+}
+
+/**
+ * 这一次该从帧的哪一块取字：**配了字幕框就按框，否则按条带**。
+ *
+ * 只有整屏采集才该传 `region`（runner 那边决定的：窗口 / 文件 / region 源的消息坐标不是屏幕坐标）；
+ * 这里只做"选哪一块 + 算不出来就退回条带"。
+ *
+ * @param {object} config - `normalizeTextConfig()` 的 config
+ * @param {number} width - 帧宽
+ * @param {number} height - 帧高
+ * @returns {{rect:{x,y,w,h}, kind:'region'|'band'}}
+ */
+export function textRectOf(config, width, height) {
+  const boxed = rectFromRegion(width, height, config?.region);
+  if (boxed) return { rect: boxed, kind: 'region' };
+  return { rect: bandRect(width, height, config?.band), kind: 'band' };
+}
+
+/**
  * 从 rgb24 里裁一块。整宽时一次连续拷贝，让过左右边之后每行一次 `copy`
  * （和 `pipeline.js` 的 `cropRect` 同一写法：1280×170 约 20 万字节，1 fps 下可忽略）。
  */
@@ -193,6 +238,8 @@ export function normalizeTextConfig(raw) {
     ...TEXT_BAND_DEFAULTS,
     band: [...TEXT_BAND_DEFAULTS.band],
     ...TEXT_DEFAULTS,
+    /** 字幕框（主屏物理像素 + 屏幕尺寸）；null = 按条带读 */
+    region: null,
   };
   if (raw === undefined) return { config: out, warnings };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -215,6 +262,33 @@ export function normalizeTextConfig(raw) {
     } else {
       warnings.push('text.band 要写成 [y0, y1, insetX]（0 ≤ y0 < y1 ≤ 1，y1-y0 > 0.01，insetX 0–0.4），'
         + '已用默认 [0.8, 1, 0.1]');
+    }
+  }
+
+  /**
+   * 字幕框（`text.region`）：**主屏物理像素 + 取框那一刻的屏幕尺寸**。
+   *
+   * 写像素而不是比例：人能看懂、能手改。校验比 band 严 —— 越界 / 宽高小于 8px / 缺 `sw|sh`
+   * 一律丢弃并 warn，让它退回 `band`（配置写坏不该让"读字幕"整个停掉）。
+   */
+  if (raw.region !== undefined && raw.region !== null) {
+    const r = raw.region;
+    const int = (v) => Number.isInteger(Number(v)) && Number(v) >= 0;
+    const ok = r && typeof r === 'object' && !Array.isArray(r)
+      && int(r.x) && int(r.y) && int(r.w) && int(r.h)
+      && Number.isInteger(Number(r.sw)) && Number(r.sw) > 0
+      && Number.isInteger(Number(r.sh)) && Number(r.sh) > 0
+      && Number(r.w) >= 8 && Number(r.h) >= 8
+      && Number(r.x) + Number(r.w) <= Number(r.sw)
+      && Number(r.y) + Number(r.h) <= Number(r.sh);
+    if (ok) {
+      out.region = {
+        x: Number(r.x), y: Number(r.y), w: Number(r.w), h: Number(r.h),
+        sw: Number(r.sw), sh: Number(r.sh),
+      };
+    } else {
+      warnings.push('text.region 要是 {x,y,w,h,sw,sh}（主屏物理像素 + 取框时的屏幕尺寸，宽高 ≥ 8、'
+        + '不能超出屏幕），已忽略，按 text.band 读');
     }
   }
 
@@ -261,10 +335,16 @@ export function normalizeTextConfig(raw) {
   return { config: out, warnings };
 }
 
-/** 从配置算出 sidecar 的启动尺寸（条带尺寸 × 放大后由它自己算，这里只给输入尺寸与画布） */export function sidecarSizeOf(config, width, height) {
-  const rect = bandRect(width, height, config.band);
+/** sidecar 的启动尺寸：给的是**已经裁好的那一块**（整屏条带 / 字幕框 / 框内原生帧都算） */
+export function sidecarSizeOfRect(rect, config) {
   const canvasH = config.canvasH > 0 ? config.canvasH : Math.round(rect.h * config.scale);
   return { w: rect.w, h: rect.h, scale: config.scale, canvasH };
+}
+
+/** 从配置算出 sidecar 的启动尺寸（自己按 `textRectOf` 选块；外部已有 rect 时用 `sidecarSizeOfRect`） */
+export function sidecarSizeOf(config, width, height) {
+  const { rect } = textRectOf(config, width, height);
+  return sidecarSizeOfRect(rect, config);
 }
 
 /**
@@ -279,9 +359,22 @@ export function textStatusLine(t) {
   const s = t.stats ?? {};
   const ocr = t.ocr ?? {};
   const pct = (x) => Math.round(Number(x) * 100);
+  const where = t.region && !t.regionIgnored
+    ? `字幕框 ${t.region.x},${t.region.y} ${t.region.w}×${t.region.h}（主屏 ${t.region.sw}×${t.region.sh}）`
+    : `条带 ${pct(t.band?.[0])}–${pct(t.band?.[1])}%（左右各让 ${pct(t.band?.[2])}%）`;
+  /**
+   * **没在读**和**读得对不对**是两件事：region 模式根本不喂帧，这时只报条带比例是在骗人
+   * （2026-11-27 发现：设了 region 之后 `status` 照样显示条带，模型看不出为什么没字）。
+   */
+  const note = t.accept === false
+    ? ` · 没在读：${t.why ?? '这个采集源不喂字'}`
+    : (t.region && t.regionIgnored
+      ? ' · 字幕框只在整屏采集时生效（当前按条带）'
+      : '');
   return '屏幕文字：'
     + (ocr.available ? '读数中' : `OCR 不可用（${ocr.why ?? '原因未知'}）`)
-    + ` · 条带 ${pct(t.band?.[0])}–${pct(t.band?.[1])}%（左右各让 ${pct(t.band?.[2])}%）`
+    + ` · ${where}`
+    + note
     + ` · ${t.fps} fps ×${t.scale}`
     + ` · 入流 ${s.lines ?? 0} / 挡下 ${s.blocked ?? 0} / 未确认 ${s.unconfirmed ?? 0} / 判重 ${s.deduped ?? 0}`
     + (t.sampled ? ` · 已送 OCR ${t.sampled} 帧` : ' · 还没采到帧');

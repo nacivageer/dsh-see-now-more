@@ -523,6 +523,91 @@ export function createRunner({
   let textSeq = 0;
 
   /**
+   * 字幕框的原生采集（2026-11-27，`.42`）。
+   *
+   * **为什么不从 watch 的帧里裁**：4K 屏 + `low` 档时帧只有 798 宽，一块 350×360 的字幕框
+   * 从中裁出来只剩 73×75 像素 —— 字高 5px，OCR 一个字都认不出（真机实测：侧车收到的就是
+   * `--w 73 --h 75`，两帧全空）。所以单独起一路 gdigrab 只抓这块、按原生尺寸喂文字流。
+   *
+   * 尺寸上限 `TEXT_CAPTURE_MAX`：框可以框得很大，但没必要把整块画面喂给 OCR；
+   * 5 fps 是**供给上限**，实际抽帧还是文字流按 `text.fps` 节流。
+   */
+  let textRegion = text?.region ?? null;
+  let textRun = null;
+  const TEXT_CAPTURE_MAX = 1600;
+  const TEXT_CAPTURE_FPS = 5;
+
+  function textCaptureSize(box) {
+    const w = Math.max(8, Math.round(Number(box?.w) || 0));
+    const h = Math.max(8, Math.round(Number(box?.h) || 0));
+    const k = Math.min(1, TEXT_CAPTURE_MAX / Math.max(w, h));
+    return [Math.max(8, Math.round(w * k)), Math.max(8, Math.round(h * k))];
+  }
+
+  function startTextCapture() {
+    if (!textStream || !textRegion || textRun) return false;
+    if (!running || !source || source.kind !== 'screen' || source.region) return false;
+    const box = {
+      x: Math.max(0, Math.round(Number(textRegion.x) || 0)),
+      y: Math.max(0, Math.round(Number(textRegion.y) || 0)),
+      w: Math.max(8, Math.round(Number(textRegion.w) || 0)),
+      h: Math.max(8, Math.round(Number(textRegion.h) || 0)),
+    };
+    const [w, h] = textCaptureSize(box);
+    try {
+      const run = spawnCapture({
+        source: { kind: 'screen', region: box, engine: 'gdigrab' },
+        width: w,
+        height: h,
+        fps: TEXT_CAPTURE_FPS,
+        ffmpegPath,
+        onFrame: (f) => {
+          try {
+            textStream.onFrame({ t: f.t, buf: f.buf, width: w, height: h, wall: Date.now(), from: 'box' });
+          } catch { /* 文字流不许拖垮采集 */ }
+        },
+      });
+      textRun = run;
+      textStream.setWholeFrame(true);
+      run.done.then(() => {
+        if (textRun !== run) return;
+        textRun = null;
+        try { textStream.setWholeFrame(false); } catch { /* 已经退了 */ }
+        log('字幕框：那一路上采集退出了，读字幕暂时回到条带（下次开采集会重起）');
+      }).catch(() => {
+        if (textRun === run) textRun = null;
+      });
+      log(`字幕框：单独采一路 ${w}×${h}（原框 ${box.w}×${box.h}，${TEXT_CAPTURE_FPS} fps 供帧）`);
+      return true;
+    } catch (e) {
+      log(`字幕框采集起不来：${e?.message ?? e}（退回按条带读）`);
+      textStream.setWholeFrame(false);
+      return false;
+    }
+  }
+
+  function stopTextCapture() {
+    const run = textRun;
+    textRun = null;
+    try { run?.stop?.(); } catch { /* 已经退了 */ }
+    try { textStream?.setWholeFrame(false); } catch { /* 已经退了 */ }
+  }
+
+  /**
+   * 换字幕框（`see_now({action:"region", for:"text"})` 框完 / 手改配置）。
+   * 正在看的话立刻换那一路采集，不用重开 watch。
+   */
+  function setTextRegion(region) {
+    textRegion = region && typeof region === 'object' ? { ...region } : null;
+    try { textStream?.setRegion(textRegion); } catch { /* 文字流不在也不影响采集 */ }
+    if (running) {
+      stopTextCapture();
+      startTextCapture();
+    }
+    return textRegion;
+  }
+
+  /**
    * 取这段时间的屏幕文字（**消费**：给了就记水位）。
    *
    * `from/to` 与 `attachLines` 同一把尺（上一张 `wallTo` → 这一张 `wallTo`，两头各留 400/800 ms）。
@@ -1018,6 +1103,8 @@ export function createRunner({
     // 留底跟着收工：`stop` 之后「取那一刻」不该再拿到上一场的帧（验收第 5 条）
     stopLiftCapture({ clear: true });
     stopBloodbarCapture({ why: '收工' });
+    // 字幕框那一路跟着收工停；`textRegion` 留着，下次开采集照旧用
+    stopTextCapture();
     // 文字流的 sidecar 跟着收工停（闸门里的字留着：换管线/重开采集继续用）
     try { textStream?.stop(); } catch { /* 已经退了 */ }
     // 采集收工，声音也一起停：一个抓回环的进程常驻在后台，用户是看不见的
@@ -1205,6 +1292,22 @@ export function createRunner({
      */
     const longEdge = LONG_EDGE[q] ?? LONG_EDGE[DEFAULT_QUALITY];
     const [w, h] = src.region ? cellSize(longEdge, src.region) : size;
+    /**
+     * 文字流这一阵吃不吃帧、按哪块取字：
+     *   - `region` 模式**不喂帧**（帧是那块区域，屏幕坐标的字幕框对不上）；
+     *   - `window` / `file` 喂帧，但字幕框（屏幕坐标）不生效 → 按底部条带读；
+     *   - 只有整屏采集才能用 `text.region` 的字幕框。
+     */
+    if (textStream) {
+      const feeds = !src.region;
+      const fullScreen = src.kind === 'screen' && !src.region;
+      textStream.setIntake(feeds, {
+        why: feeds ? null : 'region 模式不读字幕（要整屏，或抓窗口后按条带读）',
+        regionIgnored: feeds && !fullScreen,
+      });
+      // 字幕框是屏幕坐标：只有整屏采集才配用；窗口 / 文件源按条带读
+      textStream.setRegionAllowed(fullScreen);
+    }
     const regionOpts = src.region ? {
       region: src.region,
       // 硬上限 4（6 帧要 3×2 或 6×1，后者长宽比 3.4 —— 今天实测糊掉的就是它）；
@@ -1224,8 +1327,9 @@ export function createRunner({
     // oneShot 由调用方（watch）决定：**只有换清晰度**时置 true（缓冲区刚扔，等攒满等于白等一个窗口）
     const p = createPipeline({
       ...opts, width: w, height: h, ...regionOpts,
-      // 屏幕文字流：region 模式不出字（width/height 是单格尺寸，不是屏幕比例）
-      ...(textStream && !src.region ? { onFrame: (f) => textStream.onFrame(f) } : {}),
+      // 屏幕文字流：region 模式不出字（width/height 是单格尺寸，不是屏幕比例）。
+      // 配了字幕框时 runner 另起一路原生采集，这些帧会被文字流按 `from` 丢掉。
+      ...(textStream && !src.region ? { onFrame: (f) => textStream.onFrame({ ...f, from: 'pipeline' }) } : {}),
       // 按窗口抓：缩放成本压不住 12fps，管线按 8fps 建（`dtFrames` 一起改，见 WGC_FPS 的注释）
       ...(src.kind === 'window' ? { fps: WGC_FPS, dtFrames: WGC_FPS } : {}),
       // 音量条：直接问听声音那条链要 —— 那边已经在算 RMS 了（断句要用），
@@ -1248,6 +1352,8 @@ export function createRunner({
     source = s;
     lastSource = s;
     startedAt = Date.now();
+    // 配了字幕框：另起一路原生采集（见 `startTextCapture` 的注释）
+    startTextCapture();
     const onFrame = (f) => {
       frames += 1;
       // 一帧解码就抛 = 整条管线停摆，这里必须兜住：宁可少一帧，不能让采集线程炸掉
@@ -1555,6 +1661,8 @@ export function createRunner({
     setTextEnabled: (on) => textStream?.setEnabled(on),
     /** 读字幕采样率（设置页「读字幕模式」）：1 = 省、2 = 常，改完即时生效 */
     setTextFps: (fps) => textStream?.setFps(fps),
+    /** 换字幕框（`see_now({action:"region", for:"text"})` 框完 / 手改配置）：下一帧生效，正在看会立刻换那一路 */
+    setTextRegion,
     /**
      * 血条简报（P2）：`{text, below, ratio, at}` 或 `null`。
      * 唤醒文案与 `watch` 结果都拼这一行 —— **只报告，不唤**。

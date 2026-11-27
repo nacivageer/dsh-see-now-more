@@ -14,11 +14,12 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { chatDir, dshHome } from './chat.js';
 import { PACKAGED, hasTkinter, pythonCandidates } from './window.js';
+import { tuningPath } from './tuning.js';
 
 /** 取框窗最多挂多久（用户可能去接杯水）。到点就收掉，不留一个全屏黑罩子在屏幕上。 */
 export const PICK_TIMEOUT_MS = 180_000;
@@ -41,13 +42,60 @@ export function loadRegion(env = process.env) {
 
 export function saveRegion(region, env = process.env) {
   const path = regionFile(env);
+  // **只写四个数**：取框脚本现在会多吐 sw/sh（给字幕框用），但 region.json 的形状不能变
+  const { x, y, w, h } = region ?? {};
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify({ ...region, at: Date.now() }, null, 2), 'utf8');
+  writeFileSync(path, JSON.stringify({ x, y, w, h, at: Date.now() }, null, 2), 'utf8');
   return path;
 }
 
 export function clearRegion(env = process.env) {
   try { unlinkSync(regionFile(env)); return true; } catch { return false; }
+}
+
+/**
+ * 字幕框（`~/.dsh/see-now.json` 的 `text.region`）—— **和 `region.json` 是两件事**。
+ *
+ * 为什么分开：`region.json` 决定 `watch` 抓哪块；字幕框只决定 OCR 从整屏帧的哪一块取字。
+ * 混在一起的话，框完字幕之后 `watch` 就只截那一条了（当年 `subs-band.json` 那条提醒）。
+ *
+ * 形状 `{x,y,w,h,sw,sh}`：主屏物理像素 + 取框那一刻的主屏尺寸（换算帧内比例要用）。
+ * 写盘走 read-modify-write + tmp/rename（和 `index.js` 的 `saveModePref` 同款），
+ * **UTF-8 无 BOM** —— 窗口和插件都拿 `json.load` / `JSON.parse` 读它，BOM 会让两边都读不了。
+ */
+export function saveTextRegion(region, env = process.env) {
+  const path = tuningPath(env);
+  const x = Number(region?.x); const y = Number(region?.y);
+  const w = Number(region?.w); const h = Number(region?.h);
+  const sw = Number(region?.sw); const sh = Number(region?.sh);
+  if (![x, y, w, h, sw, sh].every((v) => Number.isInteger(v)) || w < 8 || h < 8 || sw <= 0 || sh <= 0) {
+    return null;
+  }
+  let cfg = {};
+  try { cfg = JSON.parse(readFileSync(path, 'utf8')) ?? {}; } catch { cfg = {}; }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) cfg = {};
+  const text = cfg.text && typeof cfg.text === 'object' && !Array.isArray(cfg.text) ? { ...cfg.text } : {};
+  text.region = { x, y, w, h, sw, sh };
+  cfg.text = text;
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(cfg, null, 2), 'utf8');
+  renameSync(tmp, path);
+  return path;
+}
+
+/** 去掉字幕框（`text.region` 删键，`text` 段里别的设置留着）。 */
+export function clearTextRegion(env = process.env) {
+  const path = tuningPath(env);
+  let cfg = {};
+  try { cfg = JSON.parse(readFileSync(path, 'utf8')) ?? {}; } catch { return false; }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return false;
+  if (!cfg.text || typeof cfg.text !== 'object' || !Object.hasOwn(cfg.text, 'region')) return false;
+  delete cfg.text.region;
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(cfg, null, 2), 'utf8');
+  renameSync(tmp, path);
+  return true;
 }
 
 /** `{x,y,w,h}` → `"x,y,w,h"`（工具参数、gdigrab 都用这个形状）。 */
@@ -118,13 +166,20 @@ function runPicker(python, script, timeoutMs, env, save = saveRegion, hint = nul
         finish({ result: { ok: false, reason: 'cancelled' } });
         return;
       }
-      let region = null;
-      try { region = JSON.parse(line); } catch { /* 下面统一报 */ }
-      const valid = region && [region.x, region.y, region.w, region.h]
-        .every((v) => Number.isInteger(v)) && region.w > 0 && region.h > 0;
+      let raw = null;
+      try { raw = JSON.parse(line); } catch { /* 下面统一报 */ }
+      const valid = raw && [raw.x, raw.y, raw.w, raw.h]
+        .every((v) => Number.isInteger(v)) && raw.w > 0 && raw.h > 0;
       if (!valid) {
         finish({ result: { ok: false, reason: 'failed', detail: (err || line || `退出码 ${code}`).slice(0, 400) } });
         return;
+      }
+      // 取框脚本会顺带吐主屏物理尺寸（`sw/sh`）：字幕框要拿它把像素换算成帧内比例。
+      // 老脚本没有这两个键 —— 缺了就当没给，走 region 那条路的调用方本来也用不到。
+      const region = { x: raw.x, y: raw.y, w: raw.w, h: raw.h };
+      if (Number.isInteger(raw.sw) && raw.sw > 0 && Number.isInteger(raw.sh) && raw.sh > 0) {
+        region.sw = raw.sw;
+        region.sh = raw.sh;
       }
       // 负坐标 = 框到主屏外面去了，gdigrab 不接受负 offset（见 pick_region.py 第 3 条）
       if (region.x < 0 || region.y < 0) {

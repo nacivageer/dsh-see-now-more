@@ -16,7 +16,7 @@
 
 import { startOcr, resolveOcrPython } from './ocr.js';
 import {
-  bandRect, confirmGapFor, cropRgb24, rgb24ToBgra, rgbDiffRatio, sidecarSizeOf, tidyOcrLine,
+  confirmGapFor, cropRgb24, rgb24ToBgra, rgbDiffRatio, sidecarSizeOfRect, textRectOf, tidyOcrLine,
 } from './text-band.js';
 import { createTextGate } from './text-events.js';
 import { mergeIntervals } from './coverage.js';
@@ -65,6 +65,28 @@ export function createTextStream({
   let paused = false;
   const pauseAfterMs = Math.max(0, Number(cfg.pauseAfterMs) || 0);
   /**
+   * 采集侧这一阵**喂不喂帧**、以及为什么（runner 每次开采集时告诉我们）。
+   *
+   * `region` 模式下 runner 根本不调 `onFrame`，但 `status` 必须知道这件事 —— 否则会照旧
+   * 显示一条条带比例，看起来"在读"，其实一个字都没进。
+   */
+  let intake = { on: true, why: null, regionIgnored: false };
+  /** 上一帧实际取的是哪一块（`region` = 字幕框 / `band` = 底部条带 / `native` = 整帧就是框） */
+  let lastPick = { kind: null, rect: null };
+  /**
+   * 送进来的帧是不是**已经就是那块框**。
+   *
+   * 为什么需要：4K 屏 + `low` 档时，watch 的帧只有 798 宽，从里面裁一块 350×360 的字幕框
+   * 只剩 73×75 像素 —— 字高 5px，OCR 一个都认不出（2026-11-27 真机实测：侧车收到的
+   * 就是 `--w 73 --h 75`）。所以 runner 为字幕框**单独起一路原生分辨率采集**，直接喂整帧。
+   */
+  let wholeFrame = false;
+  /**
+   * 当前采集源**配不配**用字幕框：只有整屏采集才配（字幕框是屏幕坐标）。
+   * 窗口 / 文件源的帧不是屏幕坐标 —— 这时就算配了框也按条带读，否则会裁到不相干的位置。
+   */
+  let regionAllowed = true;
+  /**
    * 覆盖率的两本账（P1 第 3 步）。口径与 `coverage.js` 同一形状：
    *   - 分母 = **采样到「有字」的时长**（OCR 回了至少一行的那几帧，各算一个采样间隔）；
    *   - 分子 = 这些时长里被**入流事件**盖住的部分。
@@ -76,9 +98,9 @@ export function createTextStream({
   const intervalMs0 = Math.round(1000 / Math.max(0.5, Number(cfg.fps) || 1));
   let intervalMs = intervalMs0;
 
-  function ensureOcr(w, h) {
+  function ensureOcr(rect) {
     if (retryAt && now() < retryAt) return null;      // 刚失败过：一分钟内不再敲门
-    const size = sidecarSizeOf(cfg, w, h);
+    const size = sidecarSizeOfRect(rect, cfg);
     const key = `${size.w}x${size.h}/${size.scale}/${cfg.lang}`;
     if (ocr && ocrKey === key) return ocr;
     if (ocr) { try { ocr.stop(); } catch { /* 已经退了 */ } ocr = null; }
@@ -116,8 +138,12 @@ export function createTextStream({
    *
    * `t` 是相对秒（管线时钟），`wall` 是 epoch ms（闸门与台词共用同一个时钟）。
    */
-  function onFrame({ t, buf, width, height, wall }) {
+  function onFrame({ t, buf, width, height, wall, from = 'pipeline' }) {
     if (!cfg.enabled) return;
+    if (!intake.on) return;
+    // 两条来路只认一条：配了字幕框时收原生采集（`box`），否则收 watch 的帧（`pipeline`）。
+    if (wholeFrame && from !== 'box') return;
+    if (!wholeFrame && from === 'box') return;
     if (!buf || !width || !height) return;
     const w = Number(wall) || now();
     if (lastSampleAt && w - lastSampleAt < intervalMs - 5) return;   // 节流（留 5ms 容差给抖动）
@@ -126,9 +152,15 @@ export function createTextStream({
     let rgb;
     let band;
     try {
-      const rect = bandRect(width, height, cfg.band);
-      rgb = cropRgb24(buf, width, height, rect);
-      band = { bgra: rgb24ToBgra(rgb, rect.w, rect.h), w: rect.w, h: rect.h, rect };
+      // 配了字幕框就按框、否则按条带（`textRectOf` 是唯一一份选择逻辑）。
+      // `wholeFrame` = 送进来的帧**本身就是那块框**（runner 为字幕框单独起了一路采集，
+      // 原生分辨率）—— 这时不裁。
+      const pick = wholeFrame
+        ? { rect: { x: 0, y: 0, w: Math.max(1, Math.round(width)), h: Math.max(1, Math.round(height)) }, kind: 'native' }
+        : textRectOf(regionAllowed ? cfg : { ...cfg, region: null }, width, height);
+      lastPick = { kind: pick.kind, rect: pick.rect };
+      rgb = cropRgb24(buf, width, height, pick.rect);
+      band = { bgra: rgb24ToBgra(rgb, pick.rect.w, pick.rect.h), w: pick.rect.w, h: pick.rect.h, rect: pick.rect };
     } catch (e) {
       why = `条带裁剪失败：${e?.message ?? e}`;
       return;
@@ -155,7 +187,7 @@ export function createTextStream({
         return;
       }
     }
-    const engine = ensureOcr(width, height);
+    const engine = ensureOcr(band.rect);
     if (!engine) return;
     busy = true;
     sampled += 1;
@@ -229,6 +261,16 @@ export function createTextStream({
     return {
       enabled: cfg.enabled,
       band: cfg.band,
+      /** 字幕框（`text.region`）；null = 按条带读 */
+      region: cfg.region ?? null,
+      /** 这一阵喂不喂帧 + 为什么（runner 开采集时设置） */
+      accept: intake.on,
+      why: intake.why,
+      /** 配了框、但当前采集源不是整屏 → 框不生效，按条带读 */
+      regionIgnored: intake.regionIgnored,
+      /** 上一帧实际取的是 `region` 还是 `band` */
+      picked: lastPick.kind,
+      pickedRect: lastPick.rect,
       fps: cfg.fps,
       lang: cfg.lang,
       scale: cfg.scale,
@@ -284,6 +326,58 @@ export function createTextStream({
     return cfg.fps;
   }
 
+  /**
+   * 运行期换字幕框（`see_now({action:"region", for:"text"})` 框完、或手改了配置）。
+   *
+   * 清掉基准帧和静默计时：新框里的像素与旧框无可比性，留着会把第一帧判成"没变化"。
+   * sidecar 的尺寸跟着矩形变，`ensureOcr` 的 key 一变就自动重启（协议里没有逐帧头）。
+   *
+   * @param {{x,y,w,h,sw,sh}|null} region
+   */
+  function setRegion(region) {
+    cfg.region = region && typeof region === 'object' ? { ...region } : null;
+    lastPick = { kind: null, rect: null };
+    lastBandRgb = null;
+    quietMs = 0;
+    paused = false;
+    return cfg.region;
+  }
+
+  /**
+   * 告诉文字流「接下来送进来的帧本身就是那块框」（runner 起了原生分辨率采集时）。
+   * 切回来时清基准帧：两种帧的尺寸和内容都不同，留着比会把第一帧判成"没变化"。
+   */
+  function setWholeFrame(on) {
+    const next = Boolean(on);
+    if (next === wholeFrame) return wholeFrame;
+    wholeFrame = next;
+    lastPick = { kind: null, rect: null };
+    lastBandRgb = null;
+    quietMs = 0;
+    paused = false;
+    return wholeFrame;
+  }
+
+  /** 这个采集源配不配用字幕框（只有整屏采集配）。不配时按条带读，status 里也说清楚。 */
+  function setRegionAllowed(on) {
+    regionAllowed = Boolean(on);
+    return regionAllowed;
+  }
+
+  /**
+   * 采集侧告诉文字流「这一阵喂不喂帧、为什么」。
+   *
+   * `region` 模式下 runner 不喂帧（现状），但必须把原因带过来 —— 否则 `status` 会继续
+   * 显示一条条带比例，看起来在读、其实没字。窗口 / 文件源照喂，但字幕框（屏幕坐标）不生效。
+   *
+   * @param {boolean} on
+   * @param {{why?:string|null, regionIgnored?:boolean}} [o]
+   */
+  function setIntake(on, { why = null, regionIgnored = false } = {}) {
+    intake = { on: Boolean(on), why: why ?? null, regionIgnored: Boolean(regionIgnored) };
+    return { ...intake };
+  }
+
   return {
     onFrame,
     between,
@@ -291,6 +385,10 @@ export function createTextStream({
     stop,
     setEnabled,
     setFps,
+    setRegion,
+    setWholeFrame,
+    setRegionAllowed,
+    setIntake,
     /** 测试用：等手上这一帧识别完 */
     settled: () => inFlight ?? Promise.resolve(),
   };

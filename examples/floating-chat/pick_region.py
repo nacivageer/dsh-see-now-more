@@ -105,7 +105,9 @@ def main() -> int:
         x, y, w, h = rect
         if w < MIN_SIDE or h < MIN_SIDE:
             return                     # 误触：留着让用户接着拖
-        print(json.dumps({"x": x, "y": y, "w": w, "h": h}), flush=True)
+        # `sw/sh` = 主屏物理尺寸（DPI aware 之后的坐标就是这个量纲）：字幕框要拿它把
+        # 像素换算成帧内比例。老 Node 只读前四个键，多这两个不影响。
+        print(json.dumps({"x": x, "y": y, "w": w, "h": h, "sw": sw, "sh": sh}), flush=True)
         root.destroy()
 
     def cancel(_e=None) -> None:
