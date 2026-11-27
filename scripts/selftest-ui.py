@@ -11,6 +11,11 @@
 topmost 带里，关着就不能在（设置页「保持置顶」）。关着时被别的窗口压住是正常的，
 所以「遮挡」那条从 WARN 降成 PASS、命中测试降成 WARN。
 
+**主窗靠属主认，不靠面积、也不靠标题**（2026-11-27）：弹窗都是 owned window
+（`GW_OWNER` = 主窗），于是「没有属主的 Tk 顶层窗」就是主窗。两个反例都实测到了 ——
+设置卡能比主窗还高（560x1374 vs 590x935），按面积会挑错；Tk 给所有 Toplevel 用同一个
+WM_NAME（`overrideredirect` 下看不见，但都是 'DSH'），按标题数实例会把弹窗数成第二个主窗。
+
 输出一律 ASCII：本机 python 的 stdout 是 cp936，中文过管道会变乱码。
 
 退出码：0 = 全部通过（允许 WARN）；1 = 有 FAIL；2 = 找不到悬浮窗（大概是没开）。
@@ -36,6 +41,7 @@ WS_THICKFRAME = 0x00040000
 WS_EX_TOPMOST = 0x00000008
 WS_EX_TRANSPARENT = 0x00000020
 GA_ROOT = 2
+GW_OWNER = 4
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
 SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
@@ -81,6 +87,8 @@ u32.GetAncestor.restype = wintypes.HWND
 u32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
 u32.GetDpiForWindow.restype = wintypes.UINT
 u32.GetDpiForWindow.argtypes = (wintypes.HWND,)
+u32.GetWindow.restype = ctypes.c_void_p
+u32.GetWindow.argtypes = (ctypes.c_void_p, ctypes.c_uint)
 k32.OpenProcess.restype = wintypes.HANDLE
 k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
 k32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD,
@@ -163,10 +171,22 @@ def exstyle_of(hwnd):
     return int(u32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE))
 
 
+def owner_of(hwnd):
+    """属主窗口句柄，0 = 没有属主。
+
+    **主窗和弹窗就靠这个分**（2026-11-27 实测）：主窗 `GW_OWNER` 是 0，设置卡 / 删除确认卡 /
+    回顾窗都是 `GW_OWNER = 主窗`（`_dialogs_topmost` 建的就是 owned window）。按标题分不出
+    来 —— Tk 的 Toplevel 一律沿用 app 名，overrideredirect 下看不见但 WM_NAME 都叫 'DSH'；
+    按面积也分不出来，设置卡能比主窗还高（实测 560x1374 vs 590x935）。
+    """
+    return int(u32.GetWindow(ctypes.c_void_p(int(hwnd)), GW_OWNER) or 0)
+
+
 def describe(hwnd):
     r = rect_of(hwnd)
     return {
         'hwnd': int(hwnd),
+        'owner': owner_of(hwnd),
         'title': title_of(hwnd),
         'cls': class_of(hwnd),
         'pid': pid_of(hwnd),
@@ -289,14 +309,17 @@ def run(argv):
             return 2
         i += 1
 
-    # 回顾窗也是 TkTopLevel：候选按面积降序，主窗通常最大；多个时提示用 --hwnd 指定
+    # 回顾窗 / 设置卡 / 确认卡也是 TkTopLevel，而且可能比主窗还大（实测设置卡 560x1374、
+    # 主窗 590x935），所以**不能按面积挑**。主窗 = 没有属主的那个（同 `owner_of`）。
     cands = sorted((describe(h) for h in find_candidates()), key=area, reverse=True)
     if list_only:
         p('candidates: %d' % len(cands))
         for d in cands:
-            p('  hwnd=0x%X pid=%d class=%s title=%r rect=%s area=%d'
-              % (d['hwnd'], d['pid'], d['cls'], d['title'], d['rect'], area(d)))
+            p('  hwnd=0x%X pid=%d owner=0x%X class=%s title=%r rect=%s area=%d'
+              % (d['hwnd'], d['pid'], d['owner'], d['cls'], d['title'], d['rect'], area(d)))
         return 0
+
+    mains = [d for d in cands if not d['owner']]
 
     target = None
     if want_hwnd:
@@ -306,7 +329,8 @@ def run(argv):
         hits = [d for d in cands if want_title.lower() in (d['title'] or '').lower()]
         target = hits[0] if hits else None
     else:
-        target = cands[0] if cands else None
+        # 没有属主的那个才是主窗；一个都没有（比如已经被别的进程接管）才退回最大的
+        target = mains[0] if mains else (cands[0] if cands else None)
 
     if not target:
         p('NOT-OPEN  no floating window found (TkTopLevel in a python process)')
@@ -318,7 +342,10 @@ def run(argv):
     results = []
     target_pid = target['pid']
     same_pid = [describe(h) for h in enum_windows() if pid_of(h) == target_pid]
-    main_count = len([d for d in cands if d['title'] == target['title']])
+    # 单飞只看**主窗**：弹窗都带属主，而且 Tk 给所有 Toplevel 都用同一个 WM_NAME，
+    # 按标题数会把「开着设置卡 + 一张确认卡」数成 3 个实例（2026-11-27 实测的假红）。
+    main_count = len([d for d in same_pid
+                      if (d['cls'] or '').startswith('Tk') and not d['owner']])
 
     # 0. 配置先读：顶置位的期望值由 keepOnTop 决定（关掉时窗口就不该在 topmost 带）
     state_verdict, state_detail, raw = read_state_file()
@@ -389,9 +416,10 @@ def run(argv):
                        (' (' + ', '.join('%r' % (d['title'] or d['cls']) for d in broken) + ')')
                        if broken else '')))
 
-    # 5. 单飞：同标题的主窗只该有一个
+    # 5. 单飞：一个进程里只该有一个**主窗**（无属主的 Tk 顶层窗）。弹窗自己带属主，
+    #    不该算进来 —— 按标题数的时候「开着设置卡」会被数成 3 个实例（False red）。
     results.append(('single-instance', 'PASS' if main_count == 1 else 'FAIL',
-                    '%d window(s) titled %r' % (main_count, target['title'])))
+                    '%d main window(s) (no GW_OWNER) in pid %d' % (main_count, target_pid)))
 
     # 6. 位置：在虚拟桌面里，且不是个残废尺寸
     x, y, w, h = target['rect']
@@ -433,8 +461,8 @@ def run(argv):
       % (target['hwnd'], target_pid, target['cls'], target['title'], w, h, x, y,
          u32.GetDpiForWindow(hwnd)))
     if len(cands) > 1:
-        p('note: %d tk windows in python processes, picked the largest; --hwnd to pick another'
-          % len(cands))
+        p('note: %d tk windows in python processes, picked the one with no owner '
+          '(the main window); --hwnd to pick another' % len(cands))
     p('')
     counts = {'PASS': 0, 'FAIL': 0, 'WARN': 0}
     for name, verdict, detail in results:
