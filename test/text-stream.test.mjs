@@ -148,3 +148,58 @@ test('关掉时一帧都不送', async () => {
   assert.equal(f.calls.length, 0);
   assert.equal(s.status().enabled, false);
 });
+
+/** 造一帧：条带里前 20% 的像素改亮度（模拟「字幕换句」），其余不动 */
+function frameWithBand(level) {
+  const b = Buffer.from(FRAME);
+  const x0 = 192;                        // bandRect(1920,1080,[0.8,1,0.1]).x
+  const y0 = 864;                        // .y
+  const w = 1536;                        // .w
+  const h = 216;                         // .h
+  for (let y = y0; y < y0 + h; y += 1) {
+    for (let x = x0; x < x0 + Math.floor(w * 0.2); x += 1) {
+      const p = (y * W + x) * 3;
+      b[p] = level; b[p + 1] = level; b[p + 2] = level;
+    }
+  }
+  return b;
+}
+
+test('静默暂停：条带连续没变化就到点停读，有变化立刻恢复', async () => {
+  const f = fakeOcr({ lines: ['你好世界'] });
+  const s = createTextStream({
+    config: { ...CFG, pauseAfterMs: 3000, diffRatio: 0.02 },
+    startOcrFn: f.startOcrFn,
+    resolveFn: () => ({ ok: true, python: 'py' }),
+  });
+  const same = frameWithBand(40);
+  for (let i = 0; i < 6; i += 1) {
+    s.onFrame({ t: i, buf: same, width: W, height: H, wall: 5_000_000 + i * 1000 });
+    await s.settled();
+  }
+  const st = s.status();
+  assert.equal(st.paused, true, '3 秒没变化应暂停');
+  assert.ok(st.sampled <= 4, `暂停后不该再送 OCR，实得 ${st.sampled}`);
+
+  // 条带变了（字幕换句）→ 恢复
+  s.onFrame({ t: 7, buf: frameWithBand(200), width: W, height: H, wall: 5_000_000 + 7 * 1000 });
+  await s.settled();
+  assert.equal(s.status().paused, false, '有变化应恢复');
+  assert.ok(s.status().sampled > st.sampled, '恢复后应重新送 OCR');
+});
+
+test('静默暂停：pauseAfterMs = 0 时永不暂停（老行为）', async () => {
+  const f = fakeOcr({ lines: ['你好世界'] });
+  const s = createTextStream({
+    config: { ...CFG, pauseAfterMs: 0 },
+    startOcrFn: f.startOcrFn,
+    resolveFn: () => ({ ok: true, python: 'py' }),
+  });
+  const same = frameWithBand(40);
+  for (let i = 0; i < 6; i += 1) {
+    s.onFrame({ t: i, buf: same, width: W, height: H, wall: 6_000_000 + i * 1000 });
+    await s.settled();
+  }
+  assert.equal(s.status().paused, false);
+  assert.ok(s.status().sampled >= 5, `不该停，实得 ${s.status().sampled}`);
+});

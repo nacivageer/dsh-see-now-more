@@ -15,7 +15,9 @@
  */
 
 import { startOcr, resolveOcrPython } from './ocr.js';
-import { bandFromFrame, sidecarSizeOf, tidyOcrLine } from './text-band.js';
+import {
+  bandRect, cropRgb24, rgb24ToBgra, rgbDiffRatio, sidecarSizeOf, tidyOcrLine,
+} from './text-band.js';
 import { createTextGate } from './text-events.js';
 import { mergeIntervals } from './coverage.js';
 
@@ -51,6 +53,17 @@ export function createTextStream({
   let sampled = 0;        // 真正送进 OCR 的帧数
   let inFlight = null;    // 最近一个未完成的 Promise（测试等它）
   let lastSampleAt = 0;   // 抽帧节流（wall）
+  /**
+   * 静默暂停（`text.pauseAfterMs`）：条带连续这么久没变化就认为没字幕，不再送 OCR。
+   *
+   * 判据不靠 OCR、只比条带像素（`rgbDiffRatio`）：实测字幕没换时变化率 p90 = 0.00%，
+   * 换句时 7–10%，两档分得很开。视频场景里最长静默只有 3.5 秒，所以 10 秒阈值在
+   * 看视频时永远不会触发；省的是游戏挂机 / 静态界面那种几分钟不动的画面。
+   */
+  let lastBandRgb = null;
+  let quietMs = 0;
+  let paused = false;
+  const pauseAfterMs = Math.max(0, Number(cfg.pauseAfterMs) || 0);
   /**
    * 覆盖率的两本账（P1 第 3 步）。口径与 `coverage.js` 同一形状：
    *   - 分母 = **采样到「有字」的时长**（OCR 回了至少一行的那几帧，各算一个采样间隔）；
@@ -109,15 +122,40 @@ export function createTextStream({
     if (lastSampleAt && w - lastSampleAt < intervalMs - 5) return;   // 节流（留 5ms 容差给抖动）
     lastSampleAt = w;
     if (busy) return;                                               // 上一帧还没回来
-    const engine = ensureOcr(width, height);
-    if (!engine) return;
+    let rgb;
     let band;
     try {
-      band = bandFromFrame(buf, width, height, cfg.band);
+      const rect = bandRect(width, height, cfg.band);
+      rgb = cropRgb24(buf, width, height, rect);
+      band = { bgra: rgb24ToBgra(rgb, rect.w, rect.h), w: rect.w, h: rect.h, rect };
     } catch (e) {
       why = `条带裁剪失败：${e?.message ?? e}`;
       return;
     }
+    // 静默暂停：条带跟上一次采样比，没变就不 OCR（判据见 lastBandRgb 的注释）
+    let changed = true;
+    if (lastBandRgb && lastBandRgb.length === rgb.length) {
+      changed = rgbDiffRatio(lastBandRgb, rgb) >= (Number(cfg.diffRatio) || 0.02);
+    }
+    lastBandRgb = rgb;
+    if (changed) {
+      if (paused) {
+        paused = false;
+        log(`屏幕文字：条带又有变化，恢复 OCR（静默 ${Math.round(quietMs / 1000)}s）`);
+      }
+      quietMs = 0;
+    } else {
+      quietMs += intervalMs;
+      if (pauseAfterMs > 0 && quietMs >= pauseAfterMs) {
+        if (!paused) {
+          paused = true;
+          log(`屏幕文字：条带 ${Math.round(quietMs / 1000)}s 没变化，暂停 OCR（有变化自动恢复）`);
+        }
+        return;
+      }
+    }
+    const engine = ensureOcr(width, height);
+    if (!engine) return;
     busy = true;
     sampled += 1;
     const at = w;
@@ -195,6 +233,9 @@ export function createTextStream({
       scale: cfg.scale,
       sampled,
       busy,
+      /** 静默暂停中：条带连续 `pauseAfterMs` 没变化，没在送 OCR */
+      paused,
+      quietSec: +(quietMs / 1000).toFixed(1),
       ocr: { available: Boolean(ocr) && !why, why },
       stats: gate.stats(),
       /** 覆盖率账：`{hasTextSec, coveredSec, pct}`（pct 的分母就是 hasTextSec） */
@@ -206,6 +247,9 @@ export function createTextStream({
     const o = ocr;
     ocr = null;
     ocrKey = '';
+    lastBandRgb = null;
+    quietMs = 0;
+    paused = false;
     try { o?.stop(); } catch { /* 已经退了 */ }
   }
 
@@ -218,6 +262,8 @@ export function createTextStream({
   function setEnabled(on) {
     cfg.enabled = Boolean(on);
     if (!cfg.enabled) stop();
+    // 重新打开时清掉基准帧：否则第一帧会跟「关掉之前那一帧」比，判成没变化白白静默
+    else { lastBandRgb = null; quietMs = 0; paused = false; }
     return cfg.enabled;
   }
 
