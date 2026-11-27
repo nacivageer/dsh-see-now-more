@@ -372,13 +372,17 @@ def run(argv):
                   % (hits[0][0], hits[0][1]))
     results.append(('not-click-through', verdict, detail))
 
-    # 4. 同进程的可见窗全在 topmost 带：弹窗被主窗盖住是踩过的坑（_pin_topmost）。
-    #    主窗自己不算「弹窗」：关掉置顶时它本来就不该在带里（第 1 条管它）。
+    # 4. 弹窗的 topmost 位要跟 keepOnTop 一致：开着 = 在内（弹窗被主窗盖住是踩过的坑），
+    #    关掉 = 也在外（`.44` 起弹窗跟随开关；2026-11-27 修「已开弹窗跟着翻面」之后，
+    #    关着时还留在带里才是 bug）。主窗自己不算「弹窗」：它归第 1 条。
+    #    原来这里一律要求「全在 topmost 带」，于是开着回顾窗 + 关掉置顶时假红
+    #    （2026-11-27 发 `.45` 时撞上：2 个可见窗、1 个"not topmost"）。
     broken = [d for d in same_pid if d['hwnd'] != target['hwnd']
-              and not (d['ex'] & WS_EX_TOPMOST) and d['rect'] and area(d) > 0]
+              and bool(d['ex'] & WS_EX_TOPMOST) != keep_top and d['rect'] and area(d) > 0]
     results.append(('dialogs-topmost', 'PASS' if not broken else 'FAIL',
-                    '%d visible window(s) in pid %d, %d not topmost%s'
-                    % (len(same_pid), target_pid, len(broken),
+                    'keepOnTop=%s: %d visible window(s) in pid %d, %d %s%s'
+                    % ('on' if keep_top else 'off', len(same_pid), target_pid, len(broken),
+                       'missing topmost' if keep_top else 'still topmost',
                        (' (' + ', '.join('%r' % d['title'] for d in broken) + ')') if broken else '')))
 
     # 5. 单飞：同标题的主窗只该有一个
