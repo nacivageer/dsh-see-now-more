@@ -1,15 +1,15 @@
-<!-- 来源：格 2026-11-27 12:04（截图：历史列表底部那行勾选）。
+﻿<!-- 来源：格 2026-11-27 12:04（截图：历史列表底部那行勾选）。
      本文件只记需求与方案，代码一行没动；与图库 offload 同批做。 -->
 
 # 历史自动清理：从「30 天」改成 3 / 7 / 14 分档
 
-状态：可验收（`.41` 工作树里已实现并**真机点过**：菜单 / 直接写盘 / 确认卡 / 取消不动都验了；未提交、未发版）
+状态：已发版（`.41`：实现 + 无 Tk 检查 + 真机点过，tag `v0.1.1-more.41`，Release 已建）
 对象：悬浮窗历史列表底部那行「☐ 自动清理超过 30 天的记录」。现在只有开关，天数只能手改
 `~/.dsh/see-now/cleanup.json`；30 天太宽容，要能选 3 / 7 / 14 天这种更短的口径。
 **与上游图库 offload（`docs/tasks/upstream-2x-gap.md` 的 P1-A）同批改**：两者拧的是同一个旋钮
 ——「留多少 / 留多久」，口径要一次讲清，别一边留 300 张图、一边留 30 天记录。
 归属：session-7ddde171-5173-4bc3-bb17-4da93474712d / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：随 `.41` 一起提交 → 打 tag `v0.1.1-more.41` + Release（prerelease）。
+下一步：已完成（随 `.41` 发版）。以后要加档位只改 `CLEANUP_TIERS` + 菜单文案。
 证据：
   - 实现（2026-11-27 13:00）：`window.py` 的 `CLEANUP_TIERS = (3, 7, 14, 30)` / `_cleanup_count` /
     `_show_cleanup_tiers` / `_set_cleanup_days` / `_apply_cleanup_days` / `_show_cleanup_confirm`；
@@ -113,3 +113,4 @@
   点开菜单四项（3 / 7 / 14 / 30，当前标出），选 3 天在开关关着时直接写盘；把开关临时置开再选 3 天，
   确认卡出现在最上层：「现在会删掉 3 天前的 1448 条记录」，取消后 `cleanup.json` 没变。
   测完恢复 `{"enabled": false, "days": 30}`。
+- 2026-11-27 13:16 随 `.41` 发版（tag `v0.1.1-more.41`，Release prerelease）；真机验的窗口是重启后的窗进程（detached，DSH 重启它不跟着换代码）。

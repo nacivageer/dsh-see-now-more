@@ -1,12 +1,12 @@
-<!-- 来源：session-7ef46cbe（see-now-more 会话）。依据：上游 v0.2.9 的 CHANGELOG 与本仓源码对表。
+﻿<!-- 来源：session-7ef46cbe（see-now-more 会话）。依据：上游 v0.2.9 的 CHANGELOG 与本仓源码对表。
      2026-11-27 写；只做判定，没动代码。 -->
 
 # 上游 0.2.x 差距与采纳计划
 
-状态：可验收（`.41`：offload 与清理分档都已实现、**真机验过**（宿主 96200 → 100932）；未提交、未发版）
+状态：已发版（`.41`：offload 与清理分档都已实现、真机验过、打了 tag `v0.1.1-more.41` 并建 prerelease）
 对象：把上游 `SAOS-3624/dsh-see-now` 从 v0.1.2 到 v0.2.9 之间、与本仓方向相符的能力列成判定表（搬 / 只抄数据 / 不搬），并挑出一批能立刻开工的。
 归属：session-7ef46cbe-1f6f-458e-a891-337033107248 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：等格点头 → 提交两份实现（offload + 清理分档）→ `install-dev` + 重启真机验 → 打 tag `v0.1.1-more.41` + Release（prerelease）。
+下一步：两件已在 `.41` 发版（`986a8d3` / tag `v0.1.1-more.41`）。剩下的上游差距见表里的「只抄数据 / 不搬」；
 证据：
   - 宿主**有** `image/offload`：`@deepseek-ai/dsh-compaction-image-offload` 在 asar 里（`dsh/node_modules/...`，
     含投影 / 校验 / 重试），`dsh-base/cordis.patch.yml` 的 `- id: image-offload` 挂载它，
@@ -117,3 +117,4 @@
   - offload：临时阈值 2 / 1，两次 `watch` 后会话日志出现 `image/offload`，`targets=[{seq:1240,imageIndexes:[0]}]`（省旧留新）；改回 300 / 100 热读生效，测完删键。
   - 清理分档：真机第一次点，**卡弹出来却被主窗 topmost 看门狗盖住**（枚举能看到 460×258、Esc 能关，截屏里却是聊天）——`_cleanup_dlg` 漏了 `_dialog_alive()` 和 `_pin_topmost`，已修并补静态守卫；重启**窗进程**后重验通过（菜单四项、直接写盘、确认卡「会删掉 1448 条」、取消不动）。
   - 一处要记的坑：`window.py` 改了只重启 DSH 不够 —— 窗进程是 detached 起的、跨 DSH 重启常驻，得单独重启窗进程才换到新代码。
+- 2026-11-27 13:16 发版 `.41`：tag `v0.1.1-more.41` → `986a8d3`，Release 标 prerelease（https://github.com/nacivageer/dsh-see-now-more/releases/tag/v0.1.1-more.41）。真机回执「已回到 v0.1.1-more.41（会话发起，宿主 96200 → 100932，用时 22 秒）· 工具已注册 · 采集未开」。
