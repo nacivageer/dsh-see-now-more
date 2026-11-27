@@ -2,6 +2,61 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.45] - 2026-11-27
+
+### Fixed — 已经开着的弹窗也跟随「保持置顶」
+
+- `.44` 的已知边界收掉：弹窗的 topmost 位原来只在创建那一刻定一次，于是「先开确认框 /
+  回顾窗、再去设置页关掉置顶」之后，那张框还留在 topmost 带里，而且再没有代码会去撤它
+  （`_pin_topmost` 关着时只是不再排下一拍）。现在 8 个弹窗在 `_dialogs_topmost()` 里登记进
+  活弹窗表，开关翻面时 `_follow_dialogs_topmost()` 一起改档：关 → 当场退出 topmost 带；
+  开 → 进带并补一条 400ms 的顶置链。
+- 两个入口都走这条：设置页那一行（`_apply_topmost`）、手改 `see-now.json` 之后的看门狗
+  （`_keep_on_top`），换哪个入口翻面都跟得上。
+- 补链要防重复：`_pin_topmost` 是自续的匿名链，现在窗口上挂 `_see_now_pin`，重复翻面不会
+  叠出第二条链。
+
+### Fixed — 设置卡的位置关掉再开还在（记相对悬浮窗的偏移）
+
+- 拖过的位置现在记进 `~/.dsh/see-now.json` 的 `settingsCardOffset`，存的是**设置卡相对
+  悬浮窗左上角的偏移**（不是屏幕绝对坐标）：下次打开按悬浮窗当前位置还原，窗口挪到别的
+  显示器时卡片跟着保持同一个相对位置。
+- 松手时写的是**夹过**的那一对（拖出屏幕会被拉回虚拟桌面内），读回时再按当次卡片尺寸夹一次
+  （展开声音 / 朗读范围会让卡片变高）。
+- 删掉这一项就回到默认位置（跟着主窗、中间偏上）。
+- 写盘撞上「文件正被读 / 被扫」（Windows 的 `os.replace` 会抛 `PermissionError`）时重试两次，
+  不再静默丢一次设置。
+
+### Changed — 回顾列表滚动不再每格重读 chat.jsonl
+
+- 「记录列表滚起来卡手」的根因不是画得慢：每滚一格整页重画，而重画前要把 `chat.jsonl`
+  （真机 1.7 MB / 2236 行）整份解析**两遍**（`_history_sessions` + `_chat_sessions`），各 47 ms。
+  现在解析按文件 mtime/size 缓存，一格滚动的解析账从 ~94 ms 降到 ~4 ms。
+- 滚轮按 `e.delta` 的大小换算（120 = 一格 70px），精密触控板的小 delta 不再被当成一整格；
+  余量累加，撞到边界丢弃。
+- 快速滚动的多个事件合并成 12 ms 内一次重画，不再排队堆积。
+
+### Changed — 生成链的守卫说真话（不影响装出来的行为）
+
+- `npm run check:window` 以前在开发机上拿 `window.py` 跟自己比（`~/.dsh/see-window.json`
+  的 `script` 就指向本仓文件），永远报「一致」。现在按路径排除自指：没有可比的上游时
+  **exit 2「无法判断」**，不再把「不知道」报成通过。
+- `window.py` 文件头那句「请勿手改（要改请改上游）」改成本仓已分叉、改这里并提交 ——
+  那句和本仓的实际纪律（`docs/决策记录.md`「不跑 `npm run sync:window`」）相反。
+
+### 验收
+
+- `node --test` **538 pass / 0 fail / 0 skip**（新增 `test/history-scroll.test.mjs`、
+  `test/sync-window.test.mjs`；版本 / 插件名 / CHANGELOG 三条守卫过）。
+- `scripts/check-history-scroll.py`：按**读文件次数**验（不按计时）—— 连问四次 `chat.jsonl`
+  只许读一次、追加会话后缓存必须失效、滚轮换算 / 余量 / 边界、五连滚只排一次重画。
+- `scripts/check-topmost-toggle.py`：新增「已开弹窗跟着翻面」—— 关 → 退带、开 → 只补一条链、
+  手改配置也跟、窗口销毁后自动出表；源码守卫钉住两个入口都要调。
+- `scripts/check-settings-card.py`：新增 `settingsCardOffset`（含「主窗挪到 (1000,300) 后卡片
+  落在 (1600,500)」这条专治绝对坐标）与写盘重试。
+- 真机（4K / 150%）：格亲测「已开弹窗跟随开关」与「设置卡位置跨打开」（原话「我自己实测
+  验证过了」）、滚动实测后「现在可以了」；`selftest-ui.py` **9 passed / 0 failed / 5 skipped**。
+
 ## [0.1.1-more.44] - 2026-11-27
 
 ### Added — 设置页「保持置顶」开关
