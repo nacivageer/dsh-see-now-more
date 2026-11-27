@@ -20,18 +20,39 @@
  * 这不发生在开发机上，但会发生在「拿到一个 tarball、里面没有兄弟仓库」的时候。
  * 那时如果包内已有旧副本 → **警告放行**（有东西总比没有强）；
  * 两边都没有 → **报错退出 1**（发一个开不了窗的包出去比报错更糟）。
+ *
+ * ## 本仓已分叉：`--check` 在开发机上没有上游可比
+ *
+ * `~/.dsh/see-window.json` 的 `script` 在开发机上就指向本仓的 `window.py`（窗进程
+ * 就是用它起的）。如果把它当成「上游」，比较就是拿文件跟它自己比 —— 永远「一致」，
+ * 2026-11-27 实测过一次，这个闸门当时是个假绿。现在候选里凡是和 DEST 同一个文件的
+ * 一律跳过（`samePath`），于是开发机上会走到「自指」分支：
+ *
+ *   - `--check` → **exit 2**，明说「没有可比的上游，这不是通过」；
+ *   - 正常同步 → 什么都不写（不会把本仓文件覆盖成它自己）。
+ *
+ * 出口码：0 真的一致 / 同步完成；1 真不一致 / 找不到上游且包内也没有；
+ * 2 检查模式下**无法判断**（自指，或本机根本没有上游）。
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REL = join('examples', 'floating-chat', 'window.py');
 const DEST = join(ROOT, REL);
 
-/** 插在 shebang 之后的一行标记。比较内容时会被剥掉，所以不会影响"是否变化"的判断。 */
-const MARK = '# ⚠️ 本文件由 dsh-see-now/scripts/sync-window.mjs 生成，请勿手改（要改请改上游 dsh-watch-together）';
+/**
+ * 插在 shebang 之后的一行标记。比较内容时会被剥掉，所以不会影响"是否变化"的判断。
+ *
+ * 2026-11-27 改：原来这行写「请勿手改（要改请改上游）」，可本仓早就分叉了 —— 改动
+ * 全落在这个文件上（`docs/决策记录.md`「不跑生成链」）。文件头对着每个打开它的人
+ * 说反话，比没有标记更坏，所以文案改成「直接改这里」。
+ */
+const MARK =
+  '# ⚠️ 本文件起自 dsh-watch-together 的同步，但本仓已分叉：改动直接改这里并提交'
+  + '（CONTRIBUTING「别跑生成链」）。别跑 npm run sync:window —— 它会把你改的盖回去。';
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has('--check');
@@ -44,6 +65,10 @@ function say(msg) {
 /**
  * 上游在哪：和 `src/window.js` 的 `resolveScript()` 同一套思路，
  * 但**排除包内那份**（不然就是拿自己同步自己）。
+ *
+ * 「排除」按**路径**判，不按候选来源判：`~/.dsh/see-window.json` 的 `script` 在开发机上
+ * 指向的就是本仓文件，只按来源跳过它就等于没跳过（2026-11-27 实测 `--check` 报了
+ * 「一致」，其实比的是它自己）。
  */
 function findUpstream() {
   const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh');
@@ -77,15 +102,27 @@ function findUpstream() {
     candidates.push({ p: join(root, 'dsh-watch-together', REL), from: '已安装的 watch-together' });
   }
 
+  const selfRefs = [];
   for (const c of candidates) {
-    if (c.p && existsSync(c.p)) return c;
+    if (!c.p || !existsSync(c.p)) continue;
+    if (samePath(c.p, DEST)) { selfRefs.push(c.from); continue; }
+    return c;
   }
-  return null;
+  // 只剩「指向自己」的候选：本仓已分叉，没有可比的另一份
+  return selfRefs.length ? { selfRef: true, from: selfRefs[0] } : null;
 }
 
-/** 剥掉我们插的标记行，用来判断"上游到底变没变"。 */
+/** 两个路径是不是同一个文件（Windows 大小写 / 分隔符不敏感）。 */
+function samePath(a, b) {
+  const norm = (p) => resolve(p).replace(/[\\/]+/g, '\\').toLowerCase();
+  return norm(a) === norm(b);
+}
+
+/** 剥掉我们插的标记行，用来判断"上游到底变没变"。旧文案的标记也认（历史副本）。 */
 function stripMark(text) {
-  return text.split(/\r?\n/).filter((l) => l !== MARK).join('\n');
+  // 两代标记都以 `# ⚠` 开头（旧：请勿手改 / 新：本仓已分叉）；别用 `!` 这类宽松匹配，
+  // 上游任何一行巧合命中的注释都会被削掉，比对的就不是原文了。
+  return text.split(/\r?\n/).filter((l) => !l.startsWith('# ⚠')).join('\n');
 }
 
 function withMark(text) {
@@ -98,11 +135,24 @@ function withMark(text) {
 
 const upstream = findUpstream();
 
+if (upstream?.selfRef) {
+  // 指向自己的候选（开发机上 `~/.dsh/see-window.json` 就是这种）：没有另一份可比。
+  const why = `[sync-window] 上游候选指向本仓文件（${upstream.from}），没有可比的上游。\n`
+    + '  本仓已分叉：改 window.py 直接改这里并提交，别再跑生成链。';
+  if (checkOnly) {
+    process.stderr.write(`${why}\n  所以 --check 无法判断漂移（exit 2 = 没判断，不是通过）。\n`);
+    process.exit(2);
+  }
+  say(why);
+  process.exit(0);
+}
+
 if (!upstream) {
   if (existsSync(DEST)) {
     say('[sync-window] 找不到上游，沿用包内已有那份（' +
       `${readFileSync(DEST, 'utf8').length} 字节）；如果你刚改了窗口，这次同步是无效的。`);
-    process.exit(0);
+    // 检查模式下「不知道」不能报成通过：exit 2 才能在脚本里和真的「一致」分开
+    process.exit(checkOnly ? 2 : 0);
   }
   process.stderr.write(
     '[sync-window] 找不到上游 window.py，而且包内也没有。\n' +

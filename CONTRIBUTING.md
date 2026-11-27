@@ -5,8 +5,10 @@
 1. **范围**：只在 **Windows 10 + DSH 桌面版 `0.2.2-rc.1`** 上验证过；**macOS 不做**（暂不支持，
    见 `docs/决策记录.md`），Linux 未验证；**麦克风输入从未测试**，不知道是否可用。改这些路径前先在对应环境里跑通。
 2. **别跑生成链。** `npm run sync:window` 会用上游 `dsh-watch-together` 覆盖
-   `examples/floating-chat/window.py`，而本仓对这个文件改动很大。只读检查用
-   `npm run check:window`。
+   `examples/floating-chat/window.py`，而本仓对这个文件改动很大 —— 分叉之后的改动
+   **直接改这个文件、提交在本仓**（文件头那行标记也是这么写的）。`npm run check:window`
+   只用来「本机确实有一份别的上游副本」时比漂移：开发机上 `~/.dsh/see-window.json`
+   的 `script` 指的就是本仓文件，这时它报 **exit 2「没有可比的上游」**，那不是通过。
 3. **本仓没有发布到 npm。** 包名 `dsh-see-now-more` 只是为了不和上游撞车；
    安装走 `node scripts/install-dev.mjs`。
 
