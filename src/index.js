@@ -840,7 +840,8 @@ async function registerAll(ctx) {
     lift: tuning.lift,
     // 血条读数（P1c）：框过才有；没框时不采（startBloodbarCapture 会直接拒）
     bloodbar: loadBloodbar(),
-    // 屏幕文字流（see-now.json 的 text 段，P1 第 2 步）：默认开，条带底部 0.84–1.0
+    // 屏幕文字流（see-now.json 的 text 段，P1 第 2 步）：默认开，条带底部 0.80–1.0
+    // （0.84 起会切字幕顶，2026-11-27 用 BV1eS1czoEaD p2 真实画面实测；见 text-band.js）
     text: tuning.text,
   });
   disposers.push(() => runner.stop());

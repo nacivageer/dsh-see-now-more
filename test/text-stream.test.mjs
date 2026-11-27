@@ -24,7 +24,7 @@ function fakeOcr({ lines = ['你好世界'], delay = 0, fail = null } = {}) {
       calls.push(opts);
       return {
         recognize: (frame) => {
-          assert.equal(frame.length, 1536 * 173 * 4, '送进 sidecar 的必须是条带尺寸的 BGRA');
+          assert.equal(frame.length, 1536 * 216 * 4, '送进 sidecar 的必须是条带尺寸的 BGRA');
           if (fail) return Promise.reject(new Error(fail));
           if (!delay) return Promise.resolve({ lines, text: lines.join(' ') });
           return new Promise((res) => setTimeout(() => res({ lines, text: lines.join(' ') }), delay));
@@ -51,7 +51,7 @@ test('抽帧：只要 1 fps，11 帧 100ms 一帧只送 2 次 OCR', async () => 
   assert.equal(f.calls.length, 1);                  // sidecar 只起一次
   assert.equal(f.calls[0].mode, 'text');            // 走文本模式，不是血条那套多极性
   assert.equal(f.calls[0].w, 1536);
-  assert.equal(f.calls[0].h, 173);
+  assert.equal(f.calls[0].h, 216);
 });
 
 test('喂闸门：同一条字连续两秒 → 入流一条，t0 取第一次看到的时刻', async () => {

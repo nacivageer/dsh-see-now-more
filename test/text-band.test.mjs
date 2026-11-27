@@ -19,10 +19,10 @@ import {
   tidyOcrLine,
 } from '../src/text-band.js';
 
-test('bandRect：1080p / 1440p / 4K 的底部 16%、左右各让 10%', () => {
-  assert.deepEqual(bandRect(1920, 1080), { x: 192, y: 907, w: 1536, h: 173 });
-  assert.deepEqual(bandRect(2560, 1440), { x: 256, y: 1210, w: 2048, h: 230 });
-  assert.deepEqual(bandRect(3840, 2160), { x: 384, y: 1814, w: 3072, h: 346 });
+test('bandRect：1080p / 1440p / 4K 的底部 20%、左右各让 10%', () => {
+  assert.deepEqual(bandRect(1920, 1080), { x: 192, y: 864, w: 1536, h: 216 });
+  assert.deepEqual(bandRect(2560, 1440), { x: 256, y: 1152, w: 2048, h: 288 });
+  assert.deepEqual(bandRect(3840, 2160), { x: 384, y: 1728, w: 3072, h: 432 });
 });
 
 test('bandRect：窄条也给下限（16 宽 / 8 高），不让 OCR 卡在 1 像素上', () => {
@@ -61,14 +61,14 @@ test('bandFromFrame：尺寸与 bandRect 一致，长度是 w×h×4', () => {
   const buf = Buffer.alloc(1920 * 1080 * 3, 128);
   const b = bandFromFrame(buf, 1920, 1080);
   assert.equal(b.w, 1536);
-  assert.equal(b.h, 173);
-  assert.equal(b.bgra.length, 1536 * 173 * 4);
+  assert.equal(b.h, 216);
+  assert.equal(b.bgra.length, 1536 * 216 * 4);
   assert.deepEqual(b.rect, bandRect(1920, 1080));
 });
 
 test('sidecarSizeOf：画布高默认 = 条带高 × 放大倍数', () => {
   assert.deepEqual(sidecarSizeOf({ ...TEXT_BAND_DEFAULTS }, 1920, 1080), {
-    w: 1536, h: 173, scale: 2, canvasH: 346,
+    w: 1536, h: 216, scale: 2, canvasH: 432,
   });
   assert.equal(sidecarSizeOf({ ...TEXT_BAND_DEFAULTS, canvasH: 500 }, 1920, 1080).canvasH, 500);
 });
@@ -76,7 +76,7 @@ test('sidecarSizeOf：画布高默认 = 条带高 × 放大倍数', () => {
 test('normalizeTextConfig：默认值 / 写坏的值退回默认并记一条 warn', () => {
   const d = normalizeTextConfig(undefined);
   assert.equal(d.warnings.length, 0);
-  assert.deepEqual(d.config.band, [0.84, 1, 0.1]);
+  assert.deepEqual(d.config.band, [0.8, 1, 0.1]);
   assert.equal(d.config.fps, 1);
   assert.equal(d.config.enabled, true);
 
@@ -87,7 +87,7 @@ test('normalizeTextConfig：默认值 / 写坏的值退回默认并记一条 war
     scale: 9,
   });
   assert.equal(bad.config.enabled, true);
-  assert.deepEqual(bad.config.band, [0.84, 1, 0.1]);
+  assert.deepEqual(bad.config.band, [0.8, 1, 0.1]);
   assert.equal(bad.config.fps, 1);
   assert.equal(bad.config.scale, 2);
   assert.equal(bad.warnings.length, 4);
@@ -113,7 +113,7 @@ test('tidyOcrLine：中文之间的空格去掉，拉丁词之间的留着', () 
 test('textStatusLine：四个数都在，OCR 不可用时写原因', () => {
   const line = textStatusLine({
     enabled: true,
-    band: [0.84, 1, 0.1],
+    band: [0.8, 1, 0.1],
     fps: 1,
     scale: 2,
     sampled: 12,
@@ -125,7 +125,7 @@ test('textStatusLine：四个数都在，OCR 不可用时写原因', () => {
   assert.match(line, /已送 OCR 12 帧/);
 
   const off = textStatusLine({
-    enabled: true, band: [0.84, 1, 0.1], fps: 1, scale: 2, sampled: 0,
+    enabled: true, band: [0.8, 1, 0.1], fps: 1, scale: 2, sampled: 0,
     ocr: { available: false, why: '没有能 import winrt 的 Python' },
     stats: {},
   });

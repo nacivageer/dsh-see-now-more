@@ -1,11 +1,14 @@
 /**
  * text-band.js — 条带几何 + 像素转换 + 配置校验（纯函数，P1 第 2 步）。
  *
- * 为什么单独一个文件：`src/pipeline.js` 的 `flushBand()` 也在算同一个矩形
- * （`[.84,1.0,.10]` 与 `preset:"subtitle"` 同口径）。两处各算一遍迟早会漂 ——
- * 这里出**唯一一份**几何，pipeline 与文字流都调它。
+ * 为什么单独一个文件：`src/pipeline.js` 的 `flushBand()` 也在算条带矩形。
+ * 两处各算一遍迟早会漂 —— 这里出**唯一一份**几何，pipeline 与文字流都调它。
  *
- * 口径（与 pipeline 的 band 出图逐字一致）：
+ * 口径：
+ *   - `y0/y1` 是高度比例，`inset` 是左右各让出的宽度比例（默认 0.10）；
+ *   - **文字条带默认 `[0.80, 1.0]`，而 `preset:"subtitle"` 出的图仍是 `[0.84, 1.0]`**：
+ *     2026-11-27 用 `BV1eS1czoEaD` p2 的真实画面实测，字幕顶部落在 0.80–0.82 之间，
+ *     0.84 起会切掉字顶（严格命中 1/20，0.80 是 12/20；端到端入流 71→93、覆盖 48%→60%）；
  *   - `y0/y1` 是高度比例，`inset` 是左右各让出的宽度比例（默认 0.10）；
  *   - 左右让边是因为片子不会把字幕顶到画面两侧，那两条边本来就没字；
  *   - 行数/宽度都夹了下限，防止 1 像素的条带把 OCR 卡死。
@@ -16,8 +19,11 @@ import { TEXT_DEFAULTS } from './text-events.js';
 /** 条带与采样参数（`~/.dsh/see-now.json` 的 `text` 段按同名键覆盖） */
 export const TEXT_BAND_DEFAULTS = Object.freeze({
   enabled: true,
-  /** `[y0, y1, inset]`；与 `preset:"subtitle"` 的 `[0.84, 1.0, 0.10]` 同口径 */
-  band: Object.freeze([0.84, 1.0, 0.10]),
+  /**
+   * `[y0, y1, inset]`。**比 `preset:"subtitle"` 的 `[0.84, 1.0, 0.10]` 高 0.04**：
+   * 2026-11-27 实测字幕顶部会落在 0.80–0.82，从 0.84 起裁会切字顶（见文件头）。
+   */
+  band: Object.freeze([0.80, 1.0, 0.10]),
   /** 每秒抽几帧送 OCR。1 = 与闸门的 sampleMs 同一档 */
   fps: 1,
   /** OCR 前的放大倍数；血条是 4（16px 高的数字），宽条 2 起（实测再定） */
@@ -141,7 +147,7 @@ export function normalizeTextConfig(raw) {
   };
   if (raw === undefined) return { config: out, warnings };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    warnings.push('text 段不是对象，整段忽略（用默认：底部 0.84–1.0、左右 10%、1 fps、2×）');
+    warnings.push('text 段不是对象，整段忽略（用默认：底部 0.80–1.0、左右 10%、1 fps、2×）');
     return { config: out, warnings };
   }
 
@@ -159,7 +165,7 @@ export function normalizeTextConfig(raw) {
       out.band = [b[0], b[1], b.length >= 3 ? b[2] : 0];
     } else {
       warnings.push('text.band 要写成 [y0, y1, insetX]（0 ≤ y0 < y1 ≤ 1，y1-y0 > 0.01，insetX 0–0.4），'
-        + '已用默认 [0.84, 1, 0.1]');
+        + '已用默认 [0.8, 1, 0.1]');
     }
   }
 
