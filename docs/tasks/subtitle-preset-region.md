@@ -1,13 +1,13 @@
 <!-- 来源：格 2026-11-27 19:5x 定「写任务书」。问题出在：窗口化播放时 `preset:"subtitle"`
-     只取屏幕底部 16%，而字幕在窗口底部、屏幕上那条是桌面。只写文档，没动代码。 -->
+     只取屏幕底部 16%，而字幕在窗口底部、屏幕上那条是桌面。实现与验收见文末日志。 -->
 
 # 字幕条带图认字幕框：`preset:"subtitle"` 按 `text.region` 裁
 
-状态：等你定（口径已定死，两处默认值见「待定」，格点头就开工）
+状态：可验收（已实现 `246550d`：全屏 / 窗口化 / 文件源 / 小框兜底四项真机通过；未发版）
 对象：让 `see_now({preset:"subtitle"})` 出的长条图**跟着 `text.region` 走**——用户框一次字幕行，
       OCR 和长条图都对上；窗口化播放时也能出对图。不设框 / 窗口源 / 文件源时行为完全不变。
 归属：session-8cf3c4c4-c2cf-4dc8-bd31-702697f46ef0 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：格拍板「待定」两条 → 开工（`src/pipeline.js` + `src/index.js` + 单测 + 一行 schema 描述）
+下一步：发版时升 `0.1.1-more.43` + Release（prerelease）；按「发版六步」再核一遍 README / schema 后发。
 证据：
   - `preset:"subtitle"` 现在固定帧比例带：`src/index.js:175` `SUBTITLE_BAND = [0.84, 1.0, 0.10]`
   - 框存的是屏幕像素 + 取框时的屏幕尺寸：`see-now.json` 的 `text.region = {x,y,w,h,sw,sh}`
@@ -17,8 +17,14 @@
   - 条带叠图在 `src/pipeline.js:815` `flushBand()`；带参数解析在 `:789` `bandOf()`
   - 守卫先例：文字流只对整屏用框（`src/text-stream.js:363` `regionAllowed`）
   - 真机现状（2026-11-27 19:36，4K 屏）：框 (844,1695) 2296×379 → 帧内 954×158（按 `rectFromRegion` 算的，未验）
-账：写文档一轮（19:49–19:5x），无需
-更新：2026-11-27 19:52 CST
+  - 真机验收（2026-11-27 19:56–19:58，4K；`.42` 副本换新代码后重启 100640 → 108996）：
+    ① 全屏 + 框 (812,1739) 2486×296 → 图 **1034×123**，只含字幕行，图注「按框裁」
+    ② 窗口化 1280×720 + 框 (1593,1271) 772×127 → 图 **321×53**（字幕在屏幕中部，也裁对）
+    ③ `source:"file"` + 有框 → 图 **1276×144**（默认带，守卫生效）
+    ④ 小框 100×30（帧内 41×12）→ 图 1276×144 + 图注「字幕框在帧内只有 12px 高（< 16px），按底部条带」
+  - 离线：`node --test` **532 pass / 0 fail / 0 skip**（新增 `test/band-region.test.mjs` 4 条）；spec 7476 / 7500
+账：真机 2 次 ffplay（全屏 / 窗口化各一轮）+ 1 次 file 源 + 1 次小框；离线测试 2 轮（14.6s、12.6s）
+更新：2026-11-27 19:58 CST
 
 ## 为什么做
 
@@ -100,3 +106,8 @@
 - 2026-11-27 19:49–19:52 新建（格定「写任务书」）。依据逐条核过：preset 现按帧比例带
   （`src/index.js:175`）、region 换算唯一实现（`src/text-band.js:80`）、ultra 帧 1596×900
   （`src/runner.js:63`）、守卫口径照 `src/text-stream.js:363`。本轮只读代码 + 写文档，未动代码。
+- 2026-11-27 19:52–19:58 **实现 + 真机验收**（格「都默认」）：`src/pipeline.js` 的 `bandOf()` 认
+  `{region, fallback}` 并加 `BAND_REGION_MIN_H = 16` 兜底、`flushBand()` 走 `rectFromRegion()`、
+  `sheet` 带 `regionRect` / `bandNote`；`src/index.js` 只在整屏源认框、图注按实际裁法；`src/tool-spec.js`
+  加一句（7476 / 7500）；新增 4 条单测。离线 532 全过；重启（23 秒）后四项真机全过，读数见「证据」。
+  测完已清掉 `text.region`、停 ffplay、停采集。
