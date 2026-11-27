@@ -23,3 +23,8 @@ python scripts/selftest-ui.py     # 悬浮窗的 Win32 不变量；要求窗口�
 无声抢鼠标。（规则源：`~/.dsh/memory/profile.md` 的 2026-11-27 [user-stated] 条）
 
 能读窗口状态答的问题，不要用"点一遍看看"来答。
+
+**折叠态的窗拍不到，别对着真窗连抓**：收起那一下会常开 `WDA_EXCLUDEFROMCAPTURE`，截图里整窗
+消失（`capturable: true` 也压不住；展开态才按它决定）。要验折叠条 / 气泡，另开隔离实例带
+`DSH_SEE_WDA=0`（+ `DSH_SEE_REFRESH=99` 更稳）；只验状态就跑上面那条 `selftest-ui.py`，它不抓屏。
+机制与判据：`docs/决策记录.md`「收起态的窗抓不到」。
