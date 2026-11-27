@@ -299,6 +299,8 @@ function main() {
   console.log(`${relOk ? 'ok   ' : 'UNKNOWN'} release     ${relOk ? `${tag} prerelease=${prerelease}` : '没读到（自己去页面上核）'}`);
 
   console.log(`\n完成：${tag}（${done.length} 步）`);
+  console.log('\n窗进程还跑着旧代码：window.py 是启动时读进内存的，这一版改过就要重开');
+  console.log('  node bin/see-window.mjs --force   # 没碰 window.py 就不用；宿主侧 JS 变了要重启 DSH');
   console.log('撤销（Release 已经公开推出去，撤不回别人收到的通知）：');
   console.log(`  gh release delete ${tag} --yes`);
   console.log(`  git push origin :refs/tags/${tag}`);
