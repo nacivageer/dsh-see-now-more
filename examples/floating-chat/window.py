@@ -9042,6 +9042,16 @@ class LiveGlass:
          {0: "不裁", 0.1: "10%", 0.2: "20%", 0.3: "30%"}, 0),
     )
 
+    # 「预设」n 选 1（2026-11-27 用户要求，跟上面的感官模式同一种交互）。
+    # 值是**写哪一组配置**的名字，不是某个配置键：点一下会把 gameMode / text.enabled /
+    # text.fps 一起改掉，所以不能用 SETTINGS_ROWS 那种「一个键一个值」的形态。
+    PRESET_OPTIONS = (
+        ("none", "无（默认）"),
+        ("game", "游戏模式"),
+        ("text", "读字幕模式"),
+        ("off", "关读字幕"),
+    )
+
 
     def _live_mode(self) -> str | None:
         """当前实际在用的模式（focus.json）。读不到 / 过期就当没有。"""
@@ -9074,7 +9084,17 @@ class LiveGlass:
 
     def _settings_write(self, key: str, value) -> None:
         data = self._settings_read()
-        data[key] = value
+        # 支持 "text.enabled" 这种点路径：读字幕开关存在 `text` 段里（宿主按
+        # `t.text.enabled` 轮询，改完 1.5 秒生效），不能只写顶层键。
+        parts = key.split(".")
+        node = data
+        for p in parts[:-1]:
+            nxt = node.get(p)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                node[p] = nxt
+            node = nxt
+        node[parts[-1]] = value
         try:
             p = self._settings_path()
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -9132,9 +9152,27 @@ class LiveGlass:
         for val, label in self.MODE_OPTIONS:
             rows.append({"kind": "mode", "value": val, "label": label, "h": 48})
         # 这句只约束下面三项（模式是即时生效的，见标题行）—— 2026-11-19 用户要求
-        # 游戏模式：**临时覆盖**，关掉就恢复原来的节奏（2026-11-19 用户要求）。
-        # 放在提示**上面**：提示里的"以下选项"只指节奏/清晰度/排布，不含它。
-        rows.append({"kind": "gmode", "on": bool(data.get("gameMode")), "h": 54})
+        # 预设（游戏 / 读字幕）：跟上面的感官模式一样是 **n 选 1**，选一个就把对应的
+        # 一组配置写下去（2026-11-27 用户要求：不要开/关两态）。
+        _text = data.get("text") if isinstance(data.get("text"), dict) else {}
+        try:
+            _fps = int(_text.get("fps")) if _text.get("fps") is not None else 1
+        except Exception:
+            _fps = 1
+        if bool(data.get("gameMode")):
+            preset_now = "game"
+        elif _text.get("enabled") is False:
+            preset_now = "off"
+        elif _fps >= 2:
+            preset_now = "text"
+        else:
+            preset_now = "none"
+        rows.append({"kind": "sep", "h": 8})
+        # 小标题：这两栏都是「预设开关」，不属于感官模式（2026-11-27 用户要求）
+        rows.append({"kind": "hint", "text": "点击以下选项即可变更对应预设配置", "h": 24})
+        for _val, _label in self.PRESET_OPTIONS:
+            rows.append({"kind": "preset", "value": _val, "label": _label,
+                         "sel": _val == preset_now, "h": 48})
         rows.append({"kind": "sep", "h": 8})
         # 声音是即时项（voice.json 热读），放在「重启生效」那行提示**上面**。
         # 收起时只占一行、点开才把三档摊在它下面（2026-11-19 用户要"小展开列表"）
@@ -9301,6 +9339,25 @@ class LiveGlass:
                 c.create_text(cw - 30, (y0 + y1) // 2, text=("开" if on else "关"),
                               anchor="e", fill=(self.MODE_COLORS["both"] if on else "#8e9db2"),
                               font=f11b, tags=("gmodeval",))
+            elif kind == "preset":
+                sel = bool(r["sel"])
+                c.create_rectangle(16, y0 + 2, cw - 16, y1 - 2,
+                                   fill=("#16202c" if sel else ""), outline="")
+                c.create_rectangle(16, y0 + 3, 20, y1 - 3,
+                                   fill=(self.MODE_COLORS["both"] if sel else ""), outline="")
+                c.create_text(36, (y0 + y1) // 2, text=r["label"], anchor="w",
+                              fill=(self.MODE_COLORS["both"] if sel else "#b9c6d6"),
+                              font=(f11b if sel else f11))
+                c.create_text(cw - 30, (y0 + y1) // 2, text=("✓" if sel else ""),
+                              anchor="e", fill=self.MODE_COLORS["both"], font=f11b)
+            elif kind == "textmode":
+                on = bool(r["on"])
+                c.create_text(36, (y0 + y1) // 2, text="读字幕模式", anchor="w",
+                              fill=("#f4f9ff" if on else "#b9c6d6"),
+                              font=(f11b if on else f11), tags=("textmodelabel",))
+                c.create_text(cw - 30, (y0 + y1) // 2, text=("开" if on else "关"),
+                              anchor="e", fill=(self.MODE_COLORS["both"] if on else "#8e9db2"),
+                              font=f11b, tags=("textmodeval",))
             elif kind == "checkbtn":
                 bh = 40
                 by0 = (y0 + y1) // 2 - bh // 2
@@ -9373,6 +9430,10 @@ class LiveGlass:
                 self._settings_pick_mode(r["value"])
             elif r["kind"] == "gmode":
                 self._settings_toggle_game(r)
+            elif r["kind"] == "preset":
+                self._settings_pick_preset(r["value"])
+            elif r["kind"] == "textmode":
+                self._settings_toggle_text(r)
             elif r["kind"] == "voice":
                 self._voice_menu = not bool(getattr(self, "_voice_menu", False))
                 self._settings_rebuild()
@@ -9564,6 +9625,42 @@ class LiveGlass:
         except Exception as exc:
             if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
                 print("[settings] gmode redraw failed:", repr(exc), flush=True)
+
+    def _settings_pick_preset(self, value: str) -> None:
+        """预设 n 选 1：一次点击改写一组配置（2026-11-27 用户要求，形态与感官模式一致）。
+
+        - 无：游戏模式关、读字幕开在 1 fps；
+        - 游戏模式：节奏临时换 `game-economic`（宿主记着旧值、关掉时恢复）、读字幕 1 fps；
+        - 读字幕模式：读字幕 2 fps、游戏模式关（两者互斥，选了就谁生效谁）；
+        - 关读字幕：`text.enabled = false`，条带 OCR 全停（采集与出图不受影响）。
+        """
+        now = int(time.time() * 1000)
+        self._settings_write("gameMode", value == "game")
+        self._settings_write("gameModeAt", now)
+        self._settings_write("text.enabled", value != "off")
+        self._settings_write("text.fps", 2 if value == "text" else 1)
+        self._settings_rebuild()
+
+    def _settings_toggle_text(self, r) -> None:
+        """读字幕模式开关：写 `text.enabled`（点路径进 `text` 段）。
+
+        宿主那边 1.5 秒轮询到就 `setEnabled()`——**即时生效，不用重启**；关掉时
+        会把条带 OCR 的 sidecar 也停掉，采集与出图完全不受影响。
+        """
+        on = not bool(r.get("on"))
+        r["on"] = on
+        self._settings_write("text.enabled", on)
+        st = self._settings
+        try:
+            c = st["canvas"]
+            f11, f11b = self.fonts.get(11), self.fonts.get(11, True)
+            c.itemconfigure("textmodelabel", fill=("#f4f9ff" if on else "#b9c6d6"),
+                            font=(f11b if on else f11))
+            c.itemconfigure("textmodeval", text=("开" if on else "关"),
+                            fill=(self.MODE_COLORS["both"] if on else "#8e9db2"))
+        except Exception as exc:
+            if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
+                print("[settings] textmode redraw failed:", repr(exc), flush=True)
 
     def _settings_cycle(self, r) -> None:
         st = self._settings

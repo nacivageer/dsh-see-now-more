@@ -355,5 +355,17 @@ export function createTextGate(options = {}) {
     return { ...stat };
   }
 
-  return { observe, between, stats };
+  /**
+   * 运行期改参数（设置页切「读字幕模式」时用）：只动 `sim` / `confirmGapMs` / `sampleMs`，
+   * **不重建闸门**——已经攒下的 pending 和 events 都留着，用户换个档不该把前面的字清掉。
+   */
+  function retune(patch = {}) {
+    for (const key of ['sim', 'confirmGapMs', 'sampleMs', 'minChars', 'maxLines', 'maxChars']) {
+      const v = Number(patch[key]);
+      if (Number.isFinite(v) && v >= 0) o[key] = v;
+    }
+    return { sim: o.sim, confirmGapMs: o.confirmGapMs, sampleMs: o.sampleMs };
+  }
+
+  return { observe, between, stats, retune };
 }

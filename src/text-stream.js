@@ -16,7 +16,7 @@
 
 import { startOcr, resolveOcrPython } from './ocr.js';
 import {
-  bandRect, cropRgb24, rgb24ToBgra, rgbDiffRatio, sidecarSizeOf, tidyOcrLine,
+  bandRect, confirmGapFor, cropRgb24, rgb24ToBgra, rgbDiffRatio, sidecarSizeOf, tidyOcrLine,
 } from './text-band.js';
 import { createTextGate } from './text-events.js';
 import { mergeIntervals } from './coverage.js';
@@ -73,7 +73,8 @@ export function createTextStream({
   const textSpans = [];   // 采样到有字的区间 [{from,to}]（epoch ms）
   const eventSpans = [];  // 已确认事件的区间
 
-  const intervalMs = Math.round(1000 / Math.max(0.5, Number(cfg.fps) || 1));
+  const intervalMs0 = Math.round(1000 / Math.max(0.5, Number(cfg.fps) || 1));
+  let intervalMs = intervalMs0;
 
   function ensureOcr(w, h) {
     if (retryAt && now() < retryAt) return null;      // 刚失败过：一分钟内不再敲门
@@ -267,12 +268,29 @@ export function createTextStream({
     return cfg.enabled;
   }
 
+  /**
+   * 运行期改采样率（设置页「读字幕模式」用）：1 fps = 省，2 fps = 高确认率。
+   *
+   * **只动闸门参数、不重建**：`intervalMs` 变了节流跟着变，`sampleMs` / `confirmGapMs`
+   * 一起重算（`confirmGapFor`——固定 900 会让 2 fps 的相邻两帧永远配不上对）；
+   * 已经攒下的 pending 和 events 全留着，切档不该把前面的字清掉。
+   */
+  function setFps(next) {
+    const f = Number(next);
+    if (!(Number.isFinite(f) && f >= 0.5 && f <= 5)) return cfg.fps;
+    cfg.fps = f;
+    intervalMs = Math.round(1000 / f);
+    gate.retune({ sampleMs: intervalMs, confirmGapMs: confirmGapFor(f) });
+    return cfg.fps;
+  }
+
   return {
     onFrame,
     between,
     status,
     stop,
     setEnabled,
+    setFps,
     /** 测试用：等手上这一帧识别完 */
     settled: () => inFlight ?? Promise.resolve(),
   };

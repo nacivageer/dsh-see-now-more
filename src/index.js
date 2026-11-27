@@ -1137,6 +1137,10 @@ async function registerAll(ctx) {
   let lastCfgText = (() => {
     try { return readTuning().text?.enabled !== false; } catch { return true; }
   })();
+  /** 读字幕的采样率现值（`text.fps`；设置页「读字幕模式」= 1 省 / 2 常） */
+  let lastCfgTextFps = (() => {
+    try { return Number(readTuning().text?.fps) || 1; } catch { return 1; }
+  })();
 
   /**
    * 把一档模式**真的做出来**（2026-11-19 用户要求：设置页要能"一眼开始看"）。
@@ -1226,6 +1230,13 @@ async function registerAll(ctx) {
       lastCfgText = textOn;
       try { runner.setTextEnabled(textOn); } catch { /* 开关不许弄挂轮询 */ }
       log(`屏幕文字流：${textOn ? '开' : '关'}（see-now.json 的 text.enabled，即时生效）`);
+    }
+    // 读字幕采样率（设置页「读字幕模式」切 1 / 2）：同样即时生效，闸门的确认间隔跟着重算
+    const textFps = Number(t.text?.fps) || 1;
+    if (textFps !== lastCfgTextFps) {
+      lastCfgTextFps = textFps;
+      try { runner.setTextFps(textFps); } catch { /* 同上 */ }
+      log(`屏幕文字：读字幕采样 ${textFps} fps（即时生效）`);
     }
     // 窗口每点一次都写 `modeAt`（同一个值也算一次）；手改配置没有 modeAt，
     // 就退回按 `mode` 值变化判断。

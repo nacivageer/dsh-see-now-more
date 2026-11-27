@@ -203,3 +203,19 @@ test('静默暂停：pauseAfterMs = 0 时永不暂停（老行为）', async () 
   assert.equal(s.status().paused, false);
   assert.ok(s.status().sampled >= 5, `不该停，实得 ${s.status().sampled}`);
 });
+
+test('setFps 2：500ms 间隔的两帧也能确认（确认间隔跟着缩到 450）', async () => {
+  const f = fakeOcr({ lines: ['你好世界'] });
+  const s = createTextStream({
+    config: CFG,
+    startOcrFn: f.startOcrFn,
+    resolveFn: () => ({ ok: true, python: 'py' }),
+  });
+  s.setFps(2);
+  assert.equal(s.status().fps, 2);
+  s.onFrame({ t: 0, buf: FRAME, width: W, height: H, wall: 8_000_000 });
+  await s.settled();
+  s.onFrame({ t: 0.5, buf: FRAME, width: W, height: H, wall: 8_000_500 });
+  await s.settled();
+  assert.equal(s.status().stats.lines, 1, '500ms 间隔在 2 fps 下应能确认（1 fps 的 900 会挡掉）');
+});

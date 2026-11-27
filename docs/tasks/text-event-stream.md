@@ -334,3 +334,12 @@ README 0 命中，只有 `README.md:86` 那句「点 × 只是这一次不看」
   **不在设置页加档**：场景由画面自己判断——游戏挂机、静态界面自己就省，不用用户声明「我在看视频」。
   另：`normalizeTextConfig` 里 `confirmGapMs` 默认改成跟着 `fps` 走（900 / fps），2 fps 忘改
   会让确认从 152 掉到 102——这个联动必须自动，不能指望用户同时调两个数。
+- 2026-11-27 09:24 **「读字幕」进设置页：预设 n 选 1**。格要求改成与感官模式同一种交互：小标题
+  「点击以下选项即可变更对应预设配置」，下面 **无（默认）/ 游戏模式 / 读字幕模式 / 关读字幕** 四选一
+  （一次点击改写 `gameMode` / `text.enabled` / `text.fps` 三个键，互斥）。读字幕模式 = `text.fps: 2`；
+  游戏模式 = 节奏临时换 game-economic + `fps: 1`；关读字幕 = `text.enabled: false`（sidecar 一并停）。
+  配套：`createTextGate().retune()`（只改参数、不重建，已攒的字留着）、`textStream.setFps()`
+  （`confirmGapMs` 按 900/fps 重算）、runner 的 `setTextFps`、index 的 1.5 秒轮询（改 `text.fps` 即时生效）。
+  **验证**：`node --test` 467 pass / 0 fail（新增 setFps 用例：2 fps 下 500ms 间隔能确认）；
+  `python scripts/selftest-ui.py` **9 passed / 0 failed**（重开悬浮窗后 `single-instance` 与
+  `not-click-through` 也由红转绿——之前那两红是两个窗口叠着，不是代码问题）。
