@@ -51,6 +51,9 @@
 - **步骤**：读上游 `src/offload.js` 与它那组测试 → 本仓新建 `src/offload.js`，接到出图交付路径上（每交付一张 +1）→ `status` 渲染加「图库」行 → 单测（阈值边界 / keep 数量 / 宿主没这个能力时不崩）。
 - **验收**：`node --test` 全过；单测用小阈值（如 trigger=5、keep=2）跑真实触发；宿主缺 `image/offload` 时 `status` 只报数、不省略、不报错。
 - **风险**：`image/offload` 是宿主能力，DSH 版本不同可能没有 → 先 capability 探测，缺了就退化。
+- **同批要改的另一半（2026-11-27 格提）**：浮窗历史底部「☐ 自动清理超过 30 天的记录」
+  现在只有开关、天数写死 30，要改成 3 / 7 / 14 分档。这是同一个旋钮的两头
+  （图留多少 / 记录留多久），见 `docs/tasks/history-retention-tiers.md`。
 
 ### P1-B 第二套阈值曲线（tierCurve）
 
