@@ -3,14 +3,12 @@
 
 # 弹窗统一跟随「保持置顶」（Win32 owner + 跟随开关）
 
-状态：**已实现、离线验过；等格真机看一眼**（窗 21:00:29 已换新代码，pid 120640；**未提交**）
+状态：**已验收**（格 2026-11-27 21:03 实测，三张截图；**已提交** `dfdeab6`，未发版）
 对象：8 个 Toplevel（设置卡 / 回顾窗 / 图查看器 / 清理确认 / 删除确认 / 重命名 / 关窗确认 /
       右键菜单）原来一律无条件 `attributes("-topmost", True)`，所以「保持置顶」关掉后弹窗
       仍压在所有应用上面。现在统一走 `_dialogs_topmost(win)`：跟随开关 + 设 Win32 owner。
 归属：session-e3da6a5f-3cb4-4dd5-861d-5964a647dbb9 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：格开着「保持置顶 = 关」试三件：① 弹窗能被 DSH 主窗 / 别的应用盖住；② 点悬浮窗不会
-      把弹窗压住；③ 打开右键菜单 / 回顾窗 / 图片查看器都正常。不对就回来改，`_own_dialog`
-      那一层只有真机能看出来。
+下一步：无（真机已验证）。发版时把文末草稿并进 `.44` 的 CHANGELOG。
 证据：
   - 统一入口：`examples/floating-chat/window.py:10549` `_dialogs_topmost(win)`；8 个弹窗全部
     改走它（`_open_settings` / 回顾窗 / 图查看器 / 清理 / 删除 / 重命名 / 关窗确认 / `_menu_popup`）
@@ -27,11 +25,13 @@
     `_dialogs_topmost` 调用点 ≥ 9」→ **all passed**
   - `node --test` **534 pass / 0 fail / 0 skip**
   - 真机：窗 21:00:29 重启（pid 120640，`keepOnTop=false`），`selftest-ui.py` 判主窗
-    `ex=0x00080080`（未置顶）、**9 passed / 0 failed / 5 skipped** —— 启动时按配置走这条已验；
-    弹窗自身的 z 序（owner + 跟随）要打开弹窗才看得到，待格验
+    `ex=0x00080080`（未置顶）、**9 passed / 0 failed / 5 skipped** —— 启动时按配置走这条已验
+  - **格实测（2026-11-27 21:03，三张截图）**：设置卡的下半被 DSH 主窗盖住；回顾窗压在
+    悬浮窗上面（截图里它盖住悬浮窗右上）；两者之间按打开/点击顺序叠，没有「弹窗反过来
+    压住别的应用」——两层语义都成立
 账：重启窗 1 次（119156 → 120640）；探针 4 个（owner / z 序 / map / topmost-vs-owner）；
     离线测试 3 轮；无鼠标 / 键盘模拟输入
-更新：2026-11-27 21:01 CST
+更新：2026-11-27 21:04 CST
 
 ## 为什么这样改
 
