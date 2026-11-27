@@ -135,6 +135,10 @@ from glass_geometry import (
 )
 from window_widgets import ChatFeed, Fonts, TextLayer
 from quote_text import format_quote_text, quote_preview, split_quote_blocks
+# 纯算术 / 纯数据两件（2026-11-27 抽出）：落位与滚轮、chat.jsonl 的行→条目→会话。
+# 都不碰 Tk，能离开窗口验（scripts/check-window-math.py / check-chat-index.py）。
+from window_math import clamp_into, place_dialog, wheel_scroll
+from chat_index import aggregate_sessions, parse_lines, tail_lines
 try:  # 单文件拷走 window.py 时也别让整个窗起不来：读不到就退回旧的预填判据
     from session_hint import current_session as _read_dsh_current_session
     from session_hint import prefill as _bind_prefill
@@ -4158,18 +4162,15 @@ class LiveGlass:
         同一毫秒的条目保持写入顺序（Python 的 sort 是稳定的）。
         """
         try:
-            lines = CHAT_FILE.read_text(encoding="utf-8").splitlines()[-4000:]
+            entries = parse_lines(tail_lines(CHAT_FILE.read_text(encoding="utf-8")))
         except Exception:
             return []
+        hid = self._hidden_keys()          # 循环外问一次：它是 stat 缓存，但别问 4000 遍
         out = []
-        for line in lines:
-            try:
-                e = json.loads(line)
-            except Exception:
-                continue
+        for e in entries:
             if str(e.get("sid") or "") != sid or e.get("role") == "meta":
                 continue
-            if msg_key(sid, e.get("at")) in self._hidden_keys():
+            if msg_key(sid, e.get("at")) in hid:
                 continue
             out.append(e)
         out.sort(key=lambda e: int(e.get("at") or 0))
@@ -6340,13 +6341,7 @@ class LiveGlass:
             return self._chat_cache
         entries = []
         try:
-            for line in CHAT_FILE.read_text(encoding="utf-8").splitlines()[-4000:]:
-                try:
-                    e = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(e, dict):
-                    entries.append(e)
+            entries = parse_lines(tail_lines(CHAT_FILE.read_text(encoding="utf-8")))
         except Exception:
             entries = []
         self._chat_sig, self._chat_cache = sig, entries
@@ -6361,23 +6356,7 @@ class LiveGlass:
         sig = getattr(self, "_chat_sig", None)
         if sig is not None and sig == getattr(self, "_chat_sess_sig", None):
             return self._chat_sess_cache
-        out = {}
-        for e in self._chat_entries():
-            if e.get("role") == "meta":
-                continue
-            sid = str(e.get("sid") or "")
-            if not sid:
-                continue
-            try:
-                at = int(e.get("at") or 0)
-            except Exception:
-                continue
-            g = out.get(sid)
-            if g is None:
-                out[sid] = {"sid": sid, "firstAt": at, "lastAt": at}
-            else:
-                g["firstAt"] = min(g["firstAt"], at)
-                g["lastAt"] = max(g["lastAt"], at)
+        out = aggregate_sessions(self._chat_entries())
         self._chat_sess_sig = getattr(self, "_chat_sig", None)
         self._chat_sess_cache = out
         return out
@@ -6667,9 +6646,8 @@ class LiveGlass:
         _f10 = self.fonts.get(10)
         body_h = _wrapped_text_height(body, _f10, w - pad * 2) + int(_f10.metrics("linespace"))
         h = max(210, pad + 34 + body_h + 92)
-        vx, vy = self._vx, self._vy
-        x = max(vx + 8, min(self._x + (self._geo.width - w) // 2, vx + self._vw - w - 8))
-        y = max(vy + 8, min(self._y + (self._geo.height - h) // 3, vy + self._vh - h - 8))
+        x, y = place_dialog(self._x, self._y, self._geo.width, self._geo.height,
+                           w, h, (self._vx, self._vy, self._vw, self._vh))
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
@@ -6849,9 +6827,8 @@ class LiveGlass:
                       f" measure={_f.measure(body)}", flush=True)
             except Exception:
                 pass
-        vx, vy = self._vx, self._vy
-        x = max(vx + 8, min(self._x + (self._geo.width - w) // 2, vx + self._vw - w - 8))
-        y = max(vy + 8, min(self._y + (self._geo.height - h) // 3, vy + self._vh - h - 8))
+        x, y = place_dialog(self._x, self._y, self._geo.width, self._geo.height,
+                           w, h, (self._vx, self._vy, self._vw, self._vh))
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
@@ -6940,9 +6917,8 @@ class LiveGlass:
         """重命名这组会话的标题：本地立即生效，同时写回 DSH（左侧栏跟着变）。"""
         cur = self._session_titles().get(sid) or ""
         w, h = 500, 250
-        vx, vy = self._vx, self._vy
-        x = max(vx + 8, min(self._x + (self._geo.width - w) // 2, vx + self._vw - w - 8))
-        y = max(vy + 8, min(self._y + (self._geo.height - h) // 3, vy + self._vh - h - 8))
+        x, y = place_dialog(self._x, self._y, self._geo.width, self._geo.height,
+                           w, h, (self._vx, self._vy, self._vw, self._vh))
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
@@ -7897,16 +7873,13 @@ class LiveGlass:
         st = self._hist
         if not st or st["max"] <= 0:
             return
-        acc = float(st.get("wheel_acc") or 0.0) - float(e.delta) / 120.0 * 70.0
-        whole = int(acc)                     # 向零取整：上下滚的余量各记各的
-        st["wheel_acc"] = acc - whole
-        if not whole:
+        # 换算和余量在 `window_math.wheel_scroll`（纯算术，不开窗也能验）。余量在
+        # 「没走满一格」时也已经变了，所以要**先写回**再判 stepped；撞到头时函数
+        # 已经把余量清零（否则往回滚要先把「撞墙」那几格空走完才动）。
+        st["scroll"], st["wheel_acc"], stepped = wheel_scroll(
+            e.delta, st.get("wheel_acc"), st["scroll"], st["max"])
+        if not stepped:
             return
-        before = st["scroll"]
-        st["scroll"] = max(0, min(st["max"], before + whole))
-        # 已经顶到头时把余量丢掉，否则往回滚要先把"撞墙"那几格走完才动
-        if st["scroll"] == before:
-            st["wheel_acc"] = 0.0
         # 快速滚动时 Windows 一帧能塞好几个事件：合并成一次重画（12ms 内只画最后一格），
         # 免得重画排队、越滚越落后。偏移已经逐个累加，画面停在最终位置。
         if st.get("wheel_pending"):
@@ -9535,11 +9508,10 @@ class LiveGlass:
         """把卡片左上角夹进虚拟桌面（多显示器取总范围）。
 
         顶 / 左边优先；右边、底边放不下就往回挪。卡片高度会变（展开声音 / 朗读范围），
-        所以夹取按**这一次**的尺寸算。
+        所以夹取按**这一次**的尺寸算。算术在 `window_math.clamp_into`（同一份夹取
+        对话框也在用，边距不同），这里只把窗口边界递进去。
         """
-        x = int(max(self._vx + 4, min(int(x), self._vx + self._vw - cw - 4)))
-        y = int(max(self._vy + 4, min(int(y), self._vy + self._vh - ch - 4)))
-        return x, y
+        return clamp_into(x, y, cw, ch, (self._vx, self._vy, self._vw, self._vh), margin=4)
 
     def _open_settings(self) -> None:
         self._close_settings()
@@ -10810,9 +10782,8 @@ class LiveGlass:
         # 所以补一行余量 —— 2026-11-27 实测 body_h=81(3 行) 而 Tk 画了 4 行。
         body_h = _wrapped_text_height(body, _f10, w - pad * 2) + int(_f10.metrics('linespace'))
         h = max(250, pad + 34 + body_h + 112)
-        vx, vy = self._vx, self._vy
-        x = max(vx + 8, min(self._x + (self._geo.width - w) // 2, vx + self._vw - w - 8))
-        y = max(vy + 8, min(self._y + (self._geo.height - h) // 3, vy + self._vh - h - 8))
+        x, y = place_dialog(self._x, self._y, self._geo.width, self._geo.height,
+                           w, h, (self._vx, self._vy, self._vw, self._vh))
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
@@ -11046,10 +11017,9 @@ class LiveGlass:
         dw, dh = max(1, round(iw * fit)), max(1, round(ih * fit))
         w = int(min(avail_w, max(dw, self.VIEW_MIN_W)))
         h = int(title_h + min(avail_h, max(dh, 120)))
-        x = max(self._vx, min(self._x + (self._geo.width - w) // 2,
-                             self._vx + self._vw - w))
-        y = max(self._vy, min(self._y + (self._geo.height - h) // 2,
-                             self._vy + self._vh - h))
+        x, y = place_dialog(self._x, self._y, self._geo.width, self._geo.height,
+                           w, h, (self._vx, self._vy, self._vw, self._vh),
+                           margin=0, y_div=2)
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
