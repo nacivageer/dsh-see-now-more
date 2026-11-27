@@ -64,7 +64,8 @@
     "check": "node scripts/install-dev.mjs --check",
     "probe:lift": "node scripts/lift-buffer-probe.mjs",
     "sync:window": "node scripts/sync-window.mjs",
-    "check:window": "node scripts/sync-window.mjs --check"
+    "check:window": "node scripts/sync-window.mjs --check",
+    "release": "node scripts/release.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": ">=0.1.0-rc.7"
