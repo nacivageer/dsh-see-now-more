@@ -398,6 +398,18 @@ def notify_bubble_enabled(cfg) -> bool:
     return val if isinstance(val, bool) else True
 
 
+def keep_on_top_enabled(cfg) -> bool:
+    """主窗要不要保持最前（`~/.dsh/see-now.json` 的 `keepOnTop`）。
+
+    默认**开**（和加这个开关之前的行为一致）。放在模块层是为了让
+    `scripts/check-topmost-toggle.py` 不起 Tk 也能直接测这条判据。
+    和 `notify_bubble_enabled` 同一套类型口径：**只认真正的布尔**，写错了宁可回默认，
+    也不能让窗悄悄变成不置顶（那会让人以为「窗丢了」）。
+    """
+    val = (cfg or {}).get("keepOnTop", True)
+    return val if isinstance(val, bool) else True
+
+
 def price_chip_enabled() -> bool:
     """底栏价格标签是否显示。
 
@@ -941,7 +953,10 @@ class LiveGlass:
         self.root.withdraw()
         self.root.overrideredirect(True)
         self.root.title(self.name)
-        self.root.attributes("-topmost", True)
+        # 置顶由 `see-now.json` 的 keepOnTop 定（默认开，设置页「保持置顶」改的就是它）。
+        # 关掉时主窗就是普通窗口：别的窗口能压上来，不必靠折叠腾地方（2026-11-27 格要的）。
+        self._topmost_on = keep_on_top_enabled(self._settings_read())
+        self.root.attributes("-topmost", self._topmost_on)
         self.root.configure(bg=KEY)
         self.root.attributes("-transparentcolor", KEY)
         # 半透明由"真实桌面背景 + 逐层 alpha"实现（见 _plain_frame），
@@ -1273,46 +1288,58 @@ class LiveGlass:
             self.root.after(26, lambda: self._intro_step(n + 1))
 
     def _keep_on_top(self) -> None:
-        """把窗口重新顶回 topmost 带的最前面。
+        """把窗口重新顶回 topmost 带的最前面 —— **只在「保持置顶」开着时**。
 
         只设一次 `-topmost` 不够：游戏、截图工具自己也是 topmost 窗口，而 Windows 的
         同一个 topmost 带里**谁最后 SetWindowPos 谁在上面**。现在每 800ms 用
         `SetWindowPos(HWND_TOPMOST, SWP_NOACTIVATE)` 硬顶一次：不抢焦点、不重绘。
 
+        关掉（`see-now.json` 的 `keepOnTop: false`）时这一套整个停：只做一次
+        `HWND_NOTOPMOST`，之后主窗就是普通窗口，别的窗口能压上来 —— 这是 2026-11-27
+        格要的「不想置顶不必每次都折叠」。**关掉不等于藏起来**：它照常画、照常收消息，
+        只是不再抢 z 序（折叠条同理）。
+
         **能力边界**：独占全屏下桌面不参与合成，任何普通窗口都盖不上去（只有 D3D hook
         的 overlay 做得到）；无边框窗口化 / 有边框窗口下这条看门狗有效。
         """
         try:
-            # 预览窗/右键菜单/确认弹窗/**设置卡**开着时都不要抢：这条每 800ms 把主窗
-            # 顶回 topmost 带最前面，会把刚打开的图窗、右键菜单、确认框、设置卡挤到
-            # 下面去（2026-11-06 实测；重命名/删除确认框同理）。设置卡漏了这条守卫，
-            # 表现为「点开一秒内就看不见了」——其实是被主窗盖住，不是被关掉
-            # （2026-11-19 实报）。
-            if getattr(self, "_settings", None):
-                try:
-                    self._settings["win"].lift()
-                except Exception:
-                    pass
-            if (not self._hidden and not self._collapsed
-                    and not self._viewer_alive()
-                    and not getattr(self, "_img_menu", None)
-                    and not getattr(self, "_settings", None)
-                    and not self._dialog_alive()):
-                hwnd = self._hwnd_root()
-                if hwnd:
-                    user32 = ctypes.windll.user32
-                    user32.SetWindowPos.argtypes = [
-                        wintypes.HWND, wintypes.HWND,
-                        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-                        wintypes.UINT,
-                    ]
-                    user32.SetWindowPos.restype = wintypes.BOOL
-                    # HWND_TOPMOST=-1；SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE
-                    user32.SetWindowPos(
-                        wintypes.HWND(hwnd), wintypes.HWND(-1), 0, 0, 0, 0,
-                        0x0001 | 0x0002 | 0x0010)
-                self.root.attributes("-topmost", True)
-                self.root.lift()
+            if not keep_on_top_enabled(self._settings_cached()):
+                # 关掉：一次属性翻转就够，不反复对同一个窗口调 SetWindowPos。
+                if getattr(self, "_topmost_on", True):
+                    self.root.attributes("-topmost", False)
+                    self._topmost_on = False
+            else:
+                # 预览窗/右键菜单/确认弹窗/**设置卡**开着时都不要抢：这条每 800ms 把主窗
+                # 顶回 topmost 带最前面，会把刚打开的图窗、右键菜单、确认框、设置卡挤到
+                # 下面去（2026-11-06 实测；重命名/删除确认框同理）。设置卡漏了这条守卫，
+                # 表现为「点开一秒内就看不见了」——其实是被主窗盖住，不是被关掉
+                # （2026-11-19 实报）。
+                if getattr(self, "_settings", None):
+                    try:
+                        self._settings["win"].lift()
+                    except Exception:
+                        pass
+                if (not self._hidden and not self._collapsed
+                        and not self._viewer_alive()
+                        and not getattr(self, "_img_menu", None)
+                        and not getattr(self, "_settings", None)
+                        and not self._dialog_alive()):
+                    hwnd = self._hwnd_root()
+                    if hwnd:
+                        user32 = ctypes.windll.user32
+                        user32.SetWindowPos.argtypes = [
+                            wintypes.HWND, wintypes.HWND,
+                            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                            wintypes.UINT,
+                        ]
+                        user32.SetWindowPos.restype = wintypes.BOOL
+                        # HWND_TOPMOST=-1；SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE
+                        user32.SetWindowPos(
+                            wintypes.HWND(hwnd), wintypes.HWND(-1), 0, 0, 0, 0,
+                            0x0001 | 0x0002 | 0x0010)
+                    self.root.attributes("-topmost", True)
+                    self.root.lift()
+                    self._topmost_on = True
         except Exception as exc:
             # 每 800ms 一次，出错不能刷屏；但第一次必须留痕（日志见 see-now-window.log）
             if not getattr(self, "_top_err_logged", False):
@@ -1322,6 +1349,40 @@ class LiveGlass:
             self.root.after(800, self._keep_on_top)
         except Exception:
             pass
+
+    def _apply_topmost(self, on: bool) -> None:
+        """把主窗放进 / 移出 topmost 带（设置页点一下立即生效，不用重开窗）。
+
+        只改属性位：**开着**时「顶到同带最前面」仍交给 `_keep_on_top` 每 800ms 的那次
+        `SetWindowPos`；关掉时一次 `HWND_NOTOPMOST` 就够，不需要反复顶。
+        设置卡开着时不 lift 主窗 —— 那会把卡压到下面（同 `_keep_on_top` 的守卫）。
+        """
+        try:
+            self.root.attributes("-topmost", bool(on))
+            self._topmost_on = bool(on)
+            if on and not getattr(self, "_settings", None):
+                self.root.lift()
+            if getattr(self, "_settings", None):
+                try:
+                    self._settings["win"].lift()
+                except Exception:
+                    pass
+        except Exception as exc:
+            print("apply topmost failed:", repr(exc), flush=True)
+
+    def _raise_window(self) -> None:
+        """把主窗叫到前面：**置顶开着才进 topmost 带**，关着就只 lift（不压别人）。
+
+        「关窗后 / 隐身」重新显示、协议 `show`、引用选中文字后回主窗都走这里 ——
+        以前三处各自写死 `attributes("-topmost", True)`，关掉置顶后会被重新焊回最前面。
+        """
+        if keep_on_top_enabled(self._settings_cached()):
+            self._apply_topmost(True)
+        else:
+            try:
+                self.root.lift()
+            except Exception:
+                pass
 
     # ---- 协议 ----
 
@@ -1459,7 +1520,7 @@ class LiveGlass:
                 self._hidden = False
                 write_config({"hidden": False})
                 self.root.deiconify()
-                self.root.attributes("-topmost", True)
+                self._raise_window()
         except Exception as exc:
             # 静默失败查起来太贵（2026-11-06 调试 resize 时整条命令被吞）
             print("control failed:", action, repr(exc), flush=True)
@@ -1825,8 +1886,7 @@ class LiveGlass:
                 self.root.withdraw()
             else:
                 self.root.deiconify()
-                self.root.attributes("-topmost", True)
-                self.root.lift()
+                self._raise_window()
                 # 藏起来期间 `_draw_focus_line()` 是早退的（只记标签、不画），
                 # 重新显示时那一行和标题栏的点都得补画一次，否则重新出现的第一屏
                 # 会是"旧状态"（2026-11-16 与"点/字不同色"同一批修的）。
@@ -2062,8 +2122,7 @@ class LiveGlass:
             return
         self._close_history()
         try:
-            self.root.lift()
-            self.root.attributes("-topmost", True)
+            self._raise_window()
         except Exception:
             pass
         self._focus_input()
@@ -9273,8 +9332,11 @@ class LiveGlass:
         #   「收工 / 隐身」这种短名单看不出区别。
         # - 「折叠气泡」是窗自己的显示开关（`_maybe_notify` 每条消息现读），不用重启；
         #   关掉只影响折叠时弹不弹预览，历史 / 收藏 / 朗读都不受影响。
+        # - 「保持置顶」也是窗自己的开关（`_keep_on_top` 每 800ms 现读）：关掉后主窗
+        #   就是普通窗口，别的窗口能压上来 —— 不想让它挡着时不必再折叠腾地方
+        #   （2026-11-27 格要的）。折叠条同样不再置顶。
         ("enabled", "屏幕读取", (True, False), {True: "开", False: "关"}, True,
-         {True: "模型能看屏幕（watch / peek / region 都可用）",
+         {True: "模型能看屏幕（watch / peek / region）",
           False: "关掉后一律拒绝；模型自己打不开，只有这里能开"}),
         ("onWindowClose", "关窗后", ("stop", "ears", "rise", "ghost"),
          {"stop": "收工", "ears": "留耳", "rise": "可抬头", "ghost": "隐身"}, "stop",
@@ -9285,6 +9347,9 @@ class LiveGlass:
         ("collapsedBubble", "折叠气泡", (True, False), {True: "开", False: "关"}, True,
          {True: "折叠时收到新消息，弹出预览气泡",
           False: "折叠时不弹；消息照常进历史 / 收藏"}),
+        ("keepOnTop", "保持置顶", (True, False), {True: "开", False: "关"}, True,
+         {True: "窗总在最前面，不会被别的窗口压住",
+          False: "别的窗口可以盖住它（不必再折叠腾地方）"}),
         ("defaultPace", "节奏", ("calm", "normal", "dense", "game-economic"),
          {"calm": "省", "normal": "常规", "dense": "密", "game-economic": "游戏"}, "normal"),
         ("quality", "清晰度", ("low", "standard", "high", "ultra"),
@@ -9332,6 +9397,24 @@ class LiveGlass:
             return data if isinstance(data, dict) else {}
         except Exception:
             return {}
+
+    def _settings_cached(self) -> dict:
+        """`see-now.json` 的 mtime 缓存：看门狗每 800ms 要问一次 keepOnTop。
+
+        文件没变就不重解析（和 `_sync_visible` 同一套路）；手改配置也能在下一次
+        stat 变化时被看到。设置页点的那一刻不依赖它 —— `_settings_cycle` 直接
+        调 `_apply_topmost()` 立即生效。
+        """
+        try:
+            st = self._settings_path().stat()
+            key = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            key = None
+        if key is not None and key == getattr(self, "_settings_stamp", None):
+            return getattr(self, "_settings_snapshot", {})
+        self._settings_stamp = key
+        self._settings_snapshot = self._settings_read()
+        return self._settings_snapshot
 
     def _settings_write(self, key: str, value) -> None:
         data = self._settings_read()
@@ -9446,10 +9529,12 @@ class LiveGlass:
         rows.append({"kind": "sep", "h": 8})
         # 提示按行拆短：**一行放不下**（卡片最窄 380px，10 号字一行只有 ~35 个汉字），
         # 挤成一行会被右边界直接截断（2026-11-26 格在实机上看到的就是这个）。
-        # 2026-11-27 加「折叠气泡」后即时项变三项，再拼回一行会超宽 → 拆成三行。
+        # 2026-11-27 加「折叠气泡」后即时项变三项，再拼回一行会超宽 → 拆成三行；
+        # 同一天加「保持置顶」后再拼一条就实测 463px（卡片最窄 456px）→ 它单独一行。
         rows.append({"kind": "hint", "text": "以下选项存进 see-now.json", "h": 24})
         rows.append({"kind": "hint",
                      "text": "屏幕读取 / 关窗后 / 折叠气泡：即时生效", "h": 24})
+        rows.append({"kind": "hint", "text": "保持置顶：即时生效", "h": 24})
         rows.append({"kind": "hint", "text": "其余选项：重启 DSH 后生效", "h": 24})
         rows.append({"kind": "sep", "h": 8})
         for row in self.SETTINGS_ROWS:
@@ -9464,7 +9549,7 @@ class LiveGlass:
         # 而这件事只能由一个**不在 DSH 进程树里**的进程做 —— 就是这颗窗（detached 起的）。
         # 细节在 `host_restart.py`；这里只放一个入口，点击后由后台线程跑完整条链路。
         rows.append({"kind": "sep", "h": 8})
-        rows.append({"kind": "hint", "text": "改完插件：点下面重启 DSH（有回合在跑会等它跑完）", "h": 24})
+        rows.append({"kind": "hint", "text": "改完插件：点下面重启 DSH（等回合跑完）", "h": 24})
         rows.append({"kind": "restartbtn", "text": "重启 DSH", "h": 64})
         head, hint_h = 68, 18
         cw = max(380, min(560, self._geo.width - 24))
@@ -10026,6 +10111,9 @@ class LiveGlass:
         # 能开、那时本来就没有气泡；这条兜住协议折叠等边角）。
         if _key == "collapsedBubble" and not nxt:
             self._hide_notification()
+        # 保持置顶：写盘后**当场**生效，不等看门狗那一拍（800ms 也能等，但点了就该翻面）。
+        if _key == "keepOnTop":
+            self._apply_topmost(bool(nxt))
         if hints:
             # 带小字的行：值和说明都要换，就地重画整张卡（行数不变，不闪）
             self._settings_rebuild()

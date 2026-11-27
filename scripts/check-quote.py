@@ -153,7 +153,11 @@ def test_parse_and_backspace():
 
 
 def test_quote_from_review():
-    """P2：回顾窗点「引用选中文字」→ 关回顾窗、主窗前置、焦点进输入框。"""
+    """P2：回顾窗点「引用选中文字」→ 关回顾窗、主窗前置、焦点进输入框。
+
+    前置那一步走 `_raise_window()`（2026-11-27 加「保持置顶」后收敛到一处）：
+    替掉 `_settings_cached`，两种档都验 —— 开着才进 topmost 带。
+    """
     w = object.__new__(Window)
     calls = []
 
@@ -168,10 +172,17 @@ def test_quote_from_review():
     w._set_draft_quote = lambda text: calls.append(("quote", text))
     w._close_history = lambda: calls.append("close")
     w._focus_input = lambda _e=None: calls.append("focus")
+    w._settings_cached = lambda: {"keepOnTop": True}
 
     Window._quote_choice(w, "回顾里选的", from_review=True)
-    assert calls == [("quote", "回顾里选的"), "close", "lift",
-                     ("attributes", "-topmost", True), "focus"]
+    assert calls == [("quote", "回顾里选的"), "close",
+                     ("attributes", "-topmost", True), "lift", "focus"]
+
+    # 关掉保持置顶：只 lift，不许再焊回 topmost（否则开关一碰就失效）
+    calls.clear()
+    w._settings_cached = lambda: {"keepOnTop": False}
+    Window._quote_choice(w, "回顾里选的", from_review=True)
+    assert calls == [("quote", "回顾里选的"), "close", "lift", "focus"]
 
     # 主窗引用：只设 chip，不关窗、不动窗口
     calls.clear()

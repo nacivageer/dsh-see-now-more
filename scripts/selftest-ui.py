@@ -7,6 +7,10 @@
 读一次几十毫秒，不占鼠标。真正需要光标的（hover / 拖拽 / 端到端穿透 / IME）在
 末尾列出来，不需要谁记着。
 
+顶置位的期望值跟着 `~/.dsh/see-now.json` 的 `keepOnTop` 走：开着（默认）窗口必须在
+topmost 带里，关着就不能在（设置页「保持置顶」）。关着时被别的窗口压住是正常的，
+所以「遮挡」那条从 WARN 降成 PASS、命中测试降成 WARN。
+
 输出一律 ASCII：本机 python 的 stdout 是 cp936，中文过管道会变乱码。
 
 退出码：0 = 全部通过（允许 WARN）；1 = 有 FAIL；2 = 找不到悬浮窗（大概是没开）。
@@ -236,10 +240,15 @@ def read_state_file():
     bubble = raw.get('collapsedBubble', True)
     if not isinstance(bubble, bool):
         bad.append('collapsedBubble=%r (want true/false)' % (bubble,))
+    # 保持置顶同理（2026-11-27）：窗只看真正的布尔
+    keep_top = raw.get('keepOnTop', True)
+    if not isinstance(keep_top, bool):
+        bad.append('keepOnTop=%r (want true/false)' % (keep_top,))
     if bad:
         return 'FAIL', 'bad values: ' + ', '.join(bad), raw
-    return 'PASS', 'mode=%s defaultPace=%s collapsedBubble=%s' % (
-        mode or '-', pace or '-', 'on' if bubble else 'off'), raw
+    return 'PASS', 'mode=%s defaultPace=%s collapsedBubble=%s keepOnTop=%s' % (
+        mode or '-', pace or '-', 'on' if bubble else 'off',
+        ('on' if keep_top else 'off') if isinstance(keep_top, bool) else '-'), raw
 
 
 def check_bound_session(raw):
@@ -311,9 +320,20 @@ def run(argv):
     same_pid = [describe(h) for h in enum_windows() if pid_of(h) == target_pid]
     main_count = len([d for d in cands if d['title'] == target['title']])
 
-    # 1. 顶置位：窗口在 topmost 带里（不靠"看起来在上面"）
-    results.append(('topmost-bit', 'PASS' if target['ex'] & WS_EX_TOPMOST else 'FAIL',
-                    'ex=0x%08X' % target['ex']))
+    # 0. 配置先读：顶置位的期望值由 keepOnTop 决定（关掉时窗口就不该在 topmost 带）
+    state_verdict, state_detail, raw = read_state_file()
+    keep_top = True
+    if isinstance(raw, dict) and isinstance(raw.get('keepOnTop'), bool):
+        keep_top = raw['keepOnTop']
+
+    # 1. 顶置位：开着 = 窗口在 topmost 带里（不靠"看起来在上面"）；关掉 = 必须不在
+    in_band = bool(target['ex'] & WS_EX_TOPMOST)
+    if keep_top:
+        results.append(('topmost-bit', 'PASS' if in_band else 'FAIL',
+                        'ex=0x%08X' % target['ex']))
+    else:
+        results.append(('topmost-bit', 'PASS' if not in_band else 'FAIL',
+                        'keepOnTop=false, ex=0x%08X (want NOT topmost)' % target['ex']))
 
     # 2. 无边框弹窗：overrideredirect(True) 的形态
     st = target['style']
@@ -334,12 +354,28 @@ def run(argv):
         hits.append((int(hh or 0), int(u32.GetAncestor(hh, GA_ROOT) or 0)))
     self_hits = [h for h in hits if h[1] == target['hwnd']]
     transparent = bool(target['ex'] & WS_EX_TRANSPARENT)
-    results.append(('not-click-through', 'PASS' if (not transparent and self_hits) else 'FAIL',
-                    'ex_transparent=%d self_hits=%d/5 first=0x%X root=0x%X'
-                    % (transparent, len(self_hits), hits[0][0], hits[0][1])))
+    if transparent:
+        verdict = 'FAIL'
+        detail = 'ex_transparent=1 first=0x%X root=0x%X' % (hits[0][0], hits[0][1])
+    elif self_hits:
+        verdict = 'PASS'
+        detail = ('ex_transparent=0 self_hits=%d/5 first=0x%X root=0x%X'
+                  % (len(self_hits), hits[0][0], hits[0][1]))
+    elif not keep_top:
+        # 关掉置顶时被别的窗口盖住是预期行为，这条此刻验不了（不是失败）
+        verdict = 'WARN'
+        detail = ('covered by another window (keepOnTop=false); '
+                  'hit-test not verifiable, ex_transparent=0')
+    else:
+        verdict = 'FAIL'
+        detail = ('no sampled point hits it, first=0x%X root=0x%X'
+                  % (hits[0][0], hits[0][1]))
+    results.append(('not-click-through', verdict, detail))
 
-    # 4. 同进程的可见窗全在 topmost 带：弹窗被主窗盖住是踩过的坑（_pin_topmost）
-    broken = [d for d in same_pid if not (d['ex'] & WS_EX_TOPMOST) and d['rect'] and area(d) > 0]
+    # 4. 同进程的可见窗全在 topmost 带：弹窗被主窗盖住是踩过的坑（_pin_topmost）。
+    #    主窗自己不算「弹窗」：关掉置顶时它本来就不该在带里（第 1 条管它）。
+    broken = [d for d in same_pid if d['hwnd'] != target['hwnd']
+              and not (d['ex'] & WS_EX_TOPMOST) and d['rect'] and area(d) > 0]
     results.append(('dialogs-topmost', 'PASS' if not broken else 'FAIL',
                     '%d visible window(s) in pid %d, %d not topmost%s'
                     % (len(same_pid), target_pid, len(broken),
@@ -359,25 +395,28 @@ def run(argv):
                     % (w, h, x, y, vw, vh, vx, vy)))
 
     # 7. 遮挡：z 序在它上面的可见窗，如果压了它 20% 以上，报警（WARN，不判死——
-    #    游戏、截图工具的 topmost 窗本来就会压过来，看门狗 800ms 才顶一次）
-    above = []
-    for d in [describe(h) for h in enum_windows()]:
-        if d['hwnd'] == target['hwnd']:
-            break
-        if d['cls'] in ('Progman', 'WorkerW', 'Shell_TrayWnd') or d['pid'] == target_pid:
-            continue
-        if overlap_ratio(d, target) >= 0.2:
-            above.append(d)
-    if above:
-        top = above[-1]
-        results.append(('z-order', 'WARN', 'covered >=20%% by %r (%s)'
-                        % (top['title'] or top['cls'], top['cls'])))
+    #    游戏、截图工具的 topmost 窗本来就会压过来，看门狗 800ms 才顶一次）。
+    #    关掉置顶时被压住是预期行为，不报。
+    if not keep_top:
+        results.append(('z-order', 'PASS', 'keepOnTop=false: coverage is expected'))
     else:
-        results.append(('z-order', 'PASS', 'nothing above it overlaps >=20%'))
+        above = []
+        for d in [describe(h) for h in enum_windows()]:
+            if d['hwnd'] == target['hwnd']:
+                break
+            if d['cls'] in ('Progman', 'WorkerW', 'Shell_TrayWnd') or d['pid'] == target_pid:
+                continue
+            if overlap_ratio(d, target) >= 0.2:
+                above.append(d)
+        if above:
+            top = above[-1]
+            results.append(('z-order', 'WARN', 'covered >=20%% by %r (%s)'
+                            % (top['title'] or top['cls'], top['cls'])))
+        else:
+            results.append(('z-order', 'PASS', 'nothing above it overlaps >=20%'))
 
     # 8. 配置：形状对不对（窗口与宿主都靠这份文件，写坏了症状很玄）
-    verdict, detail, raw = read_state_file()
-    results.append(('state-file', verdict, detail))
+    results.append(('state-file', state_verdict, state_detail))
     results.append(('bound-session',) + check_bound_session(raw))
 
     # 输出
