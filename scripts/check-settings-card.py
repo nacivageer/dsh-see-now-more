@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
-"""check-settings-card.py — 离屏画一遍设置卡，拦「新加一行把文字挤到框外」。
+"""check-settings-card.py — 离屏画设置卡：拦「文字挤出框」和「拖走了又弹回原位」。
 
 为什么要有它：设置卡是 380–560px 宽的自绘 Canvas，**文字没有折行、没有省略号**，
 越过右边界就直接被截断。2026-11-26 格在实机上看到过一次，2026-11-27 加「折叠气泡」
 时又差点重犯（拼回一行会超宽）；同一天加「保持置顶」时顺手量出另外两行本来就
 已经超了（卡片最窄 456px 时 `模型能看屏幕（watch / peek / region 都可用）`
 右缘 467、重启提示右缘 517）。
+
+另一条同一天格报的：卡片能拖，但**每改一个选项就跳回默认位置** —— `_settings_paint`
+原来每次都按主窗位置重算 x/y。现在位置记在 `st["pos"]`，重画 / 展开菜单都按它放；
+这条也在这里验（拖动 → 重画 → 位置不动 → 拖出屏幕松手被夹回来）。
 
 做法：**不显示窗口** —— 建一个 withdrawn 的 Tk 根 + withdrawn 的 Toplevel 画布，
 直接调真实的 `LiveGlass._settings_paint`，再量每个 text item 的 bbox。窗口按最窄
@@ -84,15 +88,15 @@ def paint(tmp, cfg_value):
     w.canvas = FakeMainCanvas()
     w._voice_menu = False
     w._scope_menu = False
-    w._settings = {'win': fake_win, 'canvas': c, 'cw': 0, 'head': 68,
-                   'rows': [], 'hits': [], 'mode': None, 'drag': None}
+    w._settings = {'win': fake_win, 'canvas': c, 'cw': 0, 'ch': 0, 'head': 68,
+                   'pos': None, 'rows': [], 'hits': [], 'mode': None, 'drag': None}
 
     LiveGlass._settings_paint(w)
-    return root, c, w._settings, fake_win.calls
+    return root, c, w, w._settings, fake_win.calls
 
 
 def check_state(tmp, label, value):
-    root, c, st, geo = paint(tmp, value)
+    root, c, _w, st, geo = paint(tmp, value)
     try:
         cw = st['cw']
         assert cw == CARD_MIN, 'card width %r (want %r)' % (cw, CARD_MIN)
@@ -116,6 +120,60 @@ def check_state(tmp, label, value):
         root.destroy()
 
 
+def parse_xy(geo):
+    """从 Tk 的 `456x1374+312+280` / `+900+400` 里取 (x, y)。"""
+    import re
+    m = re.search(r'\+(-?\d+)\+(-?\d+)$', str(geo))
+    assert m, 'bad geometry: %r' % (geo,)
+    return int(m.group(1)), int(m.group(2))
+
+
+def test_drag_and_repaint(tmp):
+    """拖走卡片之后改选项（= 重画）**不许弹回默认位置** —— 2026-11-27 格报的。
+
+    以前 `_settings_paint` 每次都按主窗位置重算 x/y，所以拖动只在下一次点击之前有效。
+    现在位置记在 `st["pos"]`，重画 / 展开菜单都按它放；拖出屏幕时松手夹回桌面。
+    """
+    root, _c, w, st, calls = paint(tmp, None)
+    try:
+        before = parse_xy(calls[-1])
+        assert st['pos'] == before, (st['pos'], before)
+        assert st['ch'] > 0, st['ch']
+
+        # 拖到 (900, 400)：几何只带位置，pos 跟着记
+        st['drag'] = (0, 0)
+        w.__class__._settings_drag(w, SimpleNamespace(x_root=900, y_root=400))
+        assert parse_xy(calls[-1]) == (900, 400), calls[-1]
+        assert st['pos'] == (900, 400), st['pos']
+
+        # 改一个选项 = 重画：位置不变
+        w.__class__._settings_paint(w)
+        assert parse_xy(calls[-1]) == (900, 400), calls[-1]
+
+        # 展开「声音」（多几行、卡片变高）：左上角仍然不动
+        h0 = st['ch']
+        w._voice_menu = True
+        w.__class__._settings_paint(w)
+        assert st['ch'] > h0, (h0, st['ch'])
+        assert parse_xy(calls[-1]) == (900, 400), calls[-1]
+
+        # 拖出屏幕：松手夹回虚拟桌面（3840x2160，卡 456 宽）
+        st['drag'] = (0, 0)
+        w.__class__._settings_drag(w, SimpleNamespace(x_root=5000, y_root=5000))
+        w.__class__._settings_drag_end(w)
+        x, y = parse_xy(calls[-1])
+        assert (x, y) == st['pos'], (x, y, st['pos'])
+        assert x >= 4 and y >= 4, (x, y)
+        assert x + st['cw'] <= 3840 - 4, (x, st['cw'])
+        assert y + st['ch'] <= 2160 - 4, (y, st['ch'])
+
+        # 再画一遍：停在夹好的位置，不会又飘走
+        w.__class__._settings_paint(w)
+        assert parse_xy(calls[-1]) == (x, y), calls[-1]
+    finally:
+        root.destroy()
+
+
 def main():
     if tk is None:
         print('SKIP no tkinter')
@@ -126,12 +184,13 @@ def main():
             check_state(tmp, 'keepOnTop=默认', None)
             check_state(tmp, 'keepOnTop=true', True)
             check_state(tmp, 'keepOnTop=false', False)
+            test_drag_and_repaint(tmp)
     except Exception as exc:  # noqa: BLE001
         if 'Tcl' in repr(exc) or 'display' in repr(exc):
             print(astr('SKIP no display: %r' % (exc,)))
             return 2
         raise
-    print('check-settings-card: all passed (overflow none at %dpx card)' % CARD_MIN)
+    print('check-settings-card: all passed (no overflow at %dpx card; drag stays put)' % CARD_MIN)
     return 0
 
 

@@ -14,7 +14,8 @@
 下一步：等格开口发版：把文末草稿贴进 CHANGELOG 开头、`package.json` / `dsh.plugin.json` 改 `.44`
       → 提交 `release: 0.1.1-more.44 …` → `tag v0.1.1-more.44` → 推 → Release（prerelease）
       → `node scripts/install-dev.mjs` 让 profile 副本同步。**不用重启 DSH**（这次没改宿主侧 JS）。
-证据（全部本轮工具输出里抄的）：
+      `.44` 还应收同一天的两处设置卡修复：「拖动后不再弹回原位」与「卡片也跟随保持置顶」——
+      见 `settings-card-drag.md` / `settings-card-topmost.md` 的草稿。证据（全部本轮工具输出里抄的）：
   - 判据：`examples/floating-chat/window.py:401` `keep_on_top_enabled()`（默认开、只认真正的布尔）
   - 启动：`:958` `self._topmost_on = keep_on_top_enabled(self._settings_read())`
   - 看门狗：`:1290` `_keep_on_top()`（关着时只撤一次 `-topmost`，不反复 SetWindowPos）
@@ -94,6 +95,8 @@
   不让窗静默变成不置顶 —— 那看起来像「窗丢了」。
 - 宿主不报这件事：`status` 的窗口行没有它（宿主读不到窗里的实时值，写出来只是配置文件
   的回声，同 `.37` 的理由）；设置页那一行自己显示当前档。
+- 设置卡（【本插件设置】）也跟着这个开关：关掉后它退出 topmost 带（别的应用能盖住），
+  但仍是主窗的 owned window —— 点悬浮窗不会把它压住。
 - `scripts/selftest-ui.py` 的顶置位检查改成跟 `keepOnTop` 走：开着必须在 topmost 带，
   关着必须不在；关着时「被别的窗口压住」从 WARN 降成 PASS、命中测试降成 WARN
   （那一刻验不了，不是失败）。`dialogs-topmost` 把主窗自己排除（它由第 1 条管）。

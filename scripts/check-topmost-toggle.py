@@ -3,7 +3,7 @@
 
 不创建 Tk 窗口：用 `object.__new__(LiveGlass)` 造一个没有 `__init__` 的壳
 （和 `scripts/check-notif-toggle.py` 同一做法），塞假配置路径 / 假 root，直接调真实方法。
-验六条契约：
+验七条契约：
 
   1. 默认开；只有真正的布尔 `false` 才关（字符串 `"false"` / `0` / `null` 回默认）；
   2. 关掉时看门狗**一次**撤掉 topmost，之后不再反复翻转属性；
@@ -11,7 +11,9 @@
   4. 折叠 / 藏起来时看门狗不抢 z 序（原有守卫不能被这次改动破坏）；
   5. 设置页那一行点一下 = 写 `see-now.json` + **当场** `_apply_topmost` + 就地重画；
   6. 重新显示 / 引用后回主窗走 `_raise_window`：关着置顶时只 lift、不再焊回最前；
-     源码里也不许再出现第二处硬写的 `self.root.attributes("-topmost", True)`。
+     源码里也不许再出现第二处硬写的 `self.root.attributes("-topmost", True)`；
+  7. 设置卡（主窗的 owned window）跟着开关走：关掉时它也退出 topmost 带，但会被 lift
+     在自己主窗上面（点主窗不能把卡压住）。
 
 不碰 Tk、不碰鼠标，也不读写 `~/.dsh`：配置落在临时目录。
 
@@ -153,6 +155,29 @@ def test_watchdog(tmp):
     assert len(w.root.attrs) == n_attrs, w.root.attrs
 
 
+def test_card_follows_toggle(tmp):
+    """设置卡（主窗的 owned window）也得跟着开关 —— 2026-11-27 格问的。
+
+    关掉置顶后卡片也应退出 topmost 带（别的应用能盖住），但仍要 lift 在自己主窗上面，
+    不能点一下主窗就把设置卡压住。
+    """
+    cfg = Path(tmp) / "see-now.json"
+    write_cfg(cfg, {})
+    w = make_window(cfg)
+    card = FakeRoot()
+    w._settings = {"win": card}
+
+    w._apply_topmost(False)
+    assert w.root.attrs[-1] == ("-topmost", False), w.root.attrs
+    assert card.attrs and card.attrs[-1] == ("-topmost", False), card.attrs
+    assert card.lifts == 1, "卡片要重新 lift，别被自己的主窗压住"
+
+    w._apply_topmost(True)
+    assert w.root.attrs[-1] == ("-topmost", True), w.root.attrs
+    assert card.attrs[-1] == ("-topmost", True), card.attrs
+    assert card.lifts == 2, card.lifts
+
+
 def test_raise_window(tmp):
     cfg = Path(tmp) / "see-now.json"
     write_cfg(cfg, {KEY: False})
@@ -229,6 +254,7 @@ def main():
     test_source_guard()
     with tempfile.TemporaryDirectory(prefix="seenow-topmost-") as tmp:
         test_watchdog(tmp)
+        test_card_follows_toggle(tmp)
         test_raise_window(tmp)
         test_click(tmp)
     print("check-topmost-toggle: all passed")

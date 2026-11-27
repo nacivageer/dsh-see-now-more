@@ -1355,7 +1355,10 @@ class LiveGlass:
 
         只改属性位：**开着**时「顶到同带最前面」仍交给 `_keep_on_top` 每 800ms 的那次
         `SetWindowPos`；关掉时一次 `HWND_NOTOPMOST` 就够，不需要反复顶。
-        设置卡开着时不 lift 主窗 —— 那会把卡压到下面（同 `_keep_on_top` 的守卫）。
+
+        设置卡也跟着这个值（2026-11-27 格问的「设置页不受保持置顶控制吗」）：它是主窗的
+        owned window（`transient`），不置顶时仍排在主窗上面，但别的应用能盖住它。
+        设置卡开着时再 lift 一次卡 —— 开置顶那一瞬主窗可能先跳到卡上面。
         """
         try:
             self.root.attributes("-topmost", bool(on))
@@ -1364,7 +1367,9 @@ class LiveGlass:
                 self.root.lift()
             if getattr(self, "_settings", None):
                 try:
-                    self._settings["win"].lift()
+                    sw = self._settings["win"]
+                    sw.attributes("-topmost", bool(on))
+                    sw.lift()
                 except Exception:
                     pass
         except Exception as exc:
@@ -9444,19 +9449,38 @@ class LiveGlass:
         cur = data.get(key, default)
         return cur if cur in options else default
 
+    def _settings_clamp_pos(self, x, y, cw: int, ch: int) -> tuple:
+        """把卡片左上角夹进虚拟桌面（多显示器取总范围）。
+
+        顶 / 左边优先；右边、底边放不下就往回挪。卡片高度会变（展开声音 / 朗读范围），
+        所以夹取按**这一次**的尺寸算。
+        """
+        x = int(max(self._vx + 4, min(int(x), self._vx + self._vw - cw - 4)))
+        y = int(max(self._vy + 4, min(int(y), self._vy + self._vh - ch - 4)))
+        return x, y
+
     def _open_settings(self) -> None:
         self._close_settings()
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
+        # 卡片是主窗的 **owned window**：关掉「保持置顶」后它也跟着不置顶（别的应用能盖住），
+        # 但仍排在自己的主窗上面 —— 不然点一下主窗，设置卡就会被自己的窗压住。
         try:
-            win.attributes("-topmost", True)
+            win.transient(self.root)
+        except Exception:
+            pass
+        try:
+            win.attributes("-topmost", keep_on_top_enabled(self._settings_cached()))
         except Exception:
             pass
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=10, height=10)
         c.pack()
-        self._settings = {"win": win, "canvas": c, "cw": 0, "head": 68,
-                          "rows": [], "hits": [], "mode": None, "drag": None}
+        # `pos`：拖动后的卡片左上角。**必须跨重画记着** —— 改选项 / 展开菜单都会重画，
+        # 以前每画一次就按主窗位置重算，用户拖走了也照样弹回去（2026-11-27 格报的）。
+        # 只活在这一次打开里：关掉再开会回到默认位置（跟着主窗）。
+        self._settings = {"win": win, "canvas": c, "cw": 0, "ch": 0, "head": 68,
+                          "pos": None, "rows": [], "hits": [], "mode": None, "drag": None}
         # **只绑 canvas**：canvas 与 Toplevel 同绑 <Button-1> 会一次点击跑两遍，
         # 一格跳两档（2026-11-19 实报）。拖动另绑 Motion。
         c.bind("<Button-1>", self._settings_click)
@@ -9557,16 +9581,21 @@ class LiveGlass:
         if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
             print(f"[settings] size {cw}x{ch} rows={len(rows)} geo={self._geo.width}x{self._geo.height}",
                   flush=True)
-        x = int(max(self._vx + 4,
-                    min(self._x + (self._geo.width - cw) // 2,
-                        self._vx + self._vw - cw - 4)))
-        y = int(max(self._vy + 4,
-                    min(self._y + 80, self._vy + self._vh - ch - 4)))
+        # 位置：拖过就用拖到的位置，**重画不能再算回默认位置**。没拖过才用默认
+        # （主窗中间偏上）；两种都夹进虚拟桌面，高度变了也不会把卡底顶到屏幕外。
+        pos = st.get("pos")
+        if pos:
+            x, y = self._settings_clamp_pos(pos[0], pos[1], cw, ch)
+        else:
+            x, y = self._settings_clamp_pos(
+                self._x + (self._geo.width - cw) // 2, self._y + 80, cw, ch)
         try:
             win.geometry(f"{cw}x{ch}+{x}+{y}")
             c.configure(width=cw, height=ch)
         except Exception:
             pass
+        st["pos"] = (x, y)
+        st["ch"] = ch
         c.delete("all")
         try:
             c.create_polygon(self._rounded_points(0, 0, cw, ch, 16, 10),
@@ -10016,20 +10045,43 @@ class LiveGlass:
             self._restart_running = False
 
     def _settings_drag(self, e) -> None:
-        """按住标题栏拖卡片：`geometry("+x+y")` 只挪位置、不改尺寸。"""
+        """按住标题栏拖卡片：`geometry("+x+y")` 只挪位置、不改尺寸。
+
+        边拖边把位置记进 `st["pos"]` —— 下一次重画（改选项、展开菜单）按它放，
+        不再算回默认位置。
+        """
         st = self._settings
         if not st or not st.get("drag"):
             return
         dx, dy = st["drag"]
+        x, y = int(e.x_root - dx), int(e.y_root - dy)
         try:
-            st["win"].geometry(f"+{e.x_root - dx}+{e.y_root - dy}")
+            st["win"].geometry(f"+{x}+{y}")
+            st["pos"] = (x, y)
         except Exception:
             pass
 
     def _settings_drag_end(self, _e=None) -> None:
+        """松手：把卡片夹回虚拟桌面。
+
+        位置现在会被记住（`st["pos"]`），拖出屏幕就再也点不到了 —— 以前靠「改选项
+        就回默认位置」兜住，现在不能指望那条，所以松手时夹一次。
+        """
         st = self._settings
-        if st:
-            st["drag"] = None
+        if not st:
+            return
+        st["drag"] = None
+        pos = st.get("pos")
+        cw, ch = st.get("cw") or 0, st.get("ch") or 0
+        if not pos or not cw or not ch:
+            return
+        x, y = self._settings_clamp_pos(pos[0], pos[1], cw, ch)
+        if (x, y) != (int(pos[0]), int(pos[1])):
+            try:
+                st["win"].geometry(f"+{x}+{y}")
+                st["pos"] = (x, y)
+            except Exception:
+                pass
 
     def _settings_check_dim(self, dim: bool) -> None:
         st = getattr(self, "_settings", None)
