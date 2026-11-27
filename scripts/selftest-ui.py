@@ -377,13 +377,17 @@ def run(argv):
     #    关着时还留在带里才是 bug）。主窗自己不算「弹窗」：它归第 1 条。
     #    原来这里一律要求「全在 topmost 带」，于是开着回顾窗 + 关掉置顶时假红
     #    （2026-11-27 发 `.45` 时撞上：2 个可见窗、1 个"not topmost"）。
-    broken = [d for d in same_pid if d['hwnd'] != target['hwnd']
+    #    只数**我们自己的**窗口（Tk 类）：输入法会在前台进程里注入它自己的窗口
+    #    （实测 `SoPY_Status`，搜狗的，永远 topmost、我们管不着），按 pid 数就会假红。
+    ours = [d for d in same_pid if (d['cls'] or '').startswith('Tk')]
+    broken = [d for d in ours if d['hwnd'] != target['hwnd']
               and bool(d['ex'] & WS_EX_TOPMOST) != keep_top and d['rect'] and area(d) > 0]
     results.append(('dialogs-topmost', 'PASS' if not broken else 'FAIL',
-                    'keepOnTop=%s: %d visible window(s) in pid %d, %d %s%s'
-                    % ('on' if keep_top else 'off', len(same_pid), target_pid, len(broken),
+                    'keepOnTop=%s: %d tk window(s) in pid %d, %d %s%s'
+                    % ('on' if keep_top else 'off', len(ours), target_pid, len(broken),
                        'missing topmost' if keep_top else 'still topmost',
-                       (' (' + ', '.join('%r' % d['title'] for d in broken) + ')') if broken else '')))
+                       (' (' + ', '.join('%r' % (d['title'] or d['cls']) for d in broken) + ')')
+                       if broken else '')))
 
     # 5. 单飞：同标题的主窗只该有一个
     results.append(('single-instance', 'PASS' if main_count == 1 else 'FAIL',
