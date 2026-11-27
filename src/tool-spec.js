@@ -55,66 +55,58 @@ export function seeNowToolSpec() {
       'See what is on the user\'s screen **now**, as one image made of several frames, and talk to them '
       + 'through the floating window. Frames are picked by how much the picture changes, so a still screen '
       + 'costs almost nothing.\n\n'
-      + '- `action:"watch"` (default) is the normal way to watch: the first call returns the current screen '
-      + 'in ~1s, then blocks until a sheet is ready (15–40s) or the user types in the floating window. '
-      + '**Call it again right after you reply** — the '
-      + 'blocking call IS the pause; the conversation never ends between sheets. Do not end your turn while '
-      + 'the user is still watching.\n'
+      + '- `action:"watch"` (default): first call returns the current screen in ~1s, then blocks until a '
+      + 'sheet is ready (15–40s) or the user types in the window. **Call it again right after you reply** '
+      + '— the blocking call IS the pause; do not end your turn while they are still watching.\n'
       + '- If you stop calling `watch`, capture keeps running and a full sheet wakes you (`peek`). Closing '
       + 'the window follows their 「关窗后」 setting (default: stop all, tell you once) — then do NOT call '
       + '`see_now` until asked.\n'
-      + '- **Master switch.** `reason:"disabled-by-user"` = screen reading is off: not a fault, '
-      + 'no parameter, `window show` or retry reopens it — only they can (「本插件设置」→「屏幕读取」).\n'
-      + '- **`say` is the only text the user sees and hears at the moment you say it**; your normal reply is '
-      + 'appended to the window log afterwards, never spoken. Never claim the conversation is not recorded '
-      + '— it is.\n'
-      + '- They watch the same screen over and over: do not narrate, do not repeat yourself; silence '
-      + 'is a good answer.\n'
-      + '- If you cannot read something (small text, a filename, a menu), do not guess — retry with '
-      + '`quality:"high"`.\n'
-      + '- A `台词` block in the result is machine-transcribed speech from that window: homophones happen '
-      + '(never quote it as exact), and a missing block does not mean the video was silent.\n\n'
-      + '**Not for recorded video or a series** — the `bilibili` skill reads the whole file and its comments; '
-      + 'this tool samples a few frames a minute.',
+      + '- **Master switch.** `reason:"disabled-by-user"` = screen reading is off: not a fault, no '
+      + 'parameter reopens it — only they can (「本插件设置」→「屏幕读取」).\n'
+      + '- **`say` is the only text the user sees and hears when you say it**; your normal reply is '
+      + 'appended to the window log, never spoken. Never claim the conversation is not recorded — it is.\n'
+      + '- They watch the same screen repeatedly: do not narrate, do not repeat yourself; silence is fine.\n'
+      + '- Cannot read something (small text, filename, menu)? Do not guess — retry with `quality:"high"`.\n'
+      + '- A `台词` block is machine-transcribed speech: homophones happen (never quote as exact); a '
+      + 'missing block does not mean the video was silent.\n\n'
+      + '**Not for recorded video or a series** — the `bilibili` skill reads the whole file; this samples a few frames a minute.',
     parameters: {
       action: {
         type: 'string',
         enum: [...ACTION_VALUES],
         default: 'watch',
         description: 'Which entry point.\n'
-          + '- `watch` (default) — keep watching; this is the one you need most of the time.\n'
-          + '- `peek` — take the sheet that already piled up, without waiting (use it after a 唤醒).\n'
+          + '- `watch` (default) — keep watching; the one you need most.\n'
+          + '- `peek` — take the sheet that already piled up, without waiting (after a 唤醒).\n'
           + '- `status` — loop / sound / window / capability state, as text.\n'
-          + '- `listen` — **只留耳朵**：停画面、音频不停。用户说「先只听 / 黑听」时用；之后插件会用'
+          + '- `listen` — **只留耳朵**：停画面、音频不停。用户说「先只听 / 黑听」时用；之后插件用'
           + '「最近 60 秒声音轨迹」叫你，你自己判断要不要 `watch` 抬眼。\n'
-          + '- `lift` — 取 `since` 那一刻的单帧，只在仅监听时（唤醒文案会给你 `t0`）。\n'
-          + '- `window` — 配合 `show` 显示或隐藏悬浮窗。\n'
+          + '- `lift` — 取 `since` 那一刻的单帧，只在仅监听时（唤醒文案会给 `t0`）。\n'
+          + '- `window` — 配 `show` 显示或隐藏悬浮窗。\n'
           + '- `region` — 让用户拖一块框，之后 `watch` 默认只看那块。\n'
           + '- `crop` — 按 `region:"x,y,w,h"` 截一块**原生 1:1**（主屏物理像素，不缩小）；'
           + '块内 (u,v) 的屏幕坐标 = region 左上角 + (u,v)。\n'
-          + '- `bloodbar` — 让用户框**自己角色**那条常驻 UI 的血条（敌人血条只在交战时出现，别框）；'
-          + '`read:true` 读一次比例。进仅监听后每秒读一次，'
-          + '但读数只写进唤醒文案、`watch` 结果和 `status`，**低血不会叫醒你**。\n'
+          + '- `bloodbar` — 让用户框**自己角色**那条常驻血条（敌人血条只在交战时出现，别框）；'
+          + '`read:true` 读一次比例。仅监听后每秒读一次，但读数只进唤醒文案 / `watch` / `status`，'
+          + '**低血不会叫醒你**。\n'
           + '- `start` / `stop` — 显式开关采集（平时 `watch` / `stop` 就够）。\n'
-          + '- `pointer` — 在 `x,y` 画一个圈/箭头并**停住等**（默认关）：等到用户点了（`click`，'
-          + '报在圈里还是圈外）、那儿换了窗口（`change`）、或到点（`timeout`）。他要「指给我看」时用它；'
-          + '**配 `say` 把指令送进悬浮窗**（先气泡再画圈；他常切在别的会话）。'
-          + '没开时直接返回未启用，别自己改他的配置。\n'
+          + '- `pointer` — 在 `x,y` 画圈/箭头并**停住等**（默认关）：等用户点了（`click`，报圈里/圈外）、'
+          + '那儿换了窗口（`change`）、或到点（`timeout`）。他要「指给我看」时用；**配 `say` 把指令送进'
+          + '悬浮窗**（先气泡再画圈；他常切在别的会话）。没开时直接返回未启用，别自己改他配置。\n'
           + '- `restart` — 排一次 DSH 重启（改完插件用）：只排队，回执见下一次 `status`。',
       },
       say: {
         type: 'string',
-        description: '用户此刻唯一看得见也听得见的话：一条气泡 + 朗读一次。一次说 2–3 句，'
-          + '别为了补一句再调一次。**加粗只影响气泡排版，不影响朗读**；'
-          + '语音只认语气标记：`〔…〕`（或 `【…】`）标出要重读的那一段（只能一段，含速度/音量/音高的抬升）、'
-          + '`‖` 是换气口（很短的一顿，不是逗号）、`~` 是拖音，开头写 `【急】` 或 `【柔】` '
-          + '让整句更快 / 更慢。「（发抖）」这类表演提示不会念出来；标记只影响念法，气泡里不显示。',
+        description: '用户此刻唯一看得见也听得见的话：一条气泡 + 朗读一次。一次说 2–3 句，别为补一句再调一次。'
+          + '**加粗只影响气泡，不影响朗读**；语音只认语气标记：`〔…〕`（或 `【…】`，只能一段）标重读、'
+          + '`‖` 换气口（短顿，不是逗号）、`~` 拖音；开头 `【急】` / `【柔】` 让整句更快 / 更慢。'
+          + '「（发抖）」这类表演提示不念；标记只影响念法，气泡里不显示。',
       },
       seconds: {
         type: 'integer',
         default: DEFAULT_BLOCK_SEC,
-        description: 'With `watch`: 阻塞等待的上限秒数（默认 300，封顶 860）。平时不用传 —— '
-          + '攒够一张就提前返回；上限只在画面静止时起作用，那时就该一直挂着，而不是结束回合。',
+        description: 'With `watch`: 阻塞等待上限秒数（默认 300，封顶 860）。平时不用传 —— 攒够一张就提前返回；'
+          + '上限只在画面静止时起作用，那时该一直挂着，而不是结束回合。',
       },
       minFrames: {
         type: 'integer',
@@ -149,18 +141,17 @@ export function seeNowToolSpec() {
         enum: ['calm', 'normal', 'dense', 'game-economic'],
         default: 'normal',
         description: '多久算换一次画面、多久叫醒你一次。粘性，不传就保持当前档。\n'
-          + '- 用户说**「太密了 / 回复太频繁 / 省点钱 / 慢一点」** → `calm`：这是唯一真能降开销的'
-          + '旋钮，口头答应没用。\n'
+          + '- 用户说**「太密 / 太频繁 / 省点钱 / 慢一点」** → `calm`：唯一真能降开销的旋钮，口头答应没用。\n'
           + '- 用户说**「漏了 / 不灵敏 / 太迟钝」** → `dense`（费钱，只在演示或快画面时用）。\n'
-          + '- 动作游戏且嫌糊 / 太频繁 → `game-economic`：出帧按运动量攒、每张最多 8 帧，'
-          + '只适合动作游戏 —— 访谈、口播、看剧、快剪视频会漏掉大半镜头。\n'
-          + '文件回放（看视频）自动按 dense 的切点门槛；屏幕采集照当前档。',
+          + '- 动作游戏且嫌糊 / 太频繁 → `game-economic`：按运动量攒帧、每张最多 8 帧；访谈、口播、看剧、'
+          + '快剪视频会漏掉大半镜头。\n'
+          + '文件回放按 dense 的切点门槛；屏幕采集照当前档。',
       },
       scene: {
         type: 'boolean',
-        description: '**逐帧播报**，默认关、粘性。开了之后每留下一个画面就单独给一张满幅图，'
-          + '每换一次画面叫你一次，你回一句 `say`。只在用户明确说「每换一个场景就告诉我 / '
-          + '每翻一页说一句 / 逐帧播报 / 一个画面一张图」时开：每次唤醒 = 一张图 + 一轮往返，很贵，也吵。',
+        description: '**逐帧播报**，默认关、粘性。开后每个留下的画面单出一张满幅图、每次换画面叫你一次，'
+          + '你回一句 `say`。只在用户明确说「每换一个场景就告诉我 / 每翻一页说一句 / 逐帧播报 / '
+          + '一个画面一张图」时开：每次唤醒 = 一张图 + 一轮往返，很贵，也吵。',
       },
       preset: {
         type: 'string',
@@ -208,9 +199,9 @@ export function seeNowToolSpec() {
       window: {
         type: 'string',
         description: '窗口标题里的一段（不用全名），配 `source:"window"` 或 `action:"bloodbar"` 用。\n'
-          + '- `source:"window"`：抓这个窗口的画面（被遮挡照样有；最小化抓不到，独占全屏会改抓屏幕）。\n'
-          + '- `bloodbar`：抓血条的方式。不传 = 按屏幕抓（`gdigrab`）—— 悬浮窗或别的窗口压到血条上，'
-          + '读到的就是压住它的那块；玩全屏游戏、或窗可能压住血条时传标题走 WGC。`"off"` 回到抓屏幕。',
+          + '- `source:"window"`：抓这个窗口的画面（被遮挡照样有；最小化抓不到，独占全屏改抓屏幕）。\n'
+          + '- `bloodbar`：抓血条的方式。不传 = 按屏幕抓（`gdigrab`）—— 被悬浮窗或别的窗口压到血条上'
+          + '就读到压住它的那块；全屏游戏、或窗可能压住血条时传标题走 WGC。`"off"` 回到抓屏幕。',
       },
       show: {
         type: 'boolean',
