@@ -93,3 +93,4 @@
 
 - 2026-11-27 10:19 新建（等你定）。依据：格的定位（不 fork、要能修 DSH 自己、烦手动重启）+ 本轮核对（`src/window.js:495`、`src/chat.js:31`、`src/index.js:1609`、`dshmarket/lib/restart.js`、`src` 里 restart 0 命中、`H:\DSH\Current\DeepSeek Harness.exe`）。未动代码。
 - 2026-11-27 10:29 收窄范围：格指出「关掉 DSH 之后还想问」这条用**交接文**就够，不需要窗里再挂一个模型通道。所以 A（窗直连 provider）/ B（headless 会话）两支**不做了**，本任务书只剩「重启 DSH + 回来自核」；离线期间的说明由 `docs/offline-card.md` 承担。
+- 2026-11-27 10:39 交接卡迁到全局：`C:\Users\Administrator\.dsh\offline-card.md`（模板 `~/.dsh/templates/offline-card.md`），本区 `docs/offline-card.md` 删除；规则同步写进全局 `AGENTS.md` 的动作反射，本区不再重复。
