@@ -108,3 +108,4 @@
 - 2026-11-27 10:41 砍掉「独立启动」：交接卡落到全局 `C:\Users\Administrator\.dsh\offline-card.md` 之后，格关 DSH 时不再需要窗里有模型；而窗平时一直开着（detached），重启的执行端已经在场。所以 P1 从三件减到两件，独立启动与常驻形态并入 P2。
 - 2026-11-27 10:51 补「跟着静默启动宿主」（格提）：从窗启动时可让 DSH 一起起来但不出主窗、不抢焦点。选项 hostStart: ask|silent|never，默认 ask；同一个姿态也管 P1 重启回来时的样子。桌面端是否支持静默启动**待验**，备选是拉起 headless 主机连它。
 - 2026-11-27 10:55 验完并否掉「跟着静默启动」：桌面端无静默启动（唯一 argv 开关是 --updated；启动路径 enterWorkspace 默认 show），headless 备选被 startupAddressInUse 堵死（桌面端与 dsh web 不能同时跑）。剩下的外部隐藏窗口 hack 不值得维护，格说「算了」。从窗拉起 DSH 时接受弹一下。
+- 2026-11-27 11:16 HMR 试完，判不可用（详见 `docs/决策记录.md` 同名小节）：不是 combo bundle；`--expose-internals` 已满足；默认 `ignored` 含 `node_modules`，覆盖后重启仍不重载。四处改动已回滚，插件副本与源码一致（`.38`）。这条不改变 P1，反而更说明「重启要自动化」而不是「靠热载绕过」。
