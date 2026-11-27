@@ -102,6 +102,22 @@ export const TUNING_DEFAULTS = Object.freeze({
    * 建管线时定死（和 `maxFrames` / `strategy` 一样），**改完要重开 DSH**。
    */
   tierCurve: 'docx',
+  /**
+   * **图库自动省略**（见 `offload.js`）：会话历史里的截图涨到 `imageTrigger` 张时，
+   * 一次省到只剩 `imageKeep` 张 —— 走宿主的 `image/offload` 事件，图不再进请求、磁盘也能删。
+   *
+   * 为什么要两个数：只留 `imageKeep`（一超就省）会让**每出一张图就改一次历史**，前缀缓存
+   * 每轮全废，省下的 token 不够付重算的钱。攒批的意义是「攒 200 张才重写一次历史」。
+   *
+   * `imageTrigger = 0` 关掉整件事；`imageKeep` 必须小于 `imageTrigger`（否则一触发就白省，
+   * 这里记一条 warn、`offload.runNow()` 拒绝干活、`status` 照实说）。
+   *
+   * **只走配置、不进工具 schema**（2026-11-27 定，同 `tierCurve`）：管「全局留多少」的旋钮
+   * 不占 schema 的字；schema 已经顶在硬预算上。和 `packStretch` 不同，这两个数是**热读**的
+   * —— 交付后的检查在节流窗口外会重新读一次配置，改完 30 秒内生效，不用重开 DSH。
+   */
+  imageTrigger: 300,
+  imageKeep: 100,
 });
 
 /**
@@ -470,6 +486,36 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
   }
 
   /**
+   * 图库省略的两个阈值（见 `offload.js` 与 `TUNING_DEFAULTS.imageTrigger` 的注释）。
+   *
+   * 这里**不夹** `keep < trigger`：配置写坏了要报出来，而不是悄悄改成别的数
+   * （夹了以后 `status` 上看到的是夹过的值，和文件里写的对不上，反而更难查）。
+   * 真正干活的地方（`offload.runNow`）会拒绝并说清楚。
+   */
+  let imageTrigger = TUNING_DEFAULTS.imageTrigger;
+  if (raw.imageTrigger !== undefined) {
+    const n = Number(raw.imageTrigger);
+    if (Number.isInteger(n) && n >= 0 && n <= 2000) imageTrigger = n;
+    else {
+      warnings.push('imageTrigger 必须是 0–2000 的整数（0 = 关掉图库省略），'
+        + `已用默认 ${TUNING_DEFAULTS.imageTrigger}`);
+    }
+  }
+  let imageKeep = TUNING_DEFAULTS.imageKeep;
+  if (raw.imageKeep !== undefined) {
+    const n = Number(raw.imageKeep);
+    if (Number.isInteger(n) && n >= 0 && n <= 2000) imageKeep = n;
+    else {
+      warnings.push('imageKeep 必须是 0–2000 的整数，'
+        + `已用默认 ${TUNING_DEFAULTS.imageKeep}`);
+    }
+  }
+  if (imageTrigger > 0 && imageKeep >= imageTrigger) {
+    warnings.push(`imageKeep（${imageKeep}）必须小于 imageTrigger（${imageTrigger}），`
+      + '否则一触发就白省 —— 现在不会省略');
+  }
+
+  /**
    * 档位阈值表（`tierCurve`）：两套里选一套，认不出的值退回 `docx` 并报出来。
    *
    * 上游还有第三个值 `custom`（自填 7 个帧/秒的阈值），**故意没搬**：`perceptual` 还没在
@@ -519,6 +565,9 @@ export function readTuning({ env = process.env, readFile = readFileSync } = {}) 
     packStretch,
     /** 档位阈值表：`docx` / `perceptual`（见上面的校验块与 `tiers.js`） */
     tierCurve,
+    /** 图库省略：涨到 `imageTrigger` 张才动手、一次省到只剩 `imageKeep` 张（0 = 关） */
+    imageTrigger,
+    imageKeep,
     listen: listenCfg.listen,
     lift: liftCfg.lift,
     mirror: mirrorCfg.mirror,

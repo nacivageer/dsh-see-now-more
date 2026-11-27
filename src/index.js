@@ -33,6 +33,7 @@ import { captureCrop, validateCropRegion } from './crop.js';
 import { loadBloodbar, saveBloodbar, clearBloodbar, bloodbarText, bloodbarLine } from './bloodbar.js';
 import { textStatusLine } from './text-band.js';
 import { tierCurveNote } from './tiers.js';
+import { createOffloadScheduler, offloadLine } from './offload.js';
 import { readBloodbarOnce, readBloodbarWindowOnce } from './bloodbar-capture.js';
 import { todayCounts } from './lift/log.js';
 import { liftLine, liftGearLine } from './lift/status.js';
@@ -709,6 +710,24 @@ async function registerAll(ctx) {
    */
   const tuning = readTuning();
   if (tuning.warnings.length) log?.(`[see-now] ${tuning.warnings.join('；')}`);
+  /**
+   * **图库自动省略**（2026-11-27，`0.1.1-more.41`）：会话历史里的截图涨到 `imageTrigger`
+   * 就一次性省到 `imageKeep`，走宿主正规事件 `image/offload`。
+   *
+   * 两个数**热读**（每次检查现读 `see-now.json`）：和 `tierCurve` / `packStretch` 不同，
+   * 它们不参与建管线，改完没必要重开 DSH。节流在 `offload.js` 里按会话记 30 秒，
+   * 所以「热读」的实际开销是每会话每 30 秒一次 stat。
+   */
+  const offloadConfigNow = () => {
+    try {
+      const fresh = readTuning();
+      return { imageTrigger: fresh.imageTrigger, imageKeep: fresh.imageKeep };
+    } catch {
+      return { imageTrigger: tuning.imageTrigger, imageKeep: tuning.imageKeep };
+    }
+  };
+  const offload = createOffloadScheduler({ ctx, log, readConfig: offloadConfigNow });
+  disposers.push(() => offload.dispose());
   /**
    * **浮窗镜像主窗用户消息**（2026-11-26）：`chat.jsonl` 加 `origin:"dsh"` 条目，
    * 四个消费点用 `isFloatUserEntry` 挡住。方案与边界见
@@ -1832,6 +1851,17 @@ async function registerAll(ctx) {
       const finalOut = sayNoWindow && noted && typeof noted.text === 'string'
         ? { ...noted, text: `${noted.text}${sayNoWindow}` }
         : noted;
+      /**
+       * **交付完再决定要不要省老图**（2026-11-27，`.41`）。只排一个 `setTimeout(0)`、
+       * 同会话 30 秒一次，**绝不在交付路径上等** —— 重放会话日志要几十到几百毫秒，
+       * 模型拿到图的时间不能受它影响。
+       *
+       * 会话 id 在这一刻同步定下来（`run.agent.id` 就是 SessionId）：留到定时器里现取，
+       * `watch` 阻塞期间别的会话调一次工具就能把它改掉，于是省错会话。
+       */
+      if (Array.isArray(finalOut?.images) && finalOut.images.length > 0) {
+        try { offload.afterDelivery(run?.agent?.id ?? null); } catch { /* 省略绝不能挡住交付 */ }
+      }
       return toLosslessJson(withPendingNote(finalOut));
     },
 
@@ -2727,6 +2757,14 @@ async function registerAll(ctx) {
         const capText = capabilityLine(s.capabilities);
         // 关掉留底时这里是 null，status 一行都不多（验收第 4 条）
         const liftText = liftLine(s.lift);
+        /**
+         * 图库（`.41`）：**本次采集**出了几张 + 省略的状态。
+         *
+         * 只报"本次采集"，不假装知道整个会话：图落在宿主附件库、被历史引用着，
+         * 插件读不到别人的会话日志。省略那半截由 `offloadLine()` 按状态说人话
+         * （关着 / 宿主没有 / 配置无效 / 涨到多少省到多少 / 上次失败）。
+         */
+        const libLine = offloadLine({ sheets: s.sheets, config: offloadConfigNow(), state: offload.state() });
         return {
           // 总开关放第一行：用户关掉之后第一件想知道的就是"它到底还看不看"
           text: (s.enabled === false
@@ -2747,6 +2785,8 @@ async function registerAll(ctx) {
             + `\n窗内收话：${relayTimer ? '开（没有采集循环、或循环没有投递目标时，窗里打的话也会投给绑定会话）· relay v5' : '关'}`
             // 队列：手上有没有攒着没取走的图 —— `pending` 一直是 1 时模型不会收到新图，只会一直被叫
             + `\n队列：${s.pending ? `有 ${s.pending} 张没取走（出图序号 ${s.sheets}）` : '空'}`
+            // 图库：**"上下文怎么越来越贵"先看这行** —— 出图数 + 老图省没省、为什么没省
+            + (libLine ? `\n${libLine}` : '')
             // 窗口：**"它在看但我什么都没看到"时第一个要看的就是这一行**
             + `\n${windowLine()}`
             + (s.window?.ok === false && s.window?.reason ? `\n  ↳ 开窗失败：${s.window.reason}` : '')
@@ -2804,7 +2844,7 @@ async function registerAll(ctx) {
             + (liftText ? `\n${liftGearLine(lp, s.lift, todayCounts())}` : '')
             // 宿主 cookie 拥挤度：只快满了才出现（满了之后插件根本起不来，提醒不到）
             + cookieWarnLine(),
-          meta: { ...s, voice, loop: lp, window: windowReport() },
+          meta: { ...s, voice, loop: lp, window: windowReport(), offload: offload.state() },
         };
       }
 
