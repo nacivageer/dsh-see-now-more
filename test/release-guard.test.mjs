@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import {
-  authPath, buildSteps, changelogSection, readAuth, validateVersion,
+  authPath, buildSteps, changelogSection, readAuth, repoOf, validateVersion,
 } from '../scripts/release.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -53,7 +53,9 @@ test('validateVersion：只认 0.1.1-more.N，且三处必须同值', () => {
   assert.match(mm.reason, /dsh\.plugin\.json/);
 });
 
-test('readAuth：缺 / 坏 / allow 非 true / 过期 都拒绝，合法的放行', () => {
+const REPOS = ['nacivageer/dsh-see-now-more'];
+
+test('readAuth：缺 / 坏 / allow 非 true / 过期 / 没写范围 都拒绝，合法的放行', () => {
   const today = new Date('2026-11-27T12:00:00');
   assert.equal(readAuth('/definitely/not/here.json', today).ok, false);
 
@@ -61,11 +63,13 @@ test('readAuth：缺 / 坏 / allow 非 true / 过期 都拒绝，合法的放行
   try { assert.equal(readAuth(broken.path, today).ok, false); } finally { broken.cleanup(); }
 
   for (const [label, json] of [
-    ['allow=false', { allow: false, until: '2027-01-31' }],
-    ['没有 until', { allow: true }],
-    ['until 形状不对', { allow: true, until: '2027/1/31' }],
-    ['until 不存在', { allow: true, until: '2027-02-31' }],
-    ['已过期', { allow: true, until: '2026-11-26' }],
+    ['allow=false', { allow: false, until: '2027-01-31', repos: REPOS }],
+    ['没有 until', { allow: true, repos: REPOS }],
+    ['until 形状不对', { allow: true, until: '2027/1/31', repos: REPOS }],
+    ['until 不存在', { allow: true, until: '2027-02-31', repos: REPOS }],
+    ['已过期', { allow: true, until: '2026-11-26', repos: REPOS }],
+    ['没写范围', { allow: true, until: '2027-01-31' }],
+    ['范围是空数组', { allow: true, until: '2027-01-31', repos: [] }],
   ]) {
     const t = tmpAuth(json);
     try {
@@ -73,12 +77,24 @@ test('readAuth：缺 / 坏 / allow 非 true / 过期 都拒绝，合法的放行
     } finally { t.cleanup(); }
   }
 
-  const okAuth = tmpAuth({ allow: true, until: '2027-01-31' });
+  // 长期有效：不是「每次发版重建一份当天过期的」
+  const okAuth = tmpAuth({ allow: true, until: '2027-11-27', repos: REPOS });
   try {
     const r = readAuth(okAuth.path, today);
     assert.equal(r.ok, true);
-    assert.match(r.reason, /2027-01-31/);
+    assert.match(r.reason, /2027-11-27/);
+    assert.deepEqual(r.repos, REPOS);
+    assert.match(r.reason, /nacivageer\/dsh-see-now-more/);
   } finally { okAuth.cleanup(); }
+});
+
+test('repoOf：https / ssh / 带 .git 都能取出 owner/repo', () => {
+  assert.equal(repoOf('https://github.com/nacivageer/dsh-see-now-more.git'), REPOS[0]);
+  assert.equal(repoOf('https://github.com/nacivageer/dsh-see-now-more'), REPOS[0]);
+  assert.equal(repoOf('git@github.com:nacivageer/dsh-see-now-more.git'), REPOS[0]);
+  assert.equal(repoOf('git@github.com:nacivageer/dsh-see-now-more'), REPOS[0]);
+  assert.equal(repoOf(''), null);
+  assert.equal(repoOf('https://example.com/x/y.git'), null);
 });
 
 test('authPath：默认在 ~/.dsh，可被 DSH_SEE_RELEASE_AUTH 覆盖（测试用）', () => {

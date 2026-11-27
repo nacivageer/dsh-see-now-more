@@ -24,8 +24,14 @@
  *    Watch / RSS 通知），这一项标 irreversible。
  *
  * 双条件（约束 3）：`--go` **且** `~/.dsh/see-now-release.json` 里
- * `{"allow": true, "until": "YYYY-MM-DD"}` 且 `until` 未过期。授权文件缺 / 过期 / 写坏 →
- * 拒绝执行（fail-closed）。路径可用 `DSH_SEE_RELEASE_AUTH` 覆盖（给测试用）。
+ * `{"allow": true, "until": "YYYY-MM-DD", "repos": ["nacivageer/dsh-see-now-more"]}`，
+ * `until` 未过期、且 `repos` 含本仓。缺 / 过期 / 写坏 / 没写范围 → 拒绝执行（fail-closed）。
+ * 路径可用 `DSH_SEE_RELEASE_AUTH` 覆盖（给测试用）。
+ *
+ * **这份文件建一次、长期有效，不是每次发版的手续**（2026-11-27 更正）：发版这件事的许可在
+ * 对话里 —— 人每次都在场、每次会说发哪个版本；文件管的是「哪个仓、到哪天为止」这种不该
+ * 每次重问的东西。上一版让用户每次重建一份当天过期的文件，只增加了她的动作，没有增加
+ * 任何真实约束（文件是她授权、命令是我跑，她重建多少次都不改变这一点）。
  *
  * 跑法：
  *   node scripts/release.mjs            # dry-run：验一遍前置条件、打印将要执行的命令
@@ -85,7 +91,20 @@ export function readAuth(path, today = new Date()) {
     return { ok: false, reason: `until 不是真实日期：${raw.until}` };
   }
   if (until < today) return { ok: false, reason: `授权已过期（until=${raw.until}）` };
-  return { ok: true, reason: `授权到 ${raw.until}` };
+  // 「范围」不是装饰：一个空着或指别处的授权文件，等于没有边界。**长期有效，
+  // 不用每次发版重建** —— 发版这件事的许可在对话里（人每次都在场），文件管的是
+  // 「哪个仓、到哪天为止」，那两样才是可以事先说清、不该每次重问的。
+  const repos = Array.isArray(raw.repos) ? raw.repos.map(String).filter(Boolean) : [];
+  if (!repos.length) {
+    return { ok: false, reason: '授权文件没写范围：要一个非空的 repos 数组（例 ["nacivageer/dsh-see-now-more"]）' };
+  }
+  return { ok: true, reason: `授权到 ${raw.until}（范围 ${repos.join(', ')}）`, repos };
+}
+
+/** 从 remote URL 里取出 `owner/repo`（https / ssh 两种写法都认）。 */
+export function repoOf(url) {
+  const m = /github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(String(url || '').trim());
+  return m ? `${m[1]}/${m[2]}` : null;
 }
 
 export function validateVersion(version, pluginVersion) {
@@ -197,8 +216,8 @@ function main() {
   if (!auth.ok) {
     refuse([
       auth.reason,
-      `建 ${authPath()} ：{"allow": true, "until": "2027-01-31"}`,
-      '（这是 write-guard 的「双条件」：--go 之外还要一份带期限的本地授权）',
+      `建 ${authPath()} ：{"allow": true, "until": "2027-11-27", "repos": ["nacivageer/dsh-see-now-more"]}`,
+      '（建一次就够：这份文件管「哪个仓、到哪天」，不管「这一次发不发」；发不发在对话里定）',
     ]);
   }
 
@@ -212,6 +231,13 @@ function main() {
 
   const remote = run('git', ['remote', 'get-url', 'origin']);
   if (!REPO_RE.test(remote.out)) refuse([`origin 不是本仓：${remote.out.trim()}`]);
+  const repo = repoOf(remote.out);
+  if (!repo || !auth.repos.includes(repo)) {
+    refuse([
+      `授权文件的 repos 里没有 ${repo || remote.out.trim()}`,
+      `文件里写的是：${auth.repos.join(', ')}`,
+    ]);
+  }
 
   const exists = run('git', ['tag', '-l', tag]);
   if (exists.out.trim()) refuse([`本地已经有 ${tag}，别再打一次（版本号要往前走）`]);
