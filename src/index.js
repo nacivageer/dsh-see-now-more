@@ -2044,6 +2044,19 @@ async function registerAll(ctx) {
         const regionOff = /^(off|none|clear)$/i.test(rawRegion);
         const built = srcOf(regionOff ? { ...args, region: undefined } : args);
         if (built.error) return { text: built.error, meta: { ok: false, reason: built.reason ?? 'bad-region' } };
+        /**
+         * 字幕带要裁哪一块：**框了字幕行就按框**（`text.region`，屏幕物理像素），否则按
+         * 整屏底部 16%。只在整屏源认框 —— 窗口 / 文件 / obs / camera 的帧坐标不是屏幕坐标，
+         * 与文字流那条 `regionAllowed` 同口径（`src/text-stream.js:363`）。
+         *
+         * `fallback` 一起传：框换算不出 / 帧内太矮时由管线退回它，并把原因写进 `sheet.bandNote`。
+         */
+        let subtitleBand = SUBTITLE_BAND;
+        if (subtitleMode && (!built.src || built.src.kind === 'screen')) {
+          let boxed = null;
+          try { boxed = readTuning().text?.region ?? null; } catch { /* 读不到就按默认带 */ }
+          if (boxed && typeof boxed === 'object') subtitleBand = { region: boxed, fallback: SUBTITLE_BAND };
+        }
         const src = built.src;
         const stickyRegion = regionOff ? null : (rawRegion ? undefined : loadRegion());
         if (regionOff) clearRegion();
@@ -2101,7 +2114,7 @@ async function registerAll(ctx) {
             // 字幕带：只出底部那一条，最多 4 条一张（竖着叠，上=早）。
             // 放在档位之后 = 字幕带的采样口径压过档位，这就是它该有的优先级。
             ...(subtitleMode ? {
-              band: SUBTITLE_BAND,
+              band: subtitleBand,
               maxFrames: SUBTITLE_MAX_FRAMES,
               /**
                * **字幕带没有"切点"可言**：字一换，整帧差不到 12 分（只有底部那条在变），
@@ -2205,8 +2218,19 @@ async function registerAll(ctx) {
          * 这不是一次性提示，所以放在结果里，而不是 `pendingModeNote`。
          */
         if (subtitleMode && out?.text) {
-          out.text = '（**字幕带模式**：这张图只有画面底部 16% 那一条（左右各裁掉 10%，字幕本来也不会顶到边），从上到下按时间排列，'
-            + '编号 1 是最早的一条。画面其它地方你看不到，不要假设那里发生了什么。）\n'
+          /**
+           * 图注要和**实际裁的那一块**一致：框过字幕行就按框裁（左右不再让边），没框才是底部 16%。
+           * 兜底时（框算不出 / 太矮）必须说明，否则模型会以为"框生效了"去猜画面别处（口径 5）。
+           */
+          const bs = r.sheet;
+          const boxed = Boolean(bs?.regionRect);
+          const note = bs?.bandNote;
+          out.text = (boxed
+            ? '（**字幕带模式**：这张图只含你框的那一条字幕行（按框裁，左右不再让边），从上到下按时间排列，'
+            : '（**字幕带模式**：这张图只有画面底部 16% 那一条（左右各裁掉 10%，字幕本来也不会顶到边），从上到下按时间排列，')
+            + '编号 1 是最早的一条。画面其它地方你看不到，不要假设那里发生了什么。）'
+            + (note ? `\n（字幕框这次没用上：${note}。）` : '')
+            + '\n'
             + out.text;
         }
         /**

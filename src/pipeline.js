@@ -23,6 +23,19 @@ import { solve, toRects, splitOneBin } from './pack.js';
 import { composePacked, drawAudioStrip, stripHeight } from './sheet.js';
 import { encodePng } from './png.js';
 import { gridRects } from './layout.js';
+import { rectFromRegion } from './text-band.js';
+
+/**
+ * 字幕框在帧内至少要有这么高（像素）：低于它字读不出，宁可退回默认带（任务书「待定 2」）。
+ * 4K 屏 + ultra 帧（1596 宽）下，一条正常字幕行约 40–60px，16 是"只剩半行"的下限。
+ */
+const BAND_REGION_MIN_H = 16;
+
+/**
+ * 字幕框兜底用的默认带 `[y0, y1, inset]`：与 `index.js` 的 `SUBTITLE_BAND` 同值。
+ * 只在框换算不出 / 帧内太矮时用；`index.js` 每次都会显式传 `fallback`，这里是最后一道保险。
+ */
+const BAND_REGION_FALLBACK = Object.freeze([0.84, 1.0, 0.10]);
 
 /**
  * 低分辨率找字幕行：在画面下部 45% 里隔几列抽一对相邻样本，数每行的「强边沿」。
@@ -779,16 +792,30 @@ export function createPipeline(opts = {}) {
   }
 
   /**
-   * 字幕带参数：`[y0, y1, insetX?]`（高度比例，第三个是左右各让出的比例），
-   * 或者 `'auto'` —— 每帧先**低分辨率找文本行**再裁（见 `detectTextBand`）。
+   * 字幕带参数，三种形态：
+   *
+   *   - `[y0, y1, insetX?]` —— 高度比例，第三个是左右各让出的比例；
+   *   - `'auto'` —— 每帧先**低分辨率找文本行**再裁（见 `detectTextBand`）；
+   *   - `{ region: {x,y,w,h,sw,sh} }` —— **字幕框**（`text.region`，屏幕物理像素），
+   *     帧内矩形交给 `text-band.js` 的 `rectFromRegion()` 算，这里只管取用。
+   *     换算不出 / 帧内太矮时退回 `[0.84, 1.0, 0.10]` 那一档，原因写进 `sheet.bandNote`。
    *
    * **为什么要让左右**：正常片子不会让字幕顶到画面两侧，左右各留 10% 是通行做法
    * （一行太长就按停顿分段）。把这两条空边一起裁掉，宽度从 1596 掉到 1277，
    * token 少 18%，而字幕一个像素都没少 —— 收的是本来就没有字的边。
+   * 框形态不让边：框是用户自己框的，空边已经不含在内。
    */
   function bandOf() {
     const b = o.band
     if (b === 'auto') return { auto: true, inset: 0.10 }
+    if (b && typeof b === 'object' && !Array.isArray(b) && b.region) {
+      const fb = (Array.isArray(b.fallback) && b.fallback.length >= 2 ? b.fallback : BAND_REGION_FALLBACK).map(Number)
+      const [fy0, fy1, finsetX = 0.10] = fb
+      const fallback = (Number.isFinite(fy0) && Number.isFinite(fy1) && fy1 - fy0 > 0.01)
+        ? { y0: fy0, y1: fy1, inset: Math.max(0, Math.min(0.4, Number(finsetX) || 0)) }
+        : { y0: 0.84, y1: 1, inset: 0.10 }
+      return { region: b.region, inset: 0, fallback }
+    }
     if (!Array.isArray(b) || b.length < 2) return null
     const [y0, y1, insetX = 0] = b.map(Number)
     if (!Number.isFinite(y0) || !Number.isFinite(y1)) return null
@@ -815,9 +842,27 @@ export function createPipeline(opts = {}) {
   function flushBand(batch, t, why) {
     const cfg = bandOf()
     const auto = cfg.auto === true
-    const inset = cfg.inset
-    const x0 = Math.min(Math.round(width * inset), width - 16)
-    const bandW = Math.max(16, width - x0 * 2)
+    /**
+     * 字幕框（`o.band = { region }`）：**只换"裁哪一块"，不换清晰度**。
+     * 换算走 `rectFromRegion()`（`text-band.js` 唯一一份）；算不出或帧内太矮时退回
+     * `cfg.fallback` 那一条，并把原因留在 `sheet.bandNote` 里 —— 口径 5：兜底不静默。
+     */
+    let box = null
+    let boxWhy = null
+    if (cfg.region) {
+      box = rectFromRegion(width, height, cfg.region)
+      if (!box) {
+        boxWhy = '字幕框换算不出（框过小或 sw/sh 缺失），按底部条带'
+      } else if (box.h < BAND_REGION_MIN_H) {
+        boxWhy = `字幕框在帧内只有 ${box.h}px 高（< ${BAND_REGION_MIN_H}px），按底部条带`
+        box = null
+      }
+    }
+    // 兜底用 fallback 带：`{region}` 形态没有 y0/y1，不能拿 cfg 直接算
+    const plain = box ? null : (cfg.region ? cfg.fallback : cfg)
+    const inset = plain ? plain.inset : 0
+    const x0 = box ? box.x : Math.min(Math.round(width * inset), width - 16)
+    const bandW = box ? box.w : Math.max(16, width - x0 * 2)
     /**
      * **同样的字幕只留一条**：兜底帧是固定节拍（2.5 秒），一句台词挂 4 秒就会被拍两次。
      *
@@ -828,7 +873,12 @@ export function createPipeline(opts = {}) {
     const picks = []
     let top = 0
     let rows = 0
-    if (auto) {
+    if (box) {
+      // 框形态：整批都按框裁，不找文本行、也不让边
+      top = box.y
+      rows = box.h
+      for (const f of batch) picks.push({ f })
+    } else if (auto) {
       // 先定位：所有帧的文本行取并集，一张图里的每条带子必须同高才好对齐
       let lo = Infinity
       let hi = -1
@@ -845,8 +895,8 @@ export function createPipeline(opts = {}) {
       top = Math.max(0, lo - pad)
       rows = Math.min(height - top, Math.max(Math.round(height * 0.04), Math.min(Math.round(height * 0.22), hi - lo + pad * 2)))
     } else {
-      top = Math.max(0, Math.round(height * cfg.y0))
-      rows = Math.max(8, Math.min(height - top, Math.round(height * (cfg.y1 - cfg.y0))))
+      top = Math.max(0, Math.round(height * plain.y0))
+      rows = Math.max(8, Math.min(height - top, Math.round(height * (plain.y1 - plain.y0))))
       for (const f of batch) picks.push({ f })
     }
     /**
@@ -891,7 +941,10 @@ export function createPipeline(opts = {}) {
       area: 1,
       bins: 1,
       why,
-      band: [+(top / height).toFixed(3), +((top + rows) / height).toFixed(3), inset],
+      band: [+(top / height).toFixed(3), +((top + rows) / height).toFixed(3), box ? 0 : inset],
+      // 框形态把真实像素矩形也带上；比例数组仍按 [y0, y1, inset] 写，别把像素塞进去
+      ...(box ? { regionRect: { x: box.x, y: box.y, w: box.w, h: box.h } } : {}),
+      ...(boxWhy ? { bandNote: boxWhy } : {}),
       strip: 0,
       wallFrom: strips[0].f.wall ?? null,
       wallTo: strips[n - 1].f.wall ?? null,
