@@ -6127,6 +6127,7 @@ class LiveGlass:
         st["fav_hit"] = None
         st["sort"] = None
         st["cleanup_rect"] = None
+        st["cleanup_days_rect"] = None
         st["expand_hits"] = []
         st["chip"] = None
         # 清页/换页：文字选区一起清（旧偏移不属于新一页的展示文本）
@@ -6424,6 +6425,11 @@ class LiveGlass:
     # 误删能捞回来；超过 20 份才清旧的。
 
     CLEANUP_DEFAULT = 30
+    # 天数分档（2026-11-27，`0.1.1-more.41`）：原来只能手改 cleanup.json 的 days，
+    # 而 30 天对常用的窗太宽容 —— 一周就攒满几千行。
+    # **30 必须留**：不是谁都会高频用窗，不常用的人几周才翻一次，默认值取"谁会被伤害"，
+    # 所以默认仍是 30；常用、量大的自己点短档。
+    CLEANUP_TIERS = (3, 7, 14, 30)
 
     def _cleanup_file(self) -> Path:
         return CHAT_FILE.parent / "cleanup.json"
@@ -6482,6 +6488,160 @@ class LiveGlass:
         cfg = self._cleanup_cfg()
         if cfg.get("enabled"):
             self._run_cleanup(int(cfg.get("days") or self.CLEANUP_DEFAULT))
+
+    def _cleanup_count(self, days: int) -> int:
+        """先数一遍「按这个档会删几条」，**不真删** —— 改短档的确认文案要用它。
+
+        口径和 `_run_cleanup` 逐条一致：只按 `at` 算；坏行、没有 `at` 的行不算
+        （它们本来就不会被删，别在确认框里虚报条数）。
+        """
+        cutoff = int((time.time() - days * 86400) * 1000)
+        try:
+            lines = CHAT_FILE.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            return 0
+        gone = 0
+        for line in lines:
+            try:
+                e = json.loads(line)
+                at = int(e.get("at") or 0)
+            except Exception:
+                continue
+            if at and at < cutoff:
+                gone += 1
+        return gone
+
+    def _show_cleanup_tiers(self, x_root, y_root) -> None:
+        """「超过 N 天」点开的小菜单：3 / 7 / 14 / 30（当前那档标出来）。
+
+        复用 `_menu_popup`（和设置页「一行点开摊几档」同款），不新开交互通道。
+        """
+        cfg = self._cleanup_cfg()
+        cur = max(1, int(cfg.get("days") or self.CLEANUP_DEFAULT))
+        items = []
+        for d in self.CLEANUP_TIERS:
+            items.append((f"{d} 天" + ("（当前）" if d == cur else ""), d))
+        self._menu_popup(x_root, y_root, items, self._set_cleanup_days)
+
+    def _set_cleanup_days(self, days: int) -> None:
+        """改天数档。**从长改到短、且真会删**时先弹确认（取消 = 原档不动）。
+
+        关着开关时改档不弹：这时一条都不会删，文案里说"会删 N 条"反而吓人。
+        """
+        try:
+            days = int(days)
+        except Exception:
+            return
+        if days not in self.CLEANUP_TIERS:
+            return
+        cfg = self._cleanup_cfg()
+        old = max(1, int(cfg.get("days") or self.CLEANUP_DEFAULT))
+        if days == old:
+            return
+        if days < old and cfg.get("enabled"):
+            gone = self._cleanup_count(days)
+            if gone > 0:
+                self._show_cleanup_confirm(days, old, gone)
+                return
+        self._apply_cleanup_days(days)
+
+    def _apply_cleanup_days(self, days: int) -> None:
+        """真写盘（确认过、或根本删不到东西）。开着就立刻按新档跑一次，不等下一拍。"""
+        cfg = self._cleanup_cfg()
+        cfg["days"] = int(days)
+        self._cleanup_save(cfg)
+        try:
+            self._hist_redraw()
+        except Exception as exc:
+            print("cleanup redraw failed:", repr(exc), flush=True)
+        if cfg.get("enabled"):
+            self._run_cleanup(int(days))
+
+    def _show_cleanup_confirm(self, days: int, old: int, gone: int) -> None:
+        """改短档前的确认卡：文案带**实际条数**，取消则原档、开关都不动。
+
+        高度按正文实际折行算（和「删除这组会话」「隐藏气泡」同款）；没有勾选项，
+        底栏只留两颗按钮。
+        """
+        w = 460
+        pad = 24
+        body = (f"现在会删掉 {days} 天前的 {gone} 条记录。\n"
+                f"（从 {old} 天改短到 {days} 天；删前整份备份到 trash/，可从那里找回。）")
+        _f10 = self.fonts.get(10)
+        body_h = _wrapped_text_height(body, _f10, w - pad * 2) + int(_f10.metrics("linespace"))
+        h = max(210, pad + 34 + body_h + 92)
+        vx, vy = self._vx, self._vy
+        x = max(vx + 8, min(self._x + (self._geo.width - w) // 2, vx + self._vw - w - 8))
+        y = max(vy + 8, min(self._y + (self._geo.height - h) // 3, vy + self._vh - h - 8))
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.configure(bg="#000000")
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        self._cleanup_dlg = win
+        c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=w, height=h)
+        c.pack()
+        c.create_polygon(self._rounded_points(0, 0, w, h, 16, 6),
+                         fill="#0f1319", outline="#2a3546", smooth=True)
+        c.create_text(pad, pad, text=f"自动清理改成 {days} 天？", anchor="nw",
+                      fill="#e6eef8", font=self.fonts.spec(14, True))
+        c.create_text(pad, pad + 34, anchor="nw", fill="#9fb0c8",
+                      font=self.fonts.spec(10), width=w - pad * 2, text=body)
+        bw, bh, by = 88, 32, h - 52
+        no = (w - pad - bw, by, w - pad, by + bh)
+        yes = (no[0] - bw - 10, by, no[0] - 10, by + bh)
+        for (bx0, b0, bx1, b1), label, tag in (
+            ((yes, f"改成 {days} 天", "cyes")),
+            ((no, "取消", "cno")),
+        ):
+            c.create_polygon(self._rounded_points(bx0, b0, bx1, b1, 14, 5),
+                             fill=("#17324f" if tag == "cyes" else "#000000"),
+                             outline=(BTN_EDGE_ON if tag == "cyes" else BTN_EDGE),
+                             smooth=True, tags=(tag,))
+            c.create_text((bx0 + bx1) / 2, (b0 + b1) / 2, text=label,
+                          anchor="center", fill="#ffffff",
+                          font=self.fonts.spec(11, True), tags=(tag,))
+        state = {"done": False}
+
+        def close():
+            if state["done"]:
+                return
+            state["done"] = True
+            if getattr(self, "_cleanup_dlg", None) is win:
+                self._cleanup_dlg = None
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        def hit(box, e):
+            return box[0] <= e.x <= box[2] and box[1] <= e.y <= box[3]
+
+        def click(e):
+            if hit(yes, e):
+                close()
+                self._apply_cleanup_days(days)
+            elif hit(no, e):
+                close()
+
+        c.bind("<Button-1>", click)
+        win.bind("<Escape>", lambda _e: close())
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+        try:
+            win.lift()
+            win.focus_force()
+        except Exception:
+            pass
 
     def _run_cleanup(self, days: int) -> None:
         cutoff = int((time.time() - days * 86400) * 1000)
@@ -6835,7 +6995,13 @@ class LiveGlass:
         print(f"delete session: removed {gone} entries sid={sid}", flush=True)
 
     def _hist_draw_cleanup_row(self) -> None:
-        """列表底下那一行：「☐ 自动清理超过 N 天的记录」。"""
+        """列表底下那一行：「☐ 自动清理超过 N 天的记录」。
+
+        两个可点的区（2026-11-27，`.41`）：
+          - 勾选框 + 其余文字 = 开关（老习惯不变；右边的「的记录」也算开关区）；
+          - 「超过 N 天」= 点开 3 / 7 / 14 / 30 的档位菜单（`cleanup_days_rect`）。
+        点击时**先判天数区**（它是整行里的一小块），否则会先被整行的开关吃掉。
+        """
         st = self._hist
         c, h = st["canvas"], st["h"]
         cfg = self._cleanup_cfg()
@@ -6843,6 +7009,7 @@ class LiveGlass:
         on = bool(cfg.get("enabled"))
         cy = h - 32
         x0 = 28
+        st["cleanup_days_rect"] = None
         try:
             c.create_rectangle(x0, cy - 9, x0 + 18, cy + 9, outline="#5c6b80",
                                fill=("#0a84ff" if on else "#000000"), width=1,
@@ -6850,13 +7017,28 @@ class LiveGlass:
             if on:
                 c.create_text(x0 + 9, cy, text="✓", fill="#ffffff",
                               font=self.fonts.spec(10, True), tags=("hclean",))
-            label = f"自动清理超过 {days} 天的记录"
-            c.create_text(x0 + 28, cy, text=label, anchor="w", fill=self.H_MUTED,
-                          font=self.fonts.spec(10), tags=("hclean",))
-            tw = self.fonts.get(10).measure(label)
+            f10 = self.fonts.get(10)
+            head, tail = "自动清理", "的记录"
+            span = f"超过 {days} 天"
+            x = x0 + 28
+            c.create_text(x, cy, text=head, anchor="w", fill=self.H_MUTED,
+                          font=f10, tags=("hclean",))
+            x += f10.measure(head)
+            # 天数那截给一点颜色 + 下划线：不点开看不出它是菜单
+            c.create_text(x, cy, text=span, anchor="w", fill="#7fc4ff",
+                          font=f10, tags=("hclean", "hclean_days"))
+            wspan = f10.measure(span)
+            c.create_line(x, cy + 10, x + wspan, cy + 10, fill="#3a6b93",
+                          tags=("hclean", "hclean_days"))
+            st["cleanup_days_rect"] = (x - 6, cy - 15, x + wspan + 6, cy + 15)
+            x += wspan
+            c.create_text(x, cy, text=tail, anchor="w", fill=self.H_MUTED,
+                          font=f10, tags=("hclean",))
+            tw = f10.measure(head + span + tail)
             st["cleanup_rect"] = (x0 - 6, cy - 15, x0 + 28 + tw + 6, cy + 15)
         except Exception:
             st["cleanup_rect"] = None
+            st["cleanup_days_rect"] = None
 
     def _hist_scrollbar(self) -> None:
         st = self._hist
@@ -7502,6 +7684,11 @@ class LiveGlass:
             return
         # 列表行 / 「返回最新对话」/ 底部自动清理
         if st["page"] == "list":
+            # **天数那一小块先判**（`.41`）：它落在整行开关区里面，反过来判就永远开不了菜单
+            r = st.get("cleanup_days_rect")
+            if r and r[0] <= e.x <= r[2] and r[1] <= e.y <= r[3]:
+                self._show_cleanup_tiers(e.x_root, e.y_root)
+                return
             r = st.get("cleanup_rect")
             if r and r[0] <= e.x <= r[2] and r[1] <= e.y <= r[3]:
                 self._toggle_cleanup()
