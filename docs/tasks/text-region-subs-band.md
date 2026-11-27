@@ -3,11 +3,11 @@
 
 # 字幕框：`text.region` —— 框一条字幕行，不再要求全屏
 
-状态：等你定（口径按方案 A 写死；开工前只需确认**工具入口**用哪种形态，见「待定」一节）
+状态：可验收（`.42` 已实现并**真机验过**（4K / 窗口化）；未提交、未发版）
 对象：让「读字幕」能框住屏幕上一行字幕来读，而不是只读整屏底部 20%。窗口化播放的视频也能读；
      `watch` 抓哪块**不受影响**（`region.json` 一个字都不动）。
 归属：session-23ac3c7e-8528-43c1-8915-49fcada193cc / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：格从两种工具入口里挑一个 → 开工（代码 + 单测 + 真机）。
+下一步：提交 → 打 tag `v0.1.1-more.42` + Release（prerelease）。
 证据：
   - 现状互斥：`src/runner.js:1228` 只有 `!src.region` 才把帧喂给文字流 —— 设了 region 就静默不读
   - 条带默认：`src/text-band.js:26` `band: [0.80, 1.0, 0.10]`，**是整帧的比例**，不是屏幕坐标
@@ -22,6 +22,11 @@
     但 stdout 只吐 `{x,y,w,h}`
   - 热更先例：`src/index.js:1257` 改 `text.fps` 即时生效 → `src/runner.js:1557` `setTextFps`
   - schema 预算：`test/tool-spec.test.mjs:33` `SPEC_BUDGET_CHARS = 7500`；本轮实测 **7499**（只剩 1 字符）
+  - 实现后：`node --test` **528 全过**（新增 `test/text-region.test.mjs` 13 条）；假 ctx 路由
+    （`for:"screen"` 被拒、`for:"text", region:"off"` 只删 `text.region`）
+  - 真机（4K / 150% 缩放，**窗口化**的 DSH 窗口、没最大化）：框 (1580,630) 350×360 →
+    侧车命令行 `--w 350 --h 360 --canvas-h 720`；`status` = `读数中 · 字幕框 1580,630 350×360
+    （主屏 3840×2160） · 入流 6 / 已送 OCR 10 帧`；`watch` 结果带回 6 行 OCR 文本。清框后回到条带。
 账：无需（本轮只写文档）
 更新：2026-11-27 19:13 CST
 
@@ -55,18 +60,20 @@
    框完 `watch` 照旧整屏 —— 这正是当年那条提醒（「别留在 region.json，否则 watch 只截字幕条」）。
 5. **热更**：框完下一帧就按新矩形裁，不用重开 DSH（`setTextFps` 的先例）。
 6. **换算失败就退回 `band`**：`text.region` 缺 `sw/sh`、坐标越界、宽高 < 8px → 记一条 warn，按老 `band` 走。
+7. **（开工后订正）字幕框那一路要单独起一路原生分辨率的采集**：原设计是「从 `watch` 的帧里裁」，
+   真机一跑就露馅 —— 4K 屏 + `low` 档的帧只有 798 宽，350×360 的框裁出来只剩 **73×75**（字高 5px），
+   侧车收到 `--w 73 --h 75`，两帧全空、`status` 只报「入流 0」。改成一路 `gdigrab` 只抓这块
+   （5 fps 供帧、按 `text.fps` 抽帧、尺寸上限 1600），帧直接喂文字流；`fx = x / sw` 只留给
+   「采集起不来时从帧里裁」的退化路径。和血条读数同一个套路。
 
-## 待定：工具入口（只需要挑一个）
+## 工具入口（已定：`for:"text"`，2026-11-27 19:0x 格选 1）
 
-- **1. `see_now({action:"region", for:"text"})`（推荐）** —— 新参数 `for`，语义直白：这次框的是字幕，不是抓取区域。
+- **`see_now({action:"region", for:"text"})`（采用）** —— 新参数 `for`，语义直白：这次框的是字幕，不是抓取区域。
   代价：schema 约 +130 字符，而预算 **7499 / 7500**，必须同笔删 ≥130 字符。
   删长文是规则允许的方向（`docs/决策记录.md`「工具契约的体积预算」：超了先删长文，再谈加参数）；
-  候选：`pointer` 那三条长描述、`crop` 那句长括号。
-- **2. `see_now({action:"region", region:"text"})`** —— 复用已有字符串参数当哨兵，schema 只多几个字（约 +30）。
-  代价：`region` 从"x,y,w,h / off"变成三态，模型容易把它当成「抓 'text' 这块」，校验要分三路；
-  说明文字也得改，省下的预算并不多。
-
-推荐 1：这次框的语义和采集区域**根本不同**，用同一个参数会留下长期的歧义。
+  实际从 `region` / `window` / `source` / `preset` / `task` 五段删掉等量描述，落完 7464 / 7500。
+- （备选，未采用）`see_now({action:"region", region:"text"})` —— 复用已有字符串参数当哨兵，
+  省预算但把 `region` 变成三态，语义会长期歧义。
 
 ## 实现步骤（按文件）
 
@@ -78,11 +85,13 @@
 3. `src/text-band.js`：`normalizeTextConfig` 加 `region` 校验（四个非负整数 + `sw/sh` 正整数 +
    `x+w ≤ sw`、`y+h ≤ sh`、`w/h ≥ 8px`），坏值 warn 并丢弃；再加唯一一份换算：
    `rectFromRegion(region, width, height)` → 帧内像素矩形（`fx = x/sw`，`round` 后夹在帧内）。
-4. `src/text-stream.js`：`onFrame` 里 `cfg.region ? rectFromRegion(...) : bandRect(...)`；
-   新增 `setRegion(region)`（清 `lastBandRgb`、重置 `quietMs`，让下一帧重算）；`status()` 报当前用 rect 还是 band。
+4. `src/text-stream.js`：`onFrame` 里整帧模式 / 按框裁 / 按条带三分支（两个开关：
+   `wholeFrame` = 送来的帧本身就是框、`regionAllowed` = 这个采集源配不配用框）；
+   新增 `setRegion` / `setWholeFrame` / `setRegionAllowed` / `setIntake`；`status()` 报当前用哪一块。
    sidecar 尺寸变化不用新逻辑：`ensureOcr` 的 key 是 `w×h/scale/lang`，尺寸一变自动重启。
-5. `src/runner.js`：**只有整屏采集时**才把 `region` 传给文字流（`window` / `file` / `region` 源不传，
-   继续按 `band` 算）；加 `setTextRegion(region)`；把「这次为什么没按字幕框读」记成 `textWhy` 给 `status` 用。
+5. `src/runner.js`：**配了字幕框就单独起一路采集**（`startTextCapture`：`gdigrab` 只抓那块、
+   原尺寸、5 fps 供帧，`run.done` 退出时退回条带）；`teardown` 里一起停；
+   `setTextRegion` 热更（正在看会立刻换那一路）；窗口 / 文件 / region 源不走这条路。
 6. `src/index.js`：`action:"region"` 分支加 `for:"text"` → `pickRegion({hint:'框住字幕那一行
    （只给读字幕用，不改 watch 抓哪块） · 松手确认 · Esc 取消', save: saveTextRegion})`；
    成功文案要说三件事：只影响字幕、`watch` 照旧整屏、模糊了重框一次。
@@ -128,3 +137,13 @@
 
 - 2026-11-27 19:13 新建（等你定）。依据：三条路、两次历史记录、采集缩放方式、schema 预算都逐条核过
   （见「证据」）；本轮只读代码 + 写这份文档，没动代码。
+- 2026-11-27 19:1x 格选「1」（`for:"text"`）→ 开工：`text.region` 归一化 / `rectFromRegion` /
+  `textRectOf` / 文字流三分支 / region 路由的 `for` 分支 / picker 多吐 `sw/sh` / schema 加 `for`
+  并从五段删够字数（7464 / 7500）。
+- 2026-11-27 19:2x **真机第一跑就露馅**：`status` 显示「入流 0 / 已送 OCR 2 帧」，侧车命令行是
+  `--w 73 --h 75` —— 框是从 798×450 的 watch 帧里裁的，4K 屏上 350×360 只剩 73×75，字高 5px。
+  修：字幕框单独起一路 `gdigrab` 原生采集（5 fps 供帧、上限 1600），文字流加 `wholeFrame` /
+  `regionAllowed` 两个开关；窗口 / 文件源一律按条带读。
+- 2026-11-27 19:27 真机重验通过（宿主 106416 → 100640）：侧车 `--w 350 --h 360`，
+  `status` 入流 6 / 已送 OCR 10 帧，`watch` 带回 6 行框内文字；清框后回到「条带 80–100%」。
+  `node --test` 528 全过。测完已把 `text.region` 清掉、采集停掉。
