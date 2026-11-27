@@ -691,6 +691,10 @@ OCR（Windows 自带识别器，不联网、不下载模型），认出的字随
 - **唤醒有节流**：再密也不超过 `pace` 的间隔——语音播报串行，更快只是排队。
 - **区域模式只能看到前台像素**：被遮挡 / 最小化的窗口抓不到。抓屏整体失败时（锁屏、UAC 安全桌面、
   远程桌面）窗口会退成一块**纯色底板**，字还能读，但背后不是真实画面。
+- **折叠后的悬浮窗不会出现在截图 / 录屏 / 共享屏幕里**：收起态常开 `WDA_EXCLUDEFROMCAPTURE`
+  （收起条是半透明，垫图要抓背后的桌面，不排除自己就会把上一帧叠黑）。展开态默认也拍不到，
+  在 `~/.dsh/watch-window.json` 写 `{"capturable": true}` 才对捕获可见；折叠条本身要拍到得用
+  调试参数 `DSH_SEE_WDA=0` 起窗。为什么这么定见 [docs/决策记录.md](./docs/决策记录.md)。
 - **平台与麦克风**：只在 Windows 10 验证；**macOS 不做**；麦克风完全没测过。详见「适用范围」。
 - **`pointer` 只看主屏、只在窗口化下可见**：D3D 独占全屏时覆盖层不出现；`change` 只认句柄变化，
   翻页 / 滚动不算；圈是鼠标穿透的，点击会落到下面的窗口上。
@@ -702,6 +706,7 @@ OCR（Windows 自带识别器，不联网、不下载模型），认出的字随
 | 路径 | 用途 | 读写 |
 |---|---|---|
 | `~/.dsh/see-now.json` | 节奏、模式、绑定会话等偏好 | 读 + 写（切模式/改绑定时） |
+| `~/.dsh/watch-window.json` | 悬浮窗自己的几何、是否隐藏、`capturable`（能不能被截图 / 录屏拍到）、历史窗尺寸 | 读 + 写 |
 | `~/.dsh/see-now/` | 运行数据：`chat.jsonl`（窗里对话）、`delivered.jsonl` / `relay-delivered.json`（投递回执与去重）、`missed.jsonl`、`focus.json`、`turn-state.json`、`region.json`、`images/`（粘贴的图）、`audio/`（听声音的分句 wav）、`relay.log`、`plugin-error.log` | 读写 |
 | `~/.dsh/see-now/cleanup.json` | 自动清理的开关与天数档（`{"enabled": false, "days": 30}`；改档由回顾列表底部那一行写） | 读 + 写 |
 | `~/.dsh/see-now/lift/<日期>/` | 黑听抬头：`log.jsonl`（一条命中一行）+ 「瞥」到的那一帧 PNG（只留 3 天） | 读 + 写 |
