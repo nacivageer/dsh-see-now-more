@@ -15,7 +15,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  finishRestart, hostRecord, readJson, readPendingRestart, restartNotice, writeHostInfo,
+  finishRestart, hostRecord, queueRestart, readJson, readPendingRestart, restartLine, restartNotice,
+  writeHostInfo,
 } from '../src/host-info.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'dsh-host-info-'));
@@ -130,4 +131,55 @@ test('readPendingRestart：只认正在进行的三个相位，坏文件不炸',
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('queueRestart：写 queued、不覆盖正在进行的相位（否则窗口的执行态会被打回排队）', () => {
+  const dir = tmp();
+  try {
+    const r1 = queueRestart({ dir, session: 's1', version: '0.1.1-more.39', now: 1000 });
+    assert.equal(r1.already, false);
+    assert.equal(r1.intent.phase, 'queued');
+    assert.equal(r1.intent.by, 'agent');
+    assert.equal(readJson(join(dir, 'restart.json')).phase, 'queued');
+
+    const r2 = queueRestart({ dir, now: 2000 });
+    assert.equal(r2.already, true, '已经在排的不能再写一份');
+    assert.equal(r2.intent.at, 1000, '原有请求的时间不能被我盖掉');
+
+    writeFileSync(join(dir, 'restart.json'), JSON.stringify({ phase: 'killing', at: 5 }), 'utf8');
+    assert.equal(queueRestart({ dir, now: 3000 }).already, true, '执行中也不能插队');
+
+    writeFileSync(join(dir, 'restart.json'), JSON.stringify({ phase: 'done' }), 'utf8');
+    assert.equal(queueRestart({ dir, now: 4000 }).already, false, '上一轮结束之后可以再排');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('queued 不能被当成"重启正在进行"：宿主启动时不能凭它写回执', () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, 'restart.json'), JSON.stringify({ phase: 'queued', at: 1, by: 'agent' }), 'utf8');
+    assert.equal(readPendingRestart(dir), null);
+    assert.equal(finishRestart({ dir, hostPid: 999, version: 'v', now: 2000 }), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('restartLine：status 里那行的四种形状', () => {
+  assert.equal(restartLine(null), null);
+  assert.match(restartLine({ phase: 'queued' }), /已排队/);
+  assert.match(restartLine({ phase: 'waiting-idle' }), /等空闲/);
+  assert.equal(restartLine({
+    phase: 'done', oldHostPid: 111, newHostPid: 222, newVersion: '0.1.1-more.39', elapsedMs: 14011,
+  }), '上次：v0.1.1-more.39（宿主 111 → 222，14 秒）');
+  assert.match(restartLine({ phase: 'done', oldHostPid: null, newHostPid: 222, newVersion: 'v' }), /宿主 \? → 222/);
+  assert.match(restartLine({ phase: 'failed', reason: '宿主没回来' }), /上次失败：宿主没回来/);
+});
+
+test('restartNotice：模型排的重启要写成「会话发起」，不能冒充窗', () => {
+  const text = restartNotice({ by: 'agent', oldHostPid: 111, at: 0 }, { version: 'v', hostPid: 222, now: 1000 });
+  assert.match(text, /会话发起/);
+  assert.ok(!text.includes('窗发起'));
 });

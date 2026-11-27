@@ -1110,6 +1110,11 @@ class LiveGlass:
         self.root.after(80, self.root.lift)
         self.root.after(120, self.root.focus_set)
         self.root.after(60, self._tick)
+        # 模型排的重启请求（2026-11-27）：窗每 2 秒看一眼 `restart.json` 的 `queued`。
+        # 发起口在插件（`see_now({action:"restart"})`），执行端在这里 —— 窗在 DSH 进程树外，
+        # 活得过重启；模型所在的那一轮等不了自己（等就是自锁）。
+        threading.Thread(target=self._watch_restart_requests,
+                         name="restart-watch", daemon=True).start()
         self.root.after(30, lambda: self._intro_step(0))
         self.root.after(500, self._apply_placement)
         _bind_dbg = os.environ.get("DSH_SEE_BIND_OPEN")
@@ -9620,7 +9625,35 @@ class LiveGlass:
         append_notice("重启 DSH：开始了（改完插件要让宿主重新组合，这条只能由窗发起）")
         threading.Thread(target=self._restart_worker, name="dsh-restart", daemon=True).start()
 
-    def _restart_worker(self) -> None:
+    def _watch_restart_requests(self) -> None:
+        """轮询模型排的重启请求（`restart.json` 的 `queued`）。
+
+        为什么是文件、为什么是这里：模型不能重启自己（会掐断回合），插件也不能 ——
+        所以它只写一条请求就返回；由这个**在 DSH 进程树外面**的窗在回合结束后执行。
+        做完相位就变了（requested → killing → launched → done），不会重复触发。
+        """
+        path = cache_dir() / "restart.json"
+        try:
+            print(f"[restart] watch 起（等 queued 请求）：{path}", flush=True)
+        except Exception:
+            pass
+        while True:
+            try:
+                it = json.loads(path.read_text(encoding="utf-8-sig"))
+                if (isinstance(it, dict) and str(it.get("phase")) == "queued"
+                        and not getattr(self, "_restart_running", False)):
+                    self._restart_running = True
+                    by = str(it.get("by") or "agent")
+                    append_notice("重启 DSH：收到会话里的调度请求，等这一轮跑完就重启")
+                    threading.Thread(target=self._restart_worker, args=(by,),
+                                     name="dsh-restart", daemon=True).start()
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+            time.sleep(2.0)
+
+    def _restart_worker(self, by: str = "window") -> None:
         """后台跑完整条重启。**只写文件**（append_notice / restart.log），不碰 Tk。"""
         log_path = cache_dir() / "restart.log"
 
@@ -9640,7 +9673,7 @@ class LiveGlass:
             # 等空闲**不设上限**（2026-11-27 真机跑通后改）：回合多长不可预知，
             # 用 15 分钟封顶会让长回合变成"点了没成"；等待期间窗口什么都不用做。
             res = host_restart.perform_restart(
-                wait_idle=True, wait_idle_sec=None, back_timeout=120,
+                wait_idle=True, wait_idle_sec=None, back_timeout=120, by=by,
                 notify=append_notice, log=_log)
             if not res.get("ok"):
                 append_notice("重启 DSH 没成：" + str(res.get("reason") or res.get("phase") or "未知原因")

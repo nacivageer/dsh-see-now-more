@@ -11,6 +11,9 @@
   执行端是**悬浮窗自己** —— 它是 `detached` 起的，宿主重启它还在；模型所在进程重启不了自己。
 - **不设等到空闲的上限**：点下去就记 `waiting-idle` 返回，回合结束自动执行（上限封顶会让
   长回合变成「点了没成」）。要立刻掐断当前回合就 `host_restart.py --restart --force`。
+- **模型自己也能排**：`see_now({action:"restart"})` 写一条 `queued` 请求就返回（不阻塞，
+  等就是自锁），窗里的小线程每 2 秒看一眼，回合结束后执行；窗没开时直接拒绝。
+  回执两边各收一份：窗里一条居中提示，模型下一次 `status` 的「重启」行。
 - 插件启动时写 `~/.dsh/see-now/host.json`：`exe` / `appPid`（Electron 主进程）/ `hostPid` /
   `cwd` / 版本 / 要剥掉的环境变量名。**env 只留 `DSH_HOME`、`DSH_PROFILE`、
   `DSH_PRIMARY_RUNTIME` 三个白名单键，不写密钥。**

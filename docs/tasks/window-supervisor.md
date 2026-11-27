@@ -3,10 +3,10 @@
 
 # 悬浮窗做 DSH 的监护进程：独立启动 / 重启 DSH / 回来自核
 
-状态：可验收（真机两轮：重启 + 回执都验到；`.39` 已装进 profile，已 commit `4aa3fd9`，未发版）
+状态：可验收（窗发起两轮真机验过；模型侧发起口 `action:"restart"` 已补，真机待验）
 对象：把悬浮窗从「DSH 的附属 UI」变成「活得更久、能操作 DSH 的监护进程」。第一版只做两件：**能把 DSH 重启、回来自己核一遍并回报**（独立启动已降 P2，理由见下）。**不做第二个 agent，不做 DSH 的 fork。**
 归属：session-7ef46cbe-1f6f-458e-a891-337033107248 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：再点一次「重启 DSH」——这次宿主起来的是 `.39`，会写 `host.json` 并落回执
+下一步：模型自己调一次 `see_now({action:"restart"})`，下一轮用 `status` 的「重启」行收回执
 证据：
   - 窗比 DSH 活得久：`src/window.js:495` `detached: true`
   - 窗有自己的对话记录：`src/chat.js:31` → `~/.dsh/see-now/chat.jsonl`
@@ -150,3 +150,4 @@
 - 2026-11-27 11:43 修误报 + 改等待口径：进程起来了但写不出自核记录时报告 `degraded`（相位 `launched-legacy`），不再判失败；等空闲**不设上限**（`wait_idle_sec=None`，新相位 `waiting-idle`），要掐断当前回合用 `--force`。原因是「回合内点按钮、又在本回合等结果」是自锁——格 11:34 点出来的。
 - 2026-11-27 11:46 重开窗（`87424`）加载最终 `window.py`；离线脚本复跑全过（含排队、旧版 degraded 两条）。
 - 2026-11-27 11:42:16 真机第二轮（`.39` 已在 profile）：11:41:43 点按钮、11:41:43 杀旧、11:41:57 新宿主写回 `host.json`（`hostPid 88436`），`restart.json` 收敛 `done`、`elapsedMs 14011`，回执进 `chat.jsonl`。新 Electron `94168` 的父进程仍是窗口 `87424` —— **窗口跨过两次重启**。旧宿主 pid 记成 `?`：升级前没有 `host.json`，下一次起才是完整的「A → B」。
+- 2026-11-27 11:52 补模型侧发起口（格指出的原点）：`see_now({action:"restart"})` 只写 `queued` 就返回，窗的新线程 `_watch_restart_requests` 每 2 秒看一次、回合结束后执行；回执两边各一份（窗里提示 + 下一次 `status` 的「重启」行）。离线：`node --test` 全绿、`check-restart.py` 26 条全过（含 by=agent 沿用）。

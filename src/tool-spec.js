@@ -45,6 +45,7 @@ export const TOOL_NAME = 'see_now';
  */
 export const ACTION_VALUES = Object.freeze([
   'watch', 'peek', 'listen', 'lift', 'start', 'stop', 'status', 'window', 'region', 'crop', 'bloodbar', 'pointer',
+  'restart',
 ]);
 
 export function seeNowToolSpec() {
@@ -55,8 +56,8 @@ export function seeNowToolSpec() {
       + 'through the floating window. Frames are picked by how much the picture changes, so a still screen '
       + 'costs almost nothing.\n\n'
       + '- `action:"watch"` (default) is the normal way to watch: the first call returns the current screen '
-      + 'in ~1s, then blocks until a sheet is ready (15–40s while the screen changes, longer when '
-      + 'it is still) or the user types in the floating window. **Call it again right after you reply** — the '
+      + 'in ~1s, then blocks until a sheet is ready (15–40s) or the user types in the floating window. '
+      + '**Call it again right after you reply** — the '
       + 'blocking call IS the pause; the conversation never ends between sheets. Do not end your turn while '
       + 'the user is still watching.\n'
       + '- If you stop calling `watch`, capture keeps running and a full sheet wakes you (`peek`). Closing '
@@ -89,8 +90,8 @@ export function seeNowToolSpec() {
           + '- `lift` — 取 `since` 那一刻的单帧，只在仅监听时（唤醒文案会给你 `t0`）。\n'
           + '- `window` — 配合 `show` 显示或隐藏悬浮窗。\n'
           + '- `region` — 让用户拖一块框，之后 `watch` 默认只看那块。\n'
-          + '- `crop` — 按 `region:"x,y,w,h"` 截一块**原生 1:1**（主屏物理像素，不缩小），'
-          + '用来读小字 / 认图标；块内 (u,v) 的屏幕坐标 = region 左上角 + (u,v)。\n'
+          + '- `crop` — 按 `region:"x,y,w,h"` 截一块**原生 1:1**（主屏物理像素，不缩小）；'
+          + '块内 (u,v) 的屏幕坐标 = region 左上角 + (u,v)。\n'
           + '- `bloodbar` — 让用户框**自己角色**那条常驻 UI 的血条（敌人血条只在交战时出现，别框）；'
           + '`read:true` 读一次比例。进仅监听后每秒读一次，'
           + '但读数只写进唤醒文案、`watch` 结果和 `status`，**低血不会叫醒你**。\n'
@@ -98,7 +99,8 @@ export function seeNowToolSpec() {
           + '- `pointer` — 在 `x,y` 画一个圈/箭头并**停住等**（默认关）：等到用户点了（`click`，'
           + '报在圈里还是圈外）、那儿换了窗口（`change`）、或到点（`timeout`）。他要「指给我看」时用它；'
           + '**配 `say` 把指令送进悬浮窗**（先气泡再画圈；他常切在别的会话）。'
-          + '没开时直接返回未启用，别自己改他的配置。',
+          + '没开时直接返回未启用，别自己改他的配置。\n'
+          + '- `restart` — 排一次 DSH 重启（改完插件用）：只排队，回执见下一次 `status`。',
       },
       say: {
         type: 'string',

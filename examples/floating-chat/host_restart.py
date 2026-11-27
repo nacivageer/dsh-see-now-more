@@ -443,6 +443,7 @@ def perform_restart(
     log=print,
     now=time.time,
     plan_override: dict | None = None,
+    by: str = "window",
 ) -> dict:
     """跑完整条重启。返回 `{ok, phase, text, ...}`；失败也**不抛**（窗口线程要能回报）。
 
@@ -461,15 +462,23 @@ def perform_restart(
         return {"ok": False, "phase": "failed", "reason": "；".join(p["problems"]), "plan": p}
 
     exe, cwd, app_pid, host_pid = p["exe"], p["cwd"], p["appPid"], p["hostPid"]
+    # 插件（模型）排的请求：沿用它的 `by` 和「什么时候排的」，回执里才能说清是谁发起的
+    prev = read_json(see / RESTART_FILE) or {}
+    queued_at = None
+    if str(prev.get("phase")) == "queued":
+        queued_at = prev.get("at")
+        by = str(prev.get("by") or by)
     intent = {
         "v": 1,
         "at": started,
-        "by": "window",
+        "by": by,
         "phase": "requested",
         "oldAppPid": app_pid,
         "oldHostPid": host_pid,
         "fromVersion": p["version"],
     }
+    if queued_at:
+        intent["queuedAt"] = queued_at
     write_json(see / RESTART_FILE, intent)
 
     # 1) 等空闲：正在跑的回合会被这一刀掐断。

@@ -26,7 +26,7 @@ import { shouldIdleStop } from './idle.js';
 import { isHumanMessage } from './human.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine, openWindow } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
-import { writeHostInfo, finishRestart } from './host-info.js';
+import { writeHostInfo, finishRestart, queueRestart, readRestartState, restartLine } from './host-info.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { pointAndWait, pointerEnabled } from './pointer.js';
 import { captureCrop, validateCropRegion } from './crop.js';
@@ -2686,10 +2686,39 @@ async function registerAll(ctx) {
         );
       }
 
+      if (action === 'restart') {
+        /**
+         * 模型自己排一次重启（2026-11-27，`0.1.1-more.39`）。
+         *
+         * **只排队、立刻返回**：插件住在要重启的进程里，重启自己等于掐断当前回合；
+         * 而"在这一轮里等它重启完"是自锁（回合不结束，窗就永远等不到空闲）。
+         * 执行端是悬浮窗（`window.py` 的 `_watch_restart_requests`）：它每 2 秒看一次
+         * `restart.json` 的 `queued`，回合结束就动手。回执由重启后的新宿主写，
+         * 下一次 `status` 的「重启」那一行里读。
+         */
+        if (!windowAlive()) {
+          return {
+            text: '没排：悬浮窗没在跑，没人在回合结束后动手。先调 `action:"window", show:true` 把窗开出来，再排一次。',
+            meta: { action, queued: false, reason: 'window-down' },
+          };
+        }
+        const q = queueRestart({
+          dir: chatDir(), by: 'agent', session: boundSessionNow() ?? null, version: VERSION,
+        });
+        return {
+          text: q.already
+            ? `已经排着了（相位 ${q.intent.phase}）：不用重复排。回执不在这一轮——下一次 status 的「重启」行里读。`
+            : `已排队：这一轮结束后由悬浮窗重启到 v${VERSION}。回执不在这一轮——下一次 status 的「重启」行里读。`,
+          meta: { action, queued: true, already: Boolean(q.already), phase: q.intent.phase, at: q.intent.at },
+        };
+      }
+
       if (action === 'status') {
         const s = runner.status();
         const voice = voiceState();
         const lp = loop?.state() ?? null;
+        // 重启状态（2026-11-27）：排队中/上次结果 —— 模型排完重启，下一次就是靠这一行收到回执
+        const restartText = restartLine(readRestartState(chatDir()));
         // 能力状态（固定枚举）：一行看全「现在能不能用」；非 ready 带原因
         const capText = capabilityLine(s.capabilities);
         // 关掉留底时这里是 null，status 一行都不多（验收第 4 条）
@@ -2717,6 +2746,8 @@ async function registerAll(ctx) {
             // 窗口：**"它在看但我什么都没看到"时第一个要看的就是这一行**
             + `\n${windowLine()}`
             + (s.window?.ok === false && s.window?.reason ? `\n  ↳ 开窗失败：${s.window.reason}` : '')
+            // 重启：排队中 / 上次结果。模型排完重启，下一次就是靠这一行收到回执
+            + (restartText ? `\n重启：${restartText}` : '')
             // 模式：逐帧时一张图只有一帧、铺满；常规是多帧拼格
             + `\n模式：${sceneMode ? '逐帧（一张图 = 一个场景，铺满）' : '常规（多帧拼一张）'}`
             + ` · 节奏：${sceneMode ? 'dense（跟逐帧走）' : paceMode}`

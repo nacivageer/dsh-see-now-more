@@ -120,6 +120,62 @@ export function readPendingRestart(dir) {
   return it;
 }
 
+/** 整份重启状态（status 用；没有就 null）。 */
+export function readRestartState(dir) {
+  const it = readJson(join(dir, RESTART_FILE));
+  return it && typeof it === 'object' ? it : null;
+}
+
+/** 还没结束的相位：已经排着/在跑，就别再写一份盖掉它。 */
+const LIVE_PHASES = new Set(['queued', 'requested', 'waiting-idle', 'killing', 'launched']);
+
+/**
+ * 模型排一次重启（2026-11-27）。
+ *
+ * **只写请求、不执行**：插件就住在要重启的那个进程里，它重启自己等于掐断当前回合；
+ * 执行端是悬浮窗（`window.py` 的 `_watch_restart_requests`），它每 2 秒看一次 `queued`。
+ * 回执由重启后的新宿主写（`finishRestart`），下一次 `status` 里读。
+ *
+ * @returns {{path:string, intent:object, already:boolean}}
+ */
+export function queueRestart({ dir, by = 'agent', session = null, version = '?', now = Date.now() } = {}) {
+  if (!dir) throw new Error('queueRestart 需要 dir');
+  const path = join(dir, RESTART_FILE);
+  const prev = readJson(path);
+  if (prev && LIVE_PHASES.has(String(prev.phase ?? ''))) {
+    return { path, intent: prev, already: true };
+  }
+  const intent = {
+    v: 1, at: now, by, phase: 'queued', session,
+    fromVersion: version,
+  };
+  writeJsonAtomic(path, intent);
+  return { path, intent, already: false };
+}
+
+/**
+ * `restart.json` → status 里的一行。**纯函数**，`now` 由调用方给，测试才好固定。
+ *
+ * 没有记录返回 null（status 里就不多这一行）。
+ */
+export function restartLine(restart) {
+  if (!restart || typeof restart !== 'object') return null;
+  const phase = String(restart.phase ?? '');
+  if (phase === 'queued') return '已排队（等这一轮跑完，由悬浮窗执行）';
+  if (phase === 'waiting-idle') return '在等空闲（有回合在跑）';
+  if (phase === 'requested' || phase === 'killing' || phase === 'launched') return `进行中（${phase}）`;
+  if (phase === 'done') {
+    const old = Number(restart.oldHostPid);
+    const from = Number.isInteger(old) && old > 0 ? String(old) : '?';
+    const sec = Number.isFinite(Number(restart.elapsedMs)) ? Math.round(Number(restart.elapsedMs) / 1000) : null;
+    return `上次：v${restart.newVersion ?? '?'}（宿主 ${from} → ${restart.newHostPid ?? '?'}`
+      + `${sec === null ? '' : `，${sec} 秒`}）`;
+  }
+  if (phase === 'launched-legacy') return '上次：DSH 已拉起，但旧版插件写不出回执';
+  if (phase === 'failed') return `上次失败：${restart.reason ?? '原因未记'}`;
+  return `相位 ${phase || '?'}`;
+}
+
 /**
  * 回执文案。**纯函数**：时间、pid、版本都由调用方给，测试才好固定。
  *
@@ -133,7 +189,7 @@ export function restartNotice(intent, { version, hostPid, now = Date.now() } = {
   const sec = Number.isFinite(started) && started > 0
     ? Math.max(0, Math.round((now - started) / 1000))
     : null;
-  const who = intent?.by === 'window' ? '窗发起' : '重启';
+  const who = intent?.by === 'window' ? '窗发起' : intent?.by === 'agent' ? '会话发起' : '重启';
   return `已回到 v${version}（${who}，宿主 ${from} → ${hostPid}${sec === null ? '' : `，用时 ${sec} 秒`}）`
     + ' · 工具已注册 · 采集未开（要 watch 才起）';
 }

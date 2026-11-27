@@ -372,7 +372,7 @@ macOS 不在计划里（见「适用范围」）。`examples/voice-say-mac.mjs` 
 
 | 参数 | 说明 |
 |---|---|
-| `action` | `watch`（默认，阻塞取图）/ `peek` / `listen`（只留耳朵）/ `lift`（配 `since` 取那一刻的帧）/ `start` / `stop` / `status` / `window` / `region` / `crop`（原生 1:1 截一块）/ `bloodbar` / `pointer`（指一个坐标并等信号，默认关） |
+| `action` | `watch`（默认，阻塞取图）/ `peek` / `listen`（只留耳朵）/ `lift`（配 `since` 取那一刻的帧）/ `start` / `stop` / `status` / `window` / `region` / `crop`（原生 1:1 截一块）/ `bloodbar` / `pointer`（指一个坐标并等信号，默认关）/ `restart`（排一次 DSH 重启，回合结束后由悬浮窗执行，回执在下次 `status`） |
 | `show` | 配 `action:"window"`：`true` 把悬浮窗叫回来，`false` 藏起来，不传只报状态 |
 | `region` | 只看屏幕上一块：`"x,y,w,h"`（屏幕物理像素），或 `"off"` 取消。**一般不用手填** —— 说"框这块"让它自己框，见下 |
 | `say` | **唯一能被念出来的通道**：一条气泡 + 朗读一次，立刻出现在浮窗。普通回复从 `.31` 起也会镜像进浮窗（气泡，不会念），也照样记进小窗的对话记录；重读用 `〔…〕` / `【…】` 标（气泡里不显示标记），**加粗只管排版**（见「念出来之前」） |

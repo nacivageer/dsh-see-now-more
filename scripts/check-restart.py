@@ -250,6 +250,24 @@ def main() -> int:
         check("旧版插件：相位写 launched-legacy（插件不会误当重启完成）",
               intent.get("phase") == "launched-legacy", str(intent.get("phase")))
         cleanup(tmp)
+
+        # --- 7：模型排的请求（by=agent）→ 执行时沿用发起方 ----------------
+        for f in ("host.json", "restart.json", "survivor.pid"):
+            (tmp / f).unlink(missing_ok=True)
+        app = start_fake(tmp, "7")
+        queued_at = hr.now_ms()
+        hr.write_json(tmp / "restart.json", {
+            "v": 1, "at": queued_at, "by": "agent", "phase": "queued", "session": "s-x",
+        })
+        res = hr.perform_restart(see=tmp, spawn_cmd=[PY, "-c", FAKE_APP, str(tmp), "8", FAKE_HOST],
+                                 wait_idle=False, kill_timeout=4, back_timeout=20,
+                                 log=lambda _m: None, notify=lambda _t: None)
+        intent = hr.read_json(tmp / "restart.json") or {}
+        check("会话排队：执行时沿用 by=agent", intent.get("by") == "agent", str(intent.get("by")))
+        check("会话排队：queuedAt 留着（回执能说清排了多久）", intent.get("queuedAt") == queued_at,
+              str(intent.get("queuedAt")))
+        check("会话排队：这一轮仍然真的重启了", res.get("ok") is True, str(res.get("reason")))
+        cleanup(tmp)
     except Exception as e:  # noqa: BLE001
         print(f"ERROR {type(e).__name__}: {e}")
         cleanup(tmp)
