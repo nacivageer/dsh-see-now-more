@@ -23,6 +23,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -174,6 +175,73 @@ def test_drag_and_repaint(tmp):
         root.destroy()
 
 
+def test_dialog_owner(tmp):
+    """弹窗的 Win32 owner 必须真的设到主窗上 —— 统一「弹窗跟随保持置顶」的前提。
+
+    2026-11-27 踩出来的：Tk 只给**非 override** 的窗设 owner，`overrideredirect(True)`
+    的窗 `transient` 是空操作（实测 `GetWindow(GW_OWNER)=0`）。不补 `GWLP_HWNDPARENT`，
+    关掉置顶后弹窗会被自己的主窗盖住。这里用真 Win32 验：
+    owner == 主窗顶层 HWND；`keepOnTop=false` 时弹窗没有 WS_EX_TOPMOST，`true` 时有。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    u = ctypes.windll.user32
+    u.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+    u.GetAncestor.restype = wintypes.HWND
+    u.GetWindow.argtypes = (wintypes.HWND, wintypes.UINT)
+    u.GetWindow.restype = wintypes.HWND
+    u.GetWindowLongPtrW.argtypes = (wintypes.HWND, ctypes.c_int)
+    u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    WS_EX_TOPMOST = 0x8
+    GA_ROOT, GW_OWNER, GWL_EXSTYLE = 2, 4, -20
+
+    sys.path.insert(0, str(ROOT / 'examples' / 'floating-chat'))
+    from window import LiveGlass
+
+    os.environ['DSH_VIDEO_CACHE_DIR'] = str(tmp / 'see-now')
+    root = tk.Tk()
+    root.withdraw()                  # 主窗不显示；弹窗摆屏幕外（+5000），不闪
+    w = object.__new__(LiveGlass)
+    w.root = root
+    w._hwnd = None
+    w._settings = None
+    w._settings_path = lambda: tmp / 'see-now.json'
+
+    def open_dialog():
+        win = tk.Toplevel(root)
+        win.overrideredirect(True)
+        win.geometry('200x100+5000+5000')
+        w.__class__._dialogs_topmost(w, win)
+        win.deiconify()
+        root.update()
+        time.sleep(0.15)             # 让 after(60) 的 _own_dialog 跑掉
+        root.update()
+        top = int(u.GetAncestor(wintypes.HWND(win.winfo_id()), GA_ROOT) or 0)
+        owner = int(u.GetWindow(wintypes.HWND(top), GW_OWNER) or 0)
+        ex = int(u.GetWindowLongPtrW(wintypes.HWND(top), GWL_EXSTYLE) or 0)
+        return win, owner, ex
+
+    try:
+        (tmp / 'see-now.json').write_text(json.dumps({'keepOnTop': False}), encoding='utf-8')
+        win, owner, ex = open_dialog()
+        want_owner = int(w._hwnd_root() or 0)
+        assert owner == want_owner, 'owner=0x%X want=0x%X（override 窗的 transient 是空操作）' % (
+            owner, want_owner)
+        assert not (ex & WS_EX_TOPMOST), 'keepOnTop=false 时弹窗还带 topmost: ex=0x%X' % ex
+        assert not bool(win.attributes('-topmost')), win.attributes('-topmost')
+        win.destroy()
+
+        (tmp / 'see-now.json').write_text(json.dumps({'keepOnTop': True}), encoding='utf-8')
+        win, owner, ex = open_dialog()
+        assert owner == int(w._hwnd_root() or 0), 'owner=0x%X' % owner
+        assert ex & WS_EX_TOPMOST, 'keepOnTop=true 时弹窗没有 topmost: ex=0x%X' % ex
+        assert bool(win.attributes('-topmost')), win.attributes('-topmost')
+        win.destroy()
+    finally:
+        root.destroy()
+
+
 def main():
     if tk is None:
         print('SKIP no tkinter')
@@ -185,6 +253,7 @@ def main():
             check_state(tmp, 'keepOnTop=true', True)
             check_state(tmp, 'keepOnTop=false', False)
             test_drag_and_repaint(tmp)
+            test_dialog_owner(tmp)
     except Exception as exc:  # noqa: BLE001
         if 'Tcl' in repr(exc) or 'display' in repr(exc):
             print(astr('SKIP no display: %r' % (exc,)))

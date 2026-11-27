@@ -246,6 +246,12 @@ def test_source_guard():
         '硬写 self.root.attributes("-topmost", True) 的地方有 %d 处（只允许 _keep_on_top 里那一处）；'
         "要抬主窗请用 _raise_window() / _apply_topmost()" % hard)
     assert src.count("_raise_window()") >= 3, "显示 / 引用回主窗那几个入口没走 _raise_window()"
+    # 弹窗（设置卡 / 回顾窗 / 图查看器 / 确认框 / 菜单）一律走 _dialogs_topmost：
+    # 它负责「跟随 keepOnTop + 设 Win32 owner」。别再出现硬写弹窗 topmost 的地方。
+    assert 'win.attributes("-topmost", True)' not in src, (
+        "有弹窗硬写 topmost=True；改走 _dialogs_topmost(win)，否则关掉置顶后它还压着所有应用")
+    assert src.count("_dialogs_topmost(") >= 9, (
+        "_dialogs_topmost 的调用点少了：现在窗口 + 8 个弹窗都应该走它")
 
 
 def main():

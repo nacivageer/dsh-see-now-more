@@ -5991,9 +5991,9 @@ class LiveGlass:
         win.configure(bg=KEY)
         try:
             win.attributes("-transparentcolor", KEY)
-            win.attributes("-topmost", True)
         except Exception:
             pass
+        self._dialogs_topmost(win)
         w, h = self._hist_size()
         x = self._x - w - 14
         if x < 10:
@@ -6640,10 +6640,7 @@ class LiveGlass:
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
-        try:
-            win.attributes("-topmost", True)
-        except Exception:
-            pass
+        self._dialogs_topmost(win)
         win.geometry(f"{w}x{h}+{x}+{y}")
         self._cleanup_dlg = win
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=w, height=h)
@@ -6825,10 +6822,7 @@ class LiveGlass:
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
-        try:
-            win.attributes("-topmost", True)
-        except Exception:
-            pass
+        self._dialogs_topmost(win)
         win.geometry(f"{w}x{h}+{x}+{y}")
         self._delete_dlg = win
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=w, height=h)
@@ -6919,10 +6913,7 @@ class LiveGlass:
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
-        try:
-            win.attributes("-topmost", True)
-        except Exception:
-            pass
+        self._dialogs_topmost(win)
         win.geometry(f"{w}x{h}+{x}+{y}")
         self._rename_dlg = win
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=w, height=h)
@@ -9464,16 +9455,10 @@ class LiveGlass:
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
-        # 卡片是主窗的 **owned window**：关掉「保持置顶」后它也跟着不置顶（别的应用能盖住），
-        # 但仍排在自己的主窗上面 —— 不然点一下主窗，设置卡就会被自己的窗压住。
-        try:
-            win.transient(self.root)
-        except Exception:
-            pass
-        try:
-            win.attributes("-topmost", keep_on_top_enabled(self._settings_cached()))
-        except Exception:
-            pass
+        # 卡片是主窗的 owned window，且**跟随「保持置顶」**：关掉置顶时它也能被别的应用
+        # 盖住（2026-11-27 格问的「设置页不受保持置顶控制吗」）；owner 关系保证它仍排在
+        # 自己的主窗上面。细节见 `_dialogs_topmost`。
+        self._dialogs_topmost(win)
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=10, height=10)
         c.pack()
         # `pos`：拖动后的卡片左上角。**必须跨重画记着** —— 改选项 / 展开菜单都会重画，
@@ -10209,10 +10194,7 @@ class LiveGlass:
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
-        try:
-            win.attributes("-topmost", True)
-        except Exception:
-            pass
+        self._dialogs_topmost(win)
         win.geometry(f"{w}x{h}+{x}+{y}")
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0,
                       width=w, height=h)
@@ -10564,14 +10546,65 @@ class LiveGlass:
                 pass
         return False
 
+    def _dialogs_topmost(self, win) -> None:
+        """给弹窗定级：**跟随「保持置顶」** + 永远排在自己的主窗上面。
+
+        两层：
+        - owner（Win32 的 `GWLP_HWNDPARENT`）：owned window 永远在 owner 上面，于是点
+          自己的主窗不会把弹窗压住；
+        - `topmost` 只看配置：关掉置顶时弹窗也退出 topmost 带，别的应用能盖住它
+          （2026-11-27 格要求统一；以前弹窗一律无条件 topmost）。
+
+        **不用 Tk 的 `transient`**：它只给「Tk 自己管理」的窗设 owner，`overrideredirect`
+        的窗是空操作（2026-11-27 实测 `GetWindow(GW_OWNER)=0`），还会让窗口在 master
+        没映射时迟迟不 map。所以直接在窗口映射后补 Win32 owner（`_own_dialog`）。
+        """
+        try:
+            win.attributes("-topmost", keep_on_top_enabled(self._settings_cached()))
+        except Exception:
+            pass
+        # 有真 HWND 才能在 Win32 上设 owner；`after(60)` 等它上屏（销毁了就自己退出）
+        try:
+            win.after(60, lambda w=win: self._own_dialog(w))
+        except Exception:
+            pass
+
+    def _own_dialog(self, win) -> None:
+        """把 `win` 的 Win32 owner 设成主窗（一次性；失败就让它当普通弹窗）。"""
+        try:
+            if not win.winfo_exists():
+                return
+            u = ctypes.windll.user32
+            u.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            u.GetAncestor.restype = wintypes.HWND
+            top = u.GetAncestor(wintypes.HWND(win.winfo_id()), 2)      # GA_ROOT
+            owner = self._hwnd_root()
+            if not top or not owner or int(top) == int(owner):
+                return
+            u.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+            u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+            # GWLP_HWNDPARENT = -8：设上 owner 之后 Windows 保证它排在 owner 上面
+            u.SetWindowLongPtrW(wintypes.HWND(top), -8, ctypes.c_ssize_t(int(owner)))
+            if not keep_on_top_enabled(self._settings_cached()):
+                # owner 关系只定"相对 owner"的位置；关着置顶时补一次 lift，
+                # 免得弹窗刚出来被别的普通窗压住（开着时看门狗负责）
+                win.lift()
+        except Exception:
+            pass
+
     def _force_topmost(self, win) -> None:
-        """把 `win` 的**顶层** HWND 顶到 topmost 带最前面。
+        """把 `win` 的**顶层** HWND 顶到 topmost 带最前面 —— 只在「保持置顶」开着时。
 
         无边框 Toplevel 的 `attributes("-topmost")` 不保证排在同带最前：
         主窗和弹窗都在 topmost 带里，谁最后 SetWindowPos 谁在上。弹窗刚弹出来时
         主窗可能刚被看门狗顶过，于是重命名/删除框会被主窗压住（2026-11-06 实测
         「弹窗右半被底栏盖住」）。用 GetAncestor 拿 Toplevel 的真实顶层 HWND。
+
+        关着置顶时弹窗是主窗的 owned window，排在自己主窗上面就够了；
+        再 SetWindowPos(HWND_TOPMOST) 等于把开关废掉（2026-11-27 统一）。
         """
+        if not keep_on_top_enabled(self._settings_cached()):
+            return
         try:
             hwnd = int(win.winfo_id())
             u = ctypes.windll.user32
@@ -10583,11 +10616,16 @@ class LiveGlass:
             pass
 
     def _pin_topmost(self, win) -> None:
-        """弹窗存续期间每 400ms 顶一次（焦点/系统事件都可能把它压到主窗下面）。"""
+        """弹窗存续期间每 400ms 顶一次（焦点/系统事件都可能把它压到主窗下面）。
+
+        关着置顶时不排下一拍：没有要跟主窗看门狗赛跑的 topmost 带，owner 关系已经够。
+        """
         try:
             if not win.winfo_exists():
                 return
         except Exception:
+            return
+        if not keep_on_top_enabled(self._settings_cached()):
             return
         self._force_topmost(win)
         try:
@@ -10623,10 +10661,7 @@ class LiveGlass:
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
-        try:
-            win.attributes("-topmost", True)
-        except Exception:
-            pass
+        self._dialogs_topmost(win)
         win.geometry(f"{w}x{h}+{x}+{y}")
         self._hide_dlg = win
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=w, height=h)
@@ -10863,10 +10898,7 @@ class LiveGlass:
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.configure(bg="#000000")
-        try:
-            win.attributes("-topmost", True)
-        except Exception:
-            pass
+        self._dialogs_topmost(win)
         win.geometry(f"{w}x{h}+{x}+{y}")
         canvas = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0,
                            width=w, height=h)
