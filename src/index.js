@@ -19,14 +19,14 @@ import { ensureConfiguredVoice, detachAdapters, attachedAdapters, configuredVoic
 import { speechSubscribers, onSpeech, emitSpeech } from './speech.js';
 import { describeAcoustic, describeCoverage, describeEvents, markSpeaking, soundText } from './listen.js';
 import { startLoop, HANGUP_NOTE } from './loop.js';
-import { wakeWithRetry, deliveryMode } from './timer.js';
+import { wakeWithRetry, wakeSession, deliveryMode } from './timer.js';
 import { readTuning, tuningPath } from './tuning.js';
 import { capabilityLine } from './capability.js';
 import { shouldIdleStop } from './idle.js';
 import { isHumanMessage } from './human.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine, openWindow } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
-import { writeHostInfo, finishRestart, queueRestart, readRestartState, restartLine } from './host-info.js';
+import { writeHostInfo, finishRestart, queueRestart, readRestartState, restartLine, restartWakeText } from './host-info.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { pointAndWait, pointerEnabled } from './pointer.js';
 import { captureCrop, validateCropRegion } from './crop.js';
@@ -2702,13 +2702,14 @@ async function registerAll(ctx) {
             meta: { action, queued: false, reason: 'window-down' },
           };
         }
-        const q = queueRestart({
-          dir: chatDir(), by: 'agent', session: boundSessionNow() ?? null, version: VERSION,
-        });
+        // 会话优先取**调用方**（`run.agent.id`）—— 那是"谁排的"的权威来源；
+        // 退回来用绑定会话，别把回执投给另一个会话
+        const who = String(run?.agent?.id || boundSessionNow() || '') || null;
+        const q = queueRestart({ dir: chatDir(), by: 'agent', session: who, version: VERSION });
         return {
           text: q.already
-            ? `已经排着了（相位 ${q.intent.phase}）：不用重复排。回执不在这一轮——下一次 status 的「重启」行里读。`
-            : `已排队：这一轮结束后由悬浮窗重启到 v${VERSION}。回执不在这一轮——下一次 status 的「重启」行里读。`,
+            ? `已经排着了（相位 ${q.intent.phase}）：不用重复排。重启结束后回执会自己发进这个会话。`
+            : `已排队：这一轮结束后由悬浮窗重启到 v${VERSION}。重启完成后回执会自己发进这个会话（不用再调 status 要）。`,
           meta: { action, queued: true, already: Boolean(q.already), phase: q.intent.phase, at: q.intent.at },
         };
       }
@@ -2830,6 +2831,27 @@ async function registerAll(ctx) {
       if (back) {
         log(back.text);
         try { appendNotice(back.text, boundSessionNow() ?? ''); } catch { /* 写不进窗口流不算失败 */ }
+        /**
+         * 回执要**自己走进会话**（2026-11-27 格指出）：只写进窗和文件的话，模型得靠
+         * 下一次主动 `status` 去要，闭环就断在这里。用宿主自己的 followup 路径投一条
+         * 「系统回执」，下一轮它就在上下文里了。
+         *
+         * 会话优先用**排重启的那一个**（`intent.session`）—— 重启前后绑定可能已经漂了，
+         * 投错会话等于把回执发给另一个人。
+         */
+        const sid = String(back.intent?.session || boundSessionNow() || '');
+        if (sid) {
+          try {
+            const w = await wakeSession(ctx, {
+              sessionId: sid, text: restartWakeText(back.text), sourceKind: 'see-now',
+            });
+            log(w?.ok ? `回执已送进会话 ${sid}（${w.via}）` : `回执送不进会话：${w?.reason ?? '?'}`);
+          } catch (e) {
+            log(`回执送进会话出错：${e?.message ?? e}`);
+          }
+        } else {
+          log('回执没有目标会话（intent.session 与绑定都空），只留在窗里');
+        }
       }
     } catch (e) {
       log(`宿主坐标写不进：${e?.message ?? e}`);

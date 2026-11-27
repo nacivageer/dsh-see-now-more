@@ -227,6 +227,19 @@ export function finishRestart({ dir, hostPid = process.pid, version = '?', now =
   return { text, intent, path };
 }
 
+/**
+ * 把回执送进会话时用的那一句。**纯函数**。
+ *
+ * 为什么要送：重启完成后，回执原先只写进 `chat.jsonl` 和 `restart.json` ——
+ * 窗里看得见、模型看不见，得靠下一次主动 `status` 去要（2026-11-27 格指出：
+ * 「你居然不是自动从窗里收回执的吗」）。闭环应该是重启回来的这一版**自己说一句**。
+ */
+export function restartWakeText(receipt) {
+  const t = String(receipt ?? '').trim();
+  return `（看屏幕 · 系统回执）${t || '重启完成'}\n`
+    + '这条是悬浮窗写的回执，不用再调 `status` 核对；要继续刚才没做完的事就接着做。';
+}
+
 /** `host.json` 的年龄（秒）。窗口用它判断坐标是不是上次开机留下的。 */
 export function hostInfoAgeSec(path, now = Date.now()) {
   try { return Math.max(0, (now - statSync(path).mtimeMs) / 1000); } catch { return null; }

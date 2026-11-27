@@ -462,7 +462,8 @@ def perform_restart(
         return {"ok": False, "phase": "failed", "reason": "；".join(p["problems"]), "plan": p}
 
     exe, cwd, app_pid, host_pid = p["exe"], p["cwd"], p["appPid"], p["hostPid"]
-    # 插件（模型）排的请求：沿用它的 `by` 和「什么时候排的」，回执里才能说清是谁发起的
+    # 插件（模型）排的请求：沿用它的 `by` / `session` / 「什么时候排的」——
+    # 回执要投进**排队那个会话**，而重启前后绑定会漂，丢了 session 就只能猜
     prev = read_json(see / RESTART_FILE) or {}
     queued_at = None
     if str(prev.get("phase")) == "queued":
@@ -479,6 +480,8 @@ def perform_restart(
     }
     if queued_at:
         intent["queuedAt"] = queued_at
+    if prev.get("session"):
+        intent["session"] = str(prev["session"])
     write_json(see / RESTART_FILE, intent)
 
     # 1) 等空闲：正在跑的回合会被这一刀掐断。

@@ -150,4 +150,5 @@
 - 2026-11-27 11:43 修误报 + 改等待口径：进程起来了但写不出自核记录时报告 `degraded`（相位 `launched-legacy`），不再判失败；等空闲**不设上限**（`wait_idle_sec=None`，新相位 `waiting-idle`），要掐断当前回合用 `--force`。原因是「回合内点按钮、又在本回合等结果」是自锁——格 11:34 点出来的。
 - 2026-11-27 11:46 重开窗（`87424`）加载最终 `window.py`；离线脚本复跑全过（含排队、旧版 degraded 两条）。
 - 2026-11-27 11:42:16 真机第二轮（`.39` 已在 profile）：11:41:43 点按钮、11:41:43 杀旧、11:41:57 新宿主写回 `host.json`（`hostPid 88436`），`restart.json` 收敛 `done`、`elapsedMs 14011`，回执进 `chat.jsonl`。新 Electron `94168` 的父进程仍是窗口 `87424` —— **窗口跨过两次重启**。旧宿主 pid 记成 `?`：升级前没有 `host.json`，下一次起才是完整的「A → B」。
-- 2026-11-27 11:52 补模型侧发起口（格指出的原点）：`see_now({action:"restart"})` 只写 `queued` 就返回，窗的新线程 `_watch_restart_requests` 每 2 秒看一次、回合结束后执行；回执两边各一份（窗里提示 + 下一次 `status` 的「重启」行）。离线：`node --test` 全绿、`check-restart.py` 26 条全过（含 by=agent 沿用）。
+- 2026-11-27 11:52 补模型侧发起口（格指出的原点）：`see_now({action:"restart"})` 只写 `queued` 就返回，窗的新线程 `_watch_restart_requests` 每 2 秒看一次、回合结束后执行。离线：`node --test` 全绿、`check-restart.py` 26 条全过（含 by=agent 沿用）。
+- 2026-11-27 11:56 格指出回执没闭环（「你居然不是自动从窗里收回执的吗」）：原实现只写窗和 `restart.json`，模型要下一次 `status` 自己去要。改成新宿主启动时用 `wakeSession` 投一条「系统回执」进**排队时那个会话**（`run.agent.id` 优先，退回绑定）；`restartWakeText` 单测覆盖。`node --test` 479 全绿，已 install-dev，待下一次重启验自动收到。

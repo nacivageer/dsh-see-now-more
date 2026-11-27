@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 import {
   finishRestart, hostRecord, queueRestart, readJson, readPendingRestart, restartLine, restartNotice,
-  writeHostInfo,
+  restartWakeText, writeHostInfo,
 } from '../src/host-info.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'dsh-host-info-'));
@@ -182,4 +182,13 @@ test('restartNotice：模型排的重启要写成「会话发起」，不能冒�
   const text = restartNotice({ by: 'agent', oldHostPid: 111, at: 0 }, { version: 'v', hostPid: 222, now: 1000 });
   assert.match(text, /会话发起/);
   assert.ok(!text.includes('窗发起'));
+});
+
+test('restartWakeText：回执要自己走进会话，并明说不用再查 status', () => {
+  const text = restartWakeText('已回到 v0.1.1-more.39（会话发起，宿主 1 → 2，用时 3 秒）');
+  assert.match(text, /系统回执/);
+  assert.match(text, /v0\.1\.1-more\.39/);
+  assert.match(text, /不用再调 `status`/);
+  // 空回执也不能吐一句没主语的话
+  assert.match(restartWakeText(''), /重启完成/);
 });
