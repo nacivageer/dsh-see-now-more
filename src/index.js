@@ -1274,6 +1274,18 @@ async function registerAll(ctx) {
   let lastGameModeAt = (() => { try { return readTuning().gameModeAt || 0; } catch { return 0; } })();
   /** 开游戏模式之前的节奏；`null` = 当前没被覆盖 */
   let paceBeforeGame = null;
+  /**
+   * 设置页「预设」那 4 个 n 选 1 的当前值（与 `window.py` 的推导同一条规则）：
+   * `game` = 游戏模式、`text` = 读字幕模式（fps ≥ 2）、`off` = 关读字幕、`none` = 默认。
+   */
+  const presetOfTuning = (t) => {
+    if (Boolean(t?.gameMode)) return 'game';
+    if (t?.text?.enabled === false) return 'off';
+    if ((Number(t?.text?.fps) || 1) >= 2) return 'text';
+    return 'none';
+  };
+  const PRESET_NAME = { none: '无（默认）', game: '游戏模式', text: '读字幕模式', off: '关读字幕' };
+  let lastPresetSeen = (() => { try { return presetOfTuning(readTuning()); } catch { return 'none'; } })();
   // 重启时游戏模式还开着：启动就该是覆盖态，并把"原来的档"记下来，关掉才还得回去
   if (lastGameMode) {
     paceBeforeGame = PACES[tuning.defaultPace] ? tuning.defaultPace : DEFAULT_PACE;
@@ -1284,37 +1296,43 @@ async function registerAll(ctx) {
     try { t = readTuning(); } catch { return; }
     const on = Boolean(t.gameMode);
     const at = Number(t.gameModeAt) || 0;
-    if (at === lastGameModeAt && on === lastGameMode) return;
-    lastGameModeAt = at;
-    lastGameMode = on;
-    if (on) {
-      if (paceBeforeGame === null) paceBeforeGame = paceMode;
-      paceMode = 'game-economic';
-    } else {
-      paceMode = paceBeforeGame
-        ?? (PACES[tuning.defaultPace] ? tuning.defaultPace : DEFAULT_PACE);
-      paceBeforeGame = null;
+    // 预设（设置页那 4 个 n 选 1）= gameMode / text.enabled / text.fps 的组合，
+    // 任何一个变了都要给一条气泡，否则点「读字幕模式」「关读字幕」时窗口里没反应。
+    const presetNow = presetOfTuning(t);
+    const gameChanged = at !== lastGameModeAt || on !== lastGameMode;
+    if (!gameChanged && presetNow === lastPresetSeen) return;
+    lastPresetSeen = presetNow;
+    if (gameChanged) {
+      lastGameModeAt = at;
+      lastGameMode = on;
+      if (on) {
+        if (paceBeforeGame === null) paceBeforeGame = paceMode;
+        paceMode = 'game-economic';
+      } else {
+        paceMode = paceBeforeGame
+          ?? (PACES[tuning.defaultPace] ? tuning.defaultPace : DEFAULT_PACE);
+        paceBeforeGame = null;
+      }
+      // 循环是按节奏建的：换档要重建，否则唤醒间隔还是旧的
+      try { if (loop) ensureLoop(boundSessionNow()); } catch (e) { log(`游戏模式重建循环失败：${e?.message ?? e}`); }
     }
-    // 循环是按节奏建的：换档要重建，否则唤醒间隔还是旧的
-    try { if (loop) ensureLoop(boundSessionNow()); } catch (e) { log(`游戏模式重建循环失败：${e?.message ?? e}`); }
-    const text = on
-      ? '用户刚在悬浮窗打开了「游戏模式」：节奏临时换成 game-economic（切点门槛 80、最多 20 秒叫一次），关掉后会恢复原来的节奏。'
-      : `用户刚关掉了「游戏模式」，节奏已恢复为 ${paceMode}。`;
-    // **只贴 note、不投消息**（2026-11-19 用户定）：投消息会起一轮模型调用，
-    // 开关各一次就是两轮；note 贴在下一次工具结果里，零额外开销。
-    try { runner.note?.(text); } catch { /* 记不住也别炸 */ }
-    // 窗口里也要看得见：写一条居中系统气泡（跟「关联会话已成功」同一条流）
     const PACE_CN = { calm: '省', normal: '常规', dense: '密', 'game-economic': '游戏' };
     const pc = PACES[paceMode] ?? {};
     const label = PACE_CN[paceMode] ?? paceMode;
-    try {
-      appendNotice(
-        `${on ? '游戏模式已开启' : '游戏模式已关闭'}：节奏 ${on ? '→' : '恢复为'} `
-        + `${label}（切点门槛 ${pc.cutAbs ?? '?'} / 最多 ${pc.wakeGapSec ?? '?'} 秒一次）`,
-        boundSessionNow() ?? '',
-      );
-    } catch { /* 写不进窗口流也不能影响开关 */ }
-    log(`游戏模式：${on ? '开' : '关'}（节奏 ${paceMode}）`);
+    const name = PRESET_NAME[presetNow] ?? presetNow;
+    const detail = presetNow === 'game'
+      ? `节奏 → 游戏（切点门槛 ${pc.cutAbs ?? '?'} / 最多 ${pc.wakeGapSec ?? '?'} 秒一次）`
+      : presetNow === 'text'
+        ? `读字幕 2 fps；节奏恢复为 ${label}`
+        : presetNow === 'off'
+          ? `条带 OCR 已停；节奏 ${label}`
+          : `读字幕 1 fps；节奏 ${label}`;
+    // **只贴 note、不投消息**（2026-11-19 用户定）：投消息会起一轮模型调用，
+    // 开关各一次就是两轮；note 贴在下一次工具结果里，零额外开销。
+    try { runner.note?.(`用户刚在悬浮窗把预设切成「${name}」：${detail}。`); } catch { /* 记不住也别炸 */ }
+    // 窗口里也要看得见：写一条居中系统气泡（跟「关联会话已成功」同一条流）
+    try { appendNotice(`预设：${name}（${detail}）`, boundSessionNow() ?? ''); } catch { /* 写不进窗口流也不能影响开关 */ }
+    log(`预设：${name}（节奏 ${paceMode}，读字幕 ${presetNow === 'off' ? '关' : `${Number(t.text?.fps) || 1} fps`}）`);
   }, 1500);
   gameWatcher.unref?.();
   disposers.push(() => clearInterval(gameWatcher));
@@ -1362,6 +1380,21 @@ async function registerAll(ctx) {
     const runS = Number(runner.packStretch?.()) || 0;
     const okPace = cfgPace === runPace || (t.gameMode && runPace === 'game-economic');
     const line = (name, cfg, run, ok) => `${name}：配置 ${cfg} ／ 运行 ${run}${ok ? ' ✓' : ' ✗（重启 DSH 后生效）'}`;
+    /**
+     * 读字幕那一行：配置里写的 fps vs 文字流**运行中**的 fps。
+     *
+     * 这两者会不同步是正常的——`text.fps` 有 1.5 秒轮询热更新，但老宿主（没重启）
+     * 不认识这个键，于是永远停在 1 fps，正好让 ✗ 指出来「要重启」。
+     */
+    const textLine = (tt) => {
+      const cfgOn = tt?.text?.enabled !== false;
+      const cfgFps = Number(tt?.text?.fps) || 1;
+      let run = null;
+      try { run = runner.textStatus?.() ?? null; } catch { run = null; }
+      const cfgName = cfgOn ? `${cfgFps} fps` : '关';
+      const runName = !run || run.enabled === false ? '关' : `${run.fps} fps`;
+      return line('读字幕', cfgName, runName, cfgName === runName);
+    };
     // 声音单独报：它是"选中了但没接上"最典型的一项（DeepSeek 缺 key、SAPI 缺组件、
     // edge-tts 缺 python），这三条都不该让用户自己去猜（2026-11-19 用户要求）。
     const voiceSpec = configuredVoiceAdapter();
@@ -1391,6 +1424,7 @@ async function registerAll(ctx) {
         (PACE_NAME[runPace] ?? runPace) + (t.gameMode ? '（游戏模式覆盖中）' : ''), okPace)
       + '\n' + line('清晰度', cfgQ, runQ, cfgQ === runQ)
       + '\n' + line('排布容差', cfgS, runS, cfgS === runS)
+      + '\n' + textLine(t)
       + '\n' + voiceLine
       + '\n' + speakScopeLine(t);
     try { appendNotice(text, boundSessionNow() ?? ''); } catch { /* 写不进也不能影响别的 */ }
