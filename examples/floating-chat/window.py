@@ -6642,6 +6642,10 @@ class LiveGlass:
             win.focus_force()
         except Exception:
             pass
+        # 主窗的 topmost 看门狗每 800ms 顶一次（见 `_keep_on_top`），会把这张卡挤到
+        # 主窗下面 —— 和重命名/删除框一样，弹窗存续期间自己每 400ms 顶回来
+        # （2026-11-27 真机第一版就是这样：卡确实存在，只是被主窗盖住了）
+        self._pin_topmost(win)
 
     def _run_cleanup(self, days: int) -> None:
         cutoff = int((time.time() - days * 86400) * 1000)
@@ -10409,7 +10413,7 @@ class LiveGlass:
 
     def _dialog_alive(self) -> bool:
         """确认/重命名这类模态弹窗是否开着（主窗的 topmost 看门狗要给它们让路）。"""
-        for name in ("_hide_dlg", "_delete_dlg", "_rename_dlg"):
+        for name in ("_hide_dlg", "_delete_dlg", "_rename_dlg", "_cleanup_dlg"):
             w = getattr(self, name, None)
             if not w:
                 continue

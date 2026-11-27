@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """check-cleanup-tiers.py — 无 GUI 验「自动清理 3 / 7 / 14 / 30 分档」。
 
 不创建 Tk 窗口：用 `object.__new__(LiveGlass)` 造一个没有 `__init__` 的壳
@@ -17,6 +17,7 @@
 
 跑法：python scripts/check-cleanup-tiers.py   （exit 0 = 全过）
 """
+import inspect
 import json
 import sys
 import tempfile
@@ -237,6 +238,23 @@ def test_menu_items(tmp):
     assert sum("（当前）" in it[0] for it in items) == 1, items
 
 
+def test_dialog_guards_topmost(tmp):
+    """真机上踩到的坑：主窗每 800ms 顶一次 topmost，会把确认卡盖住。
+
+    两道守卫缺一不可：`_dialog_alive()` 认得 `_cleanup_dlg`（看门狗让路），
+    `_show_cleanup_confirm` 自己每 400ms `_pin_topmost` 顶回来。
+    """
+    w = make_window(tmp)
+    w._cleanup_dlg = types.SimpleNamespace(winfo_exists=lambda: True)
+    assert w._dialog_alive() is True, "看门狗不认 _cleanup_dlg，卡会被主窗盖住"
+    w._cleanup_dlg = types.SimpleNamespace(winfo_exists=lambda: False)
+    assert w._dialog_alive() is False
+
+    src = inspect.getsource(Window._show_cleanup_confirm)
+    assert "_pin_topmost(win)" in src, "确认卡没有把自己顶回 topmost 带最前面"
+    assert "_cleanup_dlg = win" in src, "没登记弹窗，_dialog_alive 就看不见它"
+
+
 def main():
     test_shape()
     with tempfile.TemporaryDirectory(prefix="seenow-cleanup-") as tmp:
@@ -245,9 +263,11 @@ def main():
         test_set_days(tmp)
         test_row_hit_regions(tmp)
         test_menu_items(tmp)
+        test_dialog_guards_topmost(tmp)
     print("check-cleanup-tiers: all passed")
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
