@@ -695,6 +695,36 @@ def _append_chat_line(entry: dict) -> None:
         raise first
 
 
+def _wrapped_text_height(text: str, font, width: int) -> int:
+    """按像素宽度折行后，这段文字**占多高**（像素）。
+
+    为什么需要：两个确认弹窗的正文是「一句话自动折行」，行数取决于字号 × DPI 和心理宽度。
+    以前弹窗高度写死 250，正文起点也写死，复选框钉在 `h - 96` —— 150% 缩放下正文折出
+    四行，第 4 行正好压在「我已知晓」上（2026-11-27 实报，截图里字串成一坨）。
+    中文没有空格，`tk` 的 word wrap 在这里会按字断，所以这里也**逐字**量。
+    """
+    if not text:
+        return 0
+    lines, cur = [], ""
+    for ch in text:
+        if ch == "\n":
+            lines.append(cur)
+            cur = ""
+            continue
+        if cur and font.measure(cur + ch) > width:
+            lines.append(cur)
+            cur = ch
+        else:
+            cur += ch
+    if cur:
+        lines.append(cur)
+    try:
+        line_h = int(font.metrics("linespace"))
+    except Exception:
+        line_h = 20
+    return max(1, len(lines)) * line_h
+
+
 def append_user(text: str) -> None:
     entry = {"role": "user", "text": text, "at": int(time.time() * 1000)}
     sid = bound_sid_full()
@@ -1131,6 +1161,17 @@ class LiveGlass:
         if os.environ.get("DSH_SEE_SETTINGS_OPEN") == "1":
             # 调试入口：自动弹设置卡（验收「卡会不会被主窗盖住」用，同 DSH_SEE_BIND_OPEN）
             self.root.after(1500, self._open_settings)
+        if os.environ.get("DSH_SEE_DELETE_OPEN") == "1":
+            # 调试入口：直接弹「删除这组会话记录」确认卡 —— 验收排版用
+            # （150% 缩放下正文压住复选框那次，2026-11-27）
+            def _dbg_delete():
+                try:
+                    groups = self._history_sessions() or []
+                    sid0 = str(groups[0].get("sid")) if groups else "session-debug"
+                except Exception:
+                    sid0 = "session-debug"
+                self._show_delete_confirm(sid0)
+            self.root.after(1500, _dbg_delete)
         self.root.after(250, self._poll_chat)
         self.root.after(1200, self._keep_on_top)
         if SNAPSHOT:
@@ -6531,7 +6572,25 @@ class LiveGlass:
                     break
         except Exception:
             pass
-        w, h = 500, 250
+        w = 500
+        pad = 24
+        body = (f"将删除这组会话在浮窗里的全部 {n} 条记录，"
+                "并从回顾列表移除。DSH 会话本身不受影响，"
+                "删除前会整份备份到 trash/（可在那里找回）。")
+        # **弹窗高度按正文实际折行算**（2026-11-27 实报：写死 250 在 150% 缩放下正文折出
+        # 四行，第 4 行正好压在「我已知晓」上，字叠成一坨）
+        _f10 = self.fonts.get(10)
+        # Tk 的 canvas 折行**优先断在词边界**（拉丁词/路径整段不拆），逐字量会比实际少一行；
+        # 所以补一行余量 —— 2026-11-27 实测 body_h=81(3 行) 而 Tk 画了 4 行。
+        body_h = _wrapped_text_height(body, _f10, w - pad * 2) + int(_f10.metrics('linespace'))
+        h = max(250, pad + 34 + body_h + 112)
+        if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
+            try:
+                _f = self.fonts.get(10)
+                print(f"[delete-dlg] body_h={body_h} h={h} ls={_f.metrics('linespace')}"
+                      f" measure={_f.measure(body)}", flush=True)
+            except Exception:
+                pass
         vx, vy = self._vx, self._vy
         x = max(vx + 8, min(self._x + (self._geo.width - w) // 2, vx + self._vw - w - 8))
         y = max(vy + 8, min(self._y + (self._geo.height - h) // 3, vy + self._vh - h - 8))
@@ -6546,16 +6605,12 @@ class LiveGlass:
         self._delete_dlg = win
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=w, height=h)
         c.pack()
-        pad = 24
         c.create_polygon(self._rounded_points(0, 0, w, h, 16, 6),
                          fill="#0f1319", outline="#2a3546", smooth=True)
         c.create_text(pad, pad, text="删除这组会话记录？", anchor="nw",
                       fill="#e6eef8", font=self.fonts.spec(14, True))
         c.create_text(pad, pad + 34, anchor="nw", fill="#9fb0c8",
-                      font=self.fonts.spec(10), width=w - pad * 2,
-                      text=f"将删除这组会话在浮窗里的全部 {n} 条记录，"
-                           "并从回顾列表移除。DSH 会话本身不受影响，"
-                           "删除前会整份备份到 trash/（可在那里找回）。")
+                      font=self.fonts.spec(10), width=w - pad * 2, text=body)
         cb = (pad, h - 96, pad + 16, h - 80)
         c.create_rectangle(*cb, outline="#6b7d95", width=1, fill="#111a24")
         c.create_text(pad + 24, h - 88, text="我已知晓，无需提醒", anchor="w",
@@ -10220,7 +10275,17 @@ class LiveGlass:
 
     def _show_hide_confirm(self, sid: str, at) -> None:
         """确认弹窗：不可恢复 + 不动会话记录 +「我已知晓，无需提醒」。"""
-        w, h = 460, 250
+        w = 460
+        pad = 24
+        body = ("本操作不可恢复，但不会删除\n"
+                "DSH 会话里的对应记录，\n"
+                "只是在这个浮窗里不再显示。")
+        # 同「删除这组会话」那款：高度按正文行数算，别写死（2026-11-27）
+        _f10 = self.fonts.get(10)
+        # Tk 的 canvas 折行**优先断在词边界**（拉丁词/路径整段不拆），逐字量会比实际少一行；
+        # 所以补一行余量 —— 2026-11-27 实测 body_h=81(3 行) 而 Tk 画了 4 行。
+        body_h = _wrapped_text_height(body, _f10, w - pad * 2) + int(_f10.metrics('linespace'))
+        h = max(250, pad + 34 + body_h + 112)
         vx, vy = self._vx, self._vy
         x = max(vx + 8, min(self._x + (self._geo.width - w) // 2, vx + self._vw - w - 8))
         y = max(vy + 8, min(self._y + (self._geo.height - h) // 3, vy + self._vh - h - 8))
@@ -10235,16 +10300,12 @@ class LiveGlass:
         self._hide_dlg = win
         c = tk.Canvas(win, bg="#000000", highlightthickness=0, bd=0, width=w, height=h)
         c.pack()
-        pad = 24
         c.create_polygon(self._rounded_points(0, 0, w, h, 16, 6),
                          fill="#0f1319", outline="#2a3546", smooth=True)
         c.create_text(pad, pad, text="隐藏这条气泡？", anchor="nw",
                       fill="#e6eef8", font=self.fonts.spec(14, True))
         c.create_text(pad, pad + 34, anchor="nw", fill="#9fb0c8",
-                      font=self.fonts.spec(10),
-                      text="本操作不可恢复，但不会删除\n"
-                           "DSH 会话里的对应记录，\n"
-                           "只是在这个浮窗里不再显示。")
+                      font=self.fonts.spec(10), text=body)
         cb = (pad, h - 96, pad + 16, h - 80)
         c.create_rectangle(*cb, outline="#6b7d95", width=1, fill="#111a24")
         c.create_text(pad + 24, h - 88, text="我已知晓，无需提醒", anchor="w",
