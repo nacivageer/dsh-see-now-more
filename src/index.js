@@ -26,6 +26,7 @@ import { shouldIdleStop } from './idle.js';
 import { isHumanMessage } from './human.js';
 import { windowAlive, windowHidden, setWindowHidden, windowReport, windowLine, openWindow } from './window.js';
 import { registerOpenWindowRoute } from './open-window.js';
+import { writeHostInfo, finishRestart } from './host-info.js';
 import { pickRegion, loadRegion, clearRegion, regionText } from './region.js';
 import { pointAndWait, pointerEnabled } from './pointer.js';
 import { captureCrop, validateCropRegion } from './crop.js';
@@ -2784,6 +2785,24 @@ async function registerAll(ctx) {
     // 注册成功要留一行：出问题时"加载失败"（有 plugin-error.log）和"装了两份、被去重"
     // 是两回事，没有这行只能靠猜。
     log(`已注册工具 ${TOOL_NAME}（v${VERSION}）`);
+
+    /**
+     * 宿主坐标 + 重启回执（2026-11-27，`0.1.1-more.39`）。
+     *
+     * **放在注册成功之后**：`host.json` 是新的 ⇒ 这一次真的起来了、工具注册过了。
+     * 窗口的「重启 DSH」靠它拿 exe / app pid；回来之后也靠这条路径把回执写进窗里 ——
+     * 窗口自己写不了成功回执，它不知道新进程到底加载了哪一版。
+     */
+    try {
+      writeHostInfo({ dir: chatDir(), version: VERSION, log });
+      const back = finishRestart({ dir: chatDir(), hostPid: process.pid, version: VERSION, log });
+      if (back) {
+        log(back.text);
+        try { appendNotice(back.text, boundSessionNow() ?? ''); } catch { /* 写不进窗口流不算失败 */ }
+      }
+    } catch (e) {
+      log(`宿主坐标写不进：${e?.message ?? e}`);
+    }
   } catch (e) {
     const msg = String(e?.message ?? e);
     if (!/already registered/i.test(msg)) throw e;

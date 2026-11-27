@@ -9209,9 +9209,18 @@ class LiveGlass:
                          "h": 68 if has_hint else 56})
         # 「检查当前选项是否生效」：点了给宿主一个时间戳，结果由宿主落成居中气泡
         rows.append({"kind": "checkbtn", "text": "检查当前选项是否生效", "h": 64})
+        # 重启 DSH（2026-11-27，`0.1.1-more.39`）：改完插件必须让宿主重新组合，
+        # 而这件事只能由一个**不在 DSH 进程树里**的进程做 —— 就是这颗窗（detached 起的）。
+        # 细节在 `host_restart.py`；这里只放一个入口，点击后由后台线程跑完整条链路。
+        rows.append({"kind": "sep", "h": 8})
+        rows.append({"kind": "hint", "text": "改完插件：点下面重启 DSH（有回合在跑会等它跑完）", "h": 24})
+        rows.append({"kind": "restartbtn", "text": "重启 DSH", "h": 64})
         head, hint_h = 68, 18
         cw = max(380, min(560, self._geo.width - 24))
         ch = head + sum(r["h"] for r in rows) + hint_h
+        if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
+            print(f"[settings] size {cw}x{ch} rows={len(rows)} geo={self._geo.width}x{self._geo.height}",
+                  flush=True)
         x = int(max(self._vx + 4,
                     min(self._x + (self._geo.width - cw) // 2,
                         self._vx + self._vw - cw - 4)))
@@ -9369,6 +9378,18 @@ class LiveGlass:
                     tags=("checkbtn", "checkbtnbg"))
                 c.create_text(cw // 2, (y0 + y1) // 2, text=r["text"], anchor="center",
                               fill="#ffffff", font=f11b, tags=("checkbtn", "checkbtnlabel"))
+            elif kind == "restartbtn":
+                # 和「检查」同一套尺寸，但描边用暖色：这颗会关掉整个 DSH，不能和普通按钮长得一样
+                bh = 40
+                by0 = (y0 + y1) // 2 - bh // 2
+                bw = min(cw - 48, 260)
+                bx0 = (cw - bw) // 2
+                c.create_polygon(
+                    self._rounded_points(bx0, by0, bx0 + bw, by0 + bh, 14, 8),
+                    fill="#000000", outline="#b9873f", smooth=True,
+                    tags=("restartbtn", "restartbtnbg"))
+                c.create_text(cw // 2, (y0 + y1) // 2, text=r["text"], anchor="center",
+                              fill="#e8c07a", font=f11b, tags=("restartbtn", "restartbtnlabel"))
             elif kind == "setting":
                 _key, label, _options, names, _default = r["row"][:5]
                 hints = r["row"][5] if len(r["row"]) > 5 else None
@@ -9447,6 +9468,8 @@ class LiveGlass:
                     self._settings_pick_scope(r["value"])
             elif r["kind"] == "checkbtn":
                 self._settings_check()
+            elif r["kind"] == "restartbtn":
+                self._settings_restart_dsh()
             elif r["kind"] == "setting":
                 self._settings_cycle(r)
             return
@@ -9579,6 +9602,54 @@ class LiveGlass:
         self._settings_check_dim(True)
         if os.environ.get("DSH_SEE_SET_DEBUG") == "1":
             print("[settings] check requested", flush=True)
+
+    def _settings_restart_dsh(self) -> None:
+        """重启 DSH 的入口：防连点、收起卡片、起后台线程；编排全在 `host_restart.py`。
+
+        **为什么窗口能做这件事**：它是 `detached: true` 起的（`src/window.js`），
+        不在 DSH 进程树里 —— 宿主重启它还在，所以它杀得掉、也拉得起来。
+        """
+        if getattr(self, "_restart_running", False):
+            append_notice("重启 DSH：已经在重启中，别连点")
+            return
+        self._restart_running = True
+        try:
+            self._close_settings()
+        except Exception:
+            pass
+        append_notice("重启 DSH：开始了（改完插件要让宿主重新组合，这条只能由窗发起）")
+        threading.Thread(target=self._restart_worker, name="dsh-restart", daemon=True).start()
+
+    def _restart_worker(self) -> None:
+        """后台跑完整条重启。**只写文件**（append_notice / restart.log），不碰 Tk。"""
+        log_path = cache_dir() / "restart.log"
+
+        def _log(msg: str) -> None:
+            try:
+                with log_path.open("a", encoding="utf-8") as f:
+                    f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+            except Exception:
+                pass
+
+        try:
+            import sys
+            here = str(Path(__file__).resolve().parent)
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import host_restart
+            # 等空闲**不设上限**（2026-11-27 真机跑通后改）：回合多长不可预知，
+            # 用 15 分钟封顶会让长回合变成"点了没成"；等待期间窗口什么都不用做。
+            res = host_restart.perform_restart(
+                wait_idle=True, wait_idle_sec=None, back_timeout=120,
+                notify=append_notice, log=_log)
+            if not res.get("ok"):
+                append_notice("重启 DSH 没成：" + str(res.get("reason") or res.get("phase") or "未知原因")
+                              + "（细节见 ~/.dsh/see-now/restart.log）")
+        except Exception as e:
+            _log(f"worker 出错：{e}")
+            append_notice(f"重启 DSH 出错：{e}（细节见 ~/.dsh/see-now/restart.log）")
+        finally:
+            self._restart_running = False
 
     def _settings_drag(self, e) -> None:
         """按住标题栏拖卡片：`geometry("+x+y")` 只挪位置、不改尺寸。"""

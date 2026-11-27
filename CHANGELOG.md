@@ -2,6 +2,45 @@
 
 本文件从 `0.0.4` 起记录；更早的版本见 GitHub Releases。
 
+## [0.1.1-more.39] - 2026-11-27
+
+### Added — 悬浮窗能重启 DSH：改完插件不用再手关手开
+
+- 【本插件设置】底部新增「重启 DSH」：先等当前回合跑完，再关掉旧进程、按原坐标拉起新的；
+  新宿主起来后写一条居中提示「已回到 vX（窗发起，宿主 A → B，用时 N 秒）· 工具已注册」。
+  执行端是**悬浮窗自己** —— 它是 `detached` 起的，宿主重启它还在；模型所在进程重启不了自己。
+- **不设等到空闲的上限**：点下去就记 `waiting-idle` 返回，回合结束自动执行（上限封顶会让
+  长回合变成「点了没成」）。要立刻掐断当前回合就 `host_restart.py --restart --force`。
+- 插件启动时写 `~/.dsh/see-now/host.json`：`exe` / `appPid`（Electron 主进程）/ `hostPid` /
+  `cwd` / 版本 / 要剥掉的环境变量名。**env 只留 `DSH_HOME`、`DSH_PROFILE`、
+  `DSH_PRIMARY_RUNTIME` 三个白名单键，不写密钥。**
+- `restart.json` 记重启意图（requested → waiting-idle → killing → launched），新宿主启动时
+  收敛成 `done` 并写回执；失败也留相位与原因，窗口照实报。
+- **从没有 `host.json` 的旧版升级上来，第一次重启只会报 `degraded`**（进程起来了，但旧插件
+  写不出自核记录），不误报失败。从第二次起才有「宿主 A → B · 工具已注册」的完整回执。
+
+### 注意
+
+- **拉起的命令必须剥掉 `ELECTRON_RUN_AS_NODE`**：桌面 Host 是带它起的，窗口原样继承的话，
+  拉起来的 `DeepSeek Harness.exe` 会当 node 跑，面板不亮。
+- **关进程按 pid 来，不用 `/T`**：窗口自己在那棵进程树里，`/T` 会把它一起收掉，
+  于是"关掉旧的、拉起新的"只做一半。先杀 Electron 主进程，Host 收 IPC 断开自己优雅退出，
+  不退再单独补一刀。
+- 面板会亮一下：桌面端没有静默启动（判定见 `docs/决策记录.md` 的同名小节）。
+
+### 验收
+
+- `node --test`：新增 `test/host-info.test.mjs`，守住四件容易悄悄写错的事：env 白名单里
+  混进密钥、poison 名单漏掉 `ELECTRON_RUN_AS_NODE`、原子写留下 `.tmp`、同进程内部重载
+  被当成一次重启完成。
+- `python scripts/check-restart.py`：用假应用 + 假 Host + detached 假窗口跑完整条链路，
+  覆盖正常一轮、坏坐标拒绝且不误杀、起不来要停手、等空闲超时不动进程、排队到回合结束
+  才动手、旧版插件只报 degraded。
+- 真机（2026-11-27）：第一次 11:35 点，窗口等到回合结束才动手；新 Electron 的父进程正是
+  窗口自己。第二次 11:41 点（`.39` 已装），新宿主写出 `host.json` 并落回执
+  「已回到 v0.1.1-more.39 · 工具已注册」，`restart.json` 收敛 `done`（14 秒）。
+  旧宿主在回执里记成 `?` —— 升级前没有 `host.json`，那是第一次的固有形状。
+
 ## [0.1.1-more.38] - 2026-11-27
 
 ### Added — 读字幕：屏幕底部那条字幕变成文本
