@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ⚠️ 本文件由 dsh-see-now/scripts/sync-window.mjs 生成，请勿手改（要改请改上游 dsh-watch-together）
+# ⚠️ 本文件起自 dsh-watch-together 的同步，但本仓已分叉：改动直接改这里并提交（CONTRIBUTING「别跑生成链」）。别跑 npm run sync:window —— 它会把你改的盖回去。
 """陪看悬浮窗：不铺全屏背景图，实时抓窗口背后的桌面并模糊成液态玻璃。
 
 三层，各自不知道对方的实现：
@@ -1303,7 +1303,13 @@ class LiveGlass:
         的 overlay 做得到）；无边框窗口化 / 有边框窗口下这条看门狗有效。
         """
         try:
-            if not keep_on_top_enabled(self._settings_cached()):
+            want = keep_on_top_enabled(self._settings_cached())
+            if bool(want) != bool(getattr(self, "_topmost_on", True)):
+                # 配置被**手改**（设置页那条路在 `_apply_topmost` 里当场同步过了）：
+                # 已经开着的弹窗也要跟着翻面，否则关掉置顶后它们仍然压在别的应用上面。
+                # 幂等：`_follow_dialogs_topmost` 只改属性 + 补链（有标记就不会叠第二条）。
+                self._follow_dialogs_topmost(want)
+            if not want:
                 # 关掉：一次属性翻转就够，不反复对同一个窗口调 SetWindowPos。
                 if getattr(self, "_topmost_on", True):
                     self.root.attributes("-topmost", False)
@@ -1359,6 +1365,9 @@ class LiveGlass:
         设置卡也跟着这个值（2026-11-27 格问的「设置页不受保持置顶控制吗」）：它是主窗的
         owned window（`transient`），不置顶时仍排在主窗上面，但别的应用能盖住它。
         设置卡开着时再 lift 一次卡 —— 开置顶那一瞬主窗可能先跳到卡上面。
+
+        **已经开着的其它弹窗**也要一起翻面（`_follow_dialogs_topmost`）：它们各自的
+        topmost 位只在创建时定过一次，不补这一下，关掉置顶后那张确认框还压在别的应用上面。
         """
         try:
             self.root.attributes("-topmost", bool(on))
@@ -1372,6 +1381,7 @@ class LiveGlass:
                     sw.lift()
                 except Exception:
                     pass
+            self._follow_dialogs_topmost(bool(on))
         except Exception as exc:
             print("apply topmost failed:", repr(exc), flush=True)
 
@@ -9430,7 +9440,17 @@ class LiveGlass:
             p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, p)
+            # 2026-11-27：`os.replace` 在 Windows 上撞见「目标正被读 / 被扫」会抛
+            # PermissionError —— 宿主的 1.5 秒轮询、杀毒扫描、重启时两个窗进程都碰到过
+            # （`see-now-window.log` 里实测漏过一次写）。重试两次就够，别把 UI 线程拖长。
+            for i in range(3):
+                try:
+                    os.replace(tmp, p)
+                    break
+                except PermissionError:
+                    if i == 2:
+                        raise
+                    time.sleep(0.03)
         except Exception as exc:
             print("settings write failed:", repr(exc), flush=True)
 
@@ -9439,6 +9459,23 @@ class LiveGlass:
         key, _label, options, _names, default = row[:5]
         cur = data.get(key, default)
         return cur if cur in options else default
+
+    def _settings_offset_saved(self):
+        """上次拖到的卡片位置，记的是**相对悬浮窗左上角的偏移**（跨打开记着；坏值当没记过）。
+
+        2026-11-27 格定的口径：要保留的是**设置页相对悬浮窗**的位置，不是屏幕上的绝对坐标 ——
+        悬浮窗挪到别的显示器，卡片跟着保持同一个相对位置，而不是留在原地。
+
+        只认两个整数、不做范围判断 —— 范围交给 `_settings_paint`：它拿到**当次**的
+        卡片尺寸后再夹一遍，那时才知道高度（展开声音 / 朗读范围会变高），多显示器也才准。
+        """
+        v = self._settings_read().get("settingsCardOffset")
+        if isinstance(v, (list, tuple)) and len(v) == 2:
+            try:
+                return (int(v[0]), int(v[1]))
+            except Exception:
+                return None
+        return None
 
     def _settings_clamp_pos(self, x, y, cw: int, ch: int) -> tuple:
         """把卡片左上角夹进虚拟桌面（多显示器取总范围）。
@@ -9463,9 +9500,11 @@ class LiveGlass:
         c.pack()
         # `pos`：拖动后的卡片左上角。**必须跨重画记着** —— 改选项 / 展开菜单都会重画，
         # 以前每画一次就按主窗位置重算，用户拖走了也照样弹回去（2026-11-27 格报的）。
-        # 只活在这一次打开里：关掉再开会回到默认位置（跟着主窗）。
+        # 2026-11-27 再补一步：**跨打开**也记着 —— 存的是 `settingsCardOffset`（相对悬浮窗
+        # 左上角的偏移，不是屏幕绝对坐标：窗挪了卡跟着走），松手时写、这里读回来。
         self._settings = {"win": win, "canvas": c, "cw": 0, "ch": 0, "head": 68,
-                          "pos": None, "rows": [], "hits": [], "mode": None, "drag": None}
+                          "pos": None, "off": self._settings_offset_saved(),
+                          "rows": [], "hits": [], "mode": None, "drag": None}
         # **只绑 canvas**：canvas 与 Toplevel 同绑 <Button-1> 会一次点击跑两遍，
         # 一格跳两档（2026-11-19 实报）。拖动另绑 Motion。
         c.bind("<Button-1>", self._settings_click)
@@ -9568,9 +9607,14 @@ class LiveGlass:
                   flush=True)
         # 位置：拖过就用拖到的位置，**重画不能再算回默认位置**。没拖过才用默认
         # （主窗中间偏上）；两种都夹进虚拟桌面，高度变了也不会把卡底顶到屏幕外。
+        # `off` 是**相对悬浮窗**的偏移（跨打开记着的那个）：按主窗当前位置还原，
+        # 于是窗挪到别的显示器时，卡跟着保持同一个相对位置。
         pos = st.get("pos")
+        off = st.get("off")
         if pos:
             x, y = self._settings_clamp_pos(pos[0], pos[1], cw, ch)
+        elif off:
+            x, y = self._settings_clamp_pos(self._x + off[0], self._y + off[1], cw, ch)
         else:
             x, y = self._settings_clamp_pos(
                 self._x + (self._geo.width - cw) // 2, self._y + 80, cw, ch)
@@ -10047,10 +10091,11 @@ class LiveGlass:
             pass
 
     def _settings_drag_end(self, _e=None) -> None:
-        """松手：把卡片夹回虚拟桌面。
+        """松手：把卡片夹回虚拟桌面，并记住这个位置。
 
-        位置现在会被记住（`st["pos"]`），拖出屏幕就再也点不到了 —— 以前靠「改选项
-        就回默认位置」兜住，现在不能指望那条，所以松手时夹一次。
+        位置会被记住（`st["pos"]` → `see-now.json` 的 `settingsCardOffset`，**相对悬浮窗**），
+        拖出屏幕就再也点不到了 —— 以前靠「改选项就回默认位置」兜住，现在不能指望那条，
+        所以松手时夹一次。**夹和不夹都要写盘**：拖回原处（坐标没变）也是一次"我就想放这儿"。
         """
         st = self._settings
         if not st:
@@ -10067,6 +10112,8 @@ class LiveGlass:
                 st["pos"] = (x, y)
             except Exception:
                 pass
+        # 存相对偏移而不是屏幕坐标：窗挪了（换显示器 / 拖到别处），卡跟着保持同一个相对位置
+        self._settings_write("settingsCardOffset", [int(x - self._x), int(y - self._y)])
 
     def _settings_check_dim(self, dim: bool) -> None:
         st = getattr(self, "_settings", None)
@@ -10546,6 +10593,38 @@ class LiveGlass:
                 pass
         return False
 
+    @staticmethod
+    def _win_alive(win) -> bool:
+        """Tk 窗口还活着吗？注册表修剪和开关翻面都用它（销毁后调方法会抛 TclError）。"""
+        try:
+            return bool(win.winfo_exists())
+        except Exception:
+            return False
+
+    def _follow_dialogs_topmost(self, on: bool) -> None:
+        """开关翻面时，把**已经开着**的弹窗一起改档（2026-11-27 漏的那角）。
+
+        弹窗的 topmost 位原本只在创建那一刻按配置定一次，于是「先开确认框、再去设置页
+        关掉保持置顶」之后，那张确认框还留在 topmost 带里 —— 而且再没有代码会去撤它
+        （`_pin_topmost` 关着时只是不再排下一拍，不会主动 `-topmost False`）。
+
+        - 关：立刻退出 topmost 带；在跑的那条 pin 链下一拍看到配置关了会自己停；
+        - 开：进 topmost 带 + 补一条 pin 链（`win._see_now_pin` 防叠出第二条）。
+        设置卡不在这里改档 —— 它由 `_apply_topmost` 单独管（还多一次 lift，要保持在
+        自己主窗上面）。`self._dlgs` 是 `_dialogs_topmost` 登记的活弹窗表。
+        """
+        card = (getattr(self, "_settings", None) or {}).get("win")
+        for win in list(getattr(self, "_dlgs", None) or []):
+            if win is card or not self._win_alive(win):
+                continue
+            try:
+                win.attributes("-topmost", bool(on))
+            except Exception:
+                pass
+            if on and not getattr(win, "_see_now_pin", False):
+                self._pin_topmost(win)
+        self._dlgs = [w for w in (getattr(self, "_dlgs", None) or []) if self._win_alive(w)]
+
     def _dialogs_topmost(self, win) -> None:
         """给弹窗定级：**跟随「保持置顶」** + 永远排在自己的主窗上面。
 
@@ -10558,7 +10637,17 @@ class LiveGlass:
         **不用 Tk 的 `transient`**：它只给「Tk 自己管理」的窗设 owner，`overrideredirect`
         的窗是空操作（2026-11-27 实测 `GetWindow(GW_OWNER)=0`），还会让窗口在 master
         没映射时迟迟不 map。所以直接在窗口映射后补 Win32 owner（`_own_dialog`）。
+
+        同时把窗口登记进 `self._dlgs`：开关可能在**弹窗开着的时候**被翻面，
+        那张弹窗得跟着改档（`_follow_dialogs_topmost`），不登记就没有第二个入口能找到它。
         """
+        try:
+            live = [w for w in (getattr(self, "_dlgs", None) or []) if self._win_alive(w)]
+            if win not in live:
+                live.append(win)
+            self._dlgs = live
+        except Exception:
+            pass
         try:
             win.attributes("-topmost", keep_on_top_enabled(self._settings_cached()))
         except Exception:
@@ -10619,6 +10708,10 @@ class LiveGlass:
         """弹窗存续期间每 400ms 顶一次（焦点/系统事件都可能把它压到主窗下面）。
 
         关着置顶时不排下一拍：没有要跟主窗看门狗赛跑的 topmost 带，owner 关系已经够。
+
+        `win._see_now_pin` 是**这条链是否已经在跑**的标记 —— 链自己 `after` 自己，
+        外面看不见它在不在。没有这个标记，开关翻面时给已开弹窗补一次就叠出第二条
+        400ms 链，两条链各自再续，越点越多（`_follow_dialogs_topmost` 靠它去重）。
         """
         try:
             if not win.winfo_exists():
@@ -10626,7 +10719,15 @@ class LiveGlass:
         except Exception:
             return
         if not keep_on_top_enabled(self._settings_cached()):
+            try:
+                win._see_now_pin = False
+            except Exception:
+                pass
             return
+        try:
+            win._see_now_pin = True
+        except Exception:
+            pass
         self._force_topmost(win)
         try:
             win.after(400, lambda: self._pin_topmost(win))

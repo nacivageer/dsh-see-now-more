@@ -62,11 +62,15 @@ class FakeSettingsWin:
         pass
 
 
-def paint(tmp, cfg_value):
-    """按给定 keepOnTop 值画一遍卡，返回 (root, canvas, settings, 卡片几何)。"""
+def paint(tmp, cfg_value, extra=None, main_xy=(300, 200)):
+    """按给定 keepOnTop 值画一遍卡，返回 (root, canvas, settings, 卡片几何)。
+
+    `main_xy` 是假主窗左上角：验「跨打开记的是**相对**位置」时把它挪开再看卡落在哪。
+    """
     (tmp / 'see-now').mkdir(parents=True, exist_ok=True)
-    (tmp / 'see-now.json').write_text(
-        json.dumps({} if cfg_value is None else {'keepOnTop': cfg_value}), encoding='utf-8')
+    cfg = {} if cfg_value is None else {'keepOnTop': cfg_value}
+    cfg.update(extra or {})
+    (tmp / 'see-now.json').write_text(json.dumps(cfg), encoding='utf-8')
     os.environ['DSH_VIDEO_CACHE_DIR'] = str(tmp / 'see-now')
 
     sys.path.insert(0, str(ROOT / 'examples' / 'floating-chat'))
@@ -83,14 +87,16 @@ def paint(tmp, cfg_value):
     w = object.__new__(LiveGlass)
     w._settings_path = lambda: tmp / 'see-now.json'
     w._vx, w._vy, w._vw, w._vh = 0, 0, 3840, 2160
-    w._x, w._y = 300, 200
+    w._x, w._y = main_xy
     w._geo = SimpleNamespace(width=MIN_WIN_W, height=935)
     w.fonts = Fonts(root)
     w.canvas = FakeMainCanvas()
     w._voice_menu = False
     w._scope_menu = False
+    # `off` 和 `_open_settings` 一样先读存下来的偏移（这里不建真弹窗，就照它的写法摆）
     w._settings = {'win': fake_win, 'canvas': c, 'cw': 0, 'ch': 0, 'head': 68,
-                   'pos': None, 'rows': [], 'hits': [], 'mode': None, 'drag': None}
+                   'pos': None, 'off': LiveGlass._settings_offset_saved(w),
+                   'rows': [], 'hits': [], 'mode': None, 'drag': None}
 
     LiveGlass._settings_paint(w)
     return root, c, w, w._settings, fake_win.calls
@@ -175,6 +181,106 @@ def test_drag_and_repaint(tmp):
         root.destroy()
 
 
+def test_saved_offset(tmp):
+    """拖过的位置要**跨打开**记着，且记的是**相对悬浮窗**的偏移（2026-11-27 格定的口径）。
+
+    上半截修的是「改选项弹回默认」，下半截是「关掉再开又回默认」：偏移写在
+    `see-now.json` 的 `settingsCardOffset`，松手时落盘、打开时按主窗当前位置还原。
+    要坏得出来的四种：
+    - 只写不读：打开还是默认位置（B 组反着验：读回坏值要回默认）；
+    - 读回用的是**屏幕绝对坐标**：主窗一挪，卡就留在原地（C 组把主窗挪开再看）；
+    - 读回不夹：上次在 4K 上拖到右边，换到 1080p 就整张卡在屏幕外，点不到（D 组）；
+    - 写盘丢：`os.replace` 撞锁时静默失败（另见 `test_write_retry`）。
+    """
+    # A. 记过偏移：打开就摆在「主窗 + 偏移」那儿
+    root, _c, _w, st, calls = paint(tmp, None, extra={'settingsCardOffset': [600, 200]})
+    try:
+        assert st['off'] == (600, 200), st['off']
+        assert parse_xy(calls[-1]) == (900, 400), (calls[-1], 'main=(300,200)+off')
+    finally:
+        root.destroy()
+
+    # B. 坏值当没记过：回到默认位置（跟着主窗）
+    root, _c, _w, st, calls = paint(tmp, None, extra={'settingsCardOffset': 'oops'})
+    try:
+        assert st['off'] is None, st['off']
+        assert parse_xy(calls[-1]) == st['pos'], (calls[-1], st['pos'])
+    finally:
+        root.destroy()
+
+    # C. 主窗挪到 (1000, 300)：同一个偏移 → 卡跟着走，**不是**留在 (900, 400)
+    root, _c, _w, st, calls = paint(tmp, None, extra={'settingsCardOffset': [600, 200]},
+                                    main_xy=(1000, 300))
+    try:
+        assert parse_xy(calls[-1]) == (1600, 500), (
+            '存的是相对偏移，主窗挪了卡要跟着走（现在落在 %r）' % (parse_xy(calls[-1]),))
+    finally:
+        root.destroy()
+
+    # D. 松手写盘：写的是相对偏移（夹过的），不是屏幕坐标
+    root, _c, w, st, _calls = paint(tmp, None)
+    try:
+        st['drag'] = (0, 0)
+        w.__class__._settings_drag(w, SimpleNamespace(x_root=700, y_root=500))
+        w.__class__._settings_drag_end(w)
+        data = json.loads((tmp / 'see-now.json').read_text(encoding='utf-8'))
+        assert data.get('settingsCardOffset') == [400, 300], (
+            'want [700-300, 500-200]; got %r' % (data.get('settingsCardOffset'),))
+        assert 'settingsCardPos' not in data, '旧键名还在写（绝对坐标口径）: %r' % (data,)
+    finally:
+        root.destroy()
+
+    # E. 拖出屏幕松手：写进去的是**夹过**的偏移
+    root, _c, w, st, _calls = paint(tmp, None)
+    try:
+        st['drag'] = (0, 0)
+        w.__class__._settings_drag(w, SimpleNamespace(x_root=5000, y_root=5000))
+        w.__class__._settings_drag_end(w)
+        dx, dy = json.loads((tmp / 'see-now.json').read_text(encoding='utf-8'))['settingsCardOffset']
+        x, y = 300 + dx, 200 + dy
+        assert x + st['cw'] <= 3840 - 4, (x, st['cw'])
+        assert y + st['ch'] <= 2160 - 4, (y, st['ch'])
+    finally:
+        root.destroy()
+
+    # F. 源码守卫：`_open_settings` 真要把它交给卡片，只写不读等于白记
+    src = (ROOT / 'examples' / 'floating-chat' / 'window.py').read_text(encoding='utf-8')
+    assert '_settings_offset_saved()' in src, (
+        '_open_settings 没读回 settingsCardOffset（只写不读 = 打开还是默认位置）')
+
+
+def test_write_retry(tmp):
+    """写盘撞上「文件正被读」要重试，别把设置悄悄丢掉 —— 2026-11-27 日志里漏过一次。
+
+    `os.replace` 在 Windows 上遇到目标被占用会抛 PermissionError（宿主 1.5 秒轮询、
+    杀毒扫描、重启时两个窗进程）。设置页每一项都走同一条写路径，丢一次就是「点了没记住」。
+    """
+    import window as winmod
+
+    root, _c, w, _st, _calls = paint(tmp, None)
+    # paint 会把配置重写成空对象：要合并的旧键得在它之后写
+    (tmp / 'see-now.json').write_text('{"a": 1}', encoding='utf-8')
+    state = {'n': 0}
+    real = winmod.os.replace
+
+    def flaky(src, dst):
+        state['n'] += 1
+        if state['n'] < 3:
+            raise PermissionError(13, 'access denied')
+        return real(src, dst)
+
+    winmod.os.replace = flaky
+    try:
+        w.__class__._settings_write(w, 'x', 1)
+        data = json.loads((tmp / 'see-now.json').read_text(encoding='utf-8'))
+        assert data.get('x') == 1, data
+        assert data.get('a') == 1, '读改写把别的键抹掉了: %r' % (data,)
+        assert state['n'] == 3, '没有重试（os.replace 只试了 %d 次）' % state['n']
+    finally:
+        winmod.os.replace = real
+        root.destroy()
+
+
 def test_dialog_owner(tmp):
     """弹窗的 Win32 owner 必须真的设到主窗上 —— 统一「弹窗跟随保持置顶」的前提。
 
@@ -253,6 +359,8 @@ def main():
             check_state(tmp, 'keepOnTop=true', True)
             check_state(tmp, 'keepOnTop=false', False)
             test_drag_and_repaint(tmp)
+            test_saved_offset(tmp)
+            test_write_retry(tmp)
             test_dialog_owner(tmp)
     except Exception as exc:  # noqa: BLE001
         if 'Tcl' in repr(exc) or 'display' in repr(exc):

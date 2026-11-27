@@ -48,8 +48,10 @@
 
 ## 已知边界
 
-- **只对新开的弹窗生效**：已经开着的弹窗不会因为你在设置卡里切开关而立刻改档（设置卡自己例外，
-  `_apply_topmost` 里单独同步它）。实际路径里设置卡是唯一切换入口，其他弹窗同时开着的概率很低。
+- ~~**只对新开的弹窗生效**~~（2026-11-27 晚已补）：已经开着的弹窗现在会跟着翻面 ——
+  弹窗在 `_dialogs_topmost` 里登记进 `self._dlgs`，翻面时 `_follow_dialogs_topmost()`
+  一起改档（关 → 退出 topmost 带；开 → 进带 + 补一条 pin 链，`_see_now_pin` 防叠第二条）。
+  验收：`check-topmost-toggle.py` 的 `test_open_dialogs_follow`。
 - owner 关系只在 Windows 上验过；`overrideredirect` 窗被系统最小化/隐藏时 owner 的行为没验
   （这扇窗没有系统标题栏，正常路径不会最小化）。
 - 独占全屏下仍然盖不上（和主窗同一条边界）。

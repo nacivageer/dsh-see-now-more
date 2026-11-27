@@ -14,6 +14,8 @@
      源码里也不许再出现第二处硬写的 `self.root.attributes("-topmost", True)`；
   7. 设置卡（主窗的 owned window）跟着开关走：关掉时它也退出 topmost 带，但会被 lift
      在自己主窗上面（点主窗不能把卡压住）。
+  8. **已经开着**的弹窗跟着翻面（2026-11-27 补的漏）：关掉时当场退出 topmost 带，
+     打开时补一条 pin 链 —— 而且只能有一条（重复翻面不许叠出第二条 400ms 链）。
 
 不碰 Tk、不碰鼠标，也不读写 `~/.dsh`：配置落在临时目录。
 
@@ -68,6 +70,36 @@ def make_window(path):
     w._dialog_alive = lambda: False
     w._hwnd_root = lambda: 0
     return w
+
+
+class FakeDialog:
+    """假弹窗：只记 Tk 调用。`winfo_id()` 给 0，`_force_topmost` 就跳过真 Win32。"""
+
+    def __init__(self):
+        self.attrs = []
+        self.afters = []
+        self.lifts = 0
+        self.alive = True
+
+    def attributes(self, *a):
+        self.attrs.append(a)
+
+    def after(self, ms, fn):
+        self.afters.append((ms, fn))
+
+    def lift(self):
+        self.lifts += 1
+
+    def winfo_exists(self):
+        return self.alive
+
+    def winfo_id(self):
+        return 0
+
+
+def pin_chains(dlg):
+    """这个弹窗身上有几条 400ms 的 pin 链（叠了就会一条变两条、再变四条）。"""
+    return [a for a in dlg.afters if a[0] == 400]
 
 
 def read_cfg(path):
@@ -233,6 +265,49 @@ def test_click(tmp):
     assert len(rebuilt) == 2, rebuilt
 
 
+def test_open_dialogs_follow(tmp):
+    """已经开着的弹窗也要跟着翻面 —— 2026-11-27 交接文里的「已知边界」。
+
+    以前弹窗的 topmost 位只在创建那一刻定一次：先开确认框、再去设置页关掉置顶，
+    那张确认框会留在 topmost 带里，而且再没有代码去撤它（`_pin_topmost` 关着时
+    只是不再排下一拍）。补的时候有两个坑：重复翻面不许叠第二条链、窗口销毁后
+    不许再碰（TclError 会把整条看门狗带下去）。
+    """
+    cfg = Path(tmp) / "see-now.json"
+    write_cfg(cfg, {})
+    w = make_window(cfg)
+    dlg = FakeDialog()
+    w._dialogs_topmost(dlg)                     # 创建即登记 + 按当前配置定档
+    assert dlg.attrs[-1] == ("-topmost", True), dlg.attrs
+
+    # 关掉：开着的弹窗当场退出 topmost 带
+    w._apply_topmost(False)
+    assert dlg.attrs[-1] == ("-topmost", False), dlg.attrs
+
+    # 打开：回到带上，并且只补一条链
+    w._apply_topmost(True)
+    assert dlg.attrs[-1] == ("-topmost", True), dlg.attrs
+    assert len(pin_chains(dlg)) == 1, pin_chains(dlg)
+    w._apply_topmost(True)
+    w._apply_topmost(True)
+    assert len(pin_chains(dlg)) == 1, "重复翻面叠出了第二条 400ms 链: %r" % (pin_chains(dlg),)
+
+    # 手改配置（不走设置页）：看门狗翻面时也要跟上
+    write_cfg(cfg, {KEY: False})
+    w._keep_on_top()
+    assert dlg.attrs[-1] == ("-topmost", False), dlg.attrs
+    # 关着的时候不补链
+    n = len(pin_chains(dlg))
+    w._follow_dialogs_topmost(False)
+    assert len(pin_chains(dlg)) == n, "关着置顶时还在补链: %r" % (pin_chains(dlg),)
+
+    # 窗口销毁：登记表要自己收干净，不能对死窗口调 Tk
+    dlg.alive = False
+    write_cfg(cfg, {KEY: True})
+    w._keep_on_top()
+    assert w._dlgs == [], "销毁的弹窗还留在登记表里: %r" % (w._dlgs,)
+
+
 def test_source_guard():
     """源码守卫：主窗只允许看门狗那一处硬写 topmost=True。
 
@@ -252,6 +327,13 @@ def test_source_guard():
         "有弹窗硬写 topmost=True；改走 _dialogs_topmost(win)，否则关掉置顶后它还压着所有应用")
     assert src.count("_dialogs_topmost(") >= 9, (
         "_dialogs_topmost 的调用点少了：现在窗口 + 8 个弹窗都应该走它")
+    # 开关翻面要能改**已经开着**的弹窗：设置页那条路（_apply_topmost）和手改配置
+    # 后的看门狗（_keep_on_top）都得调它。只留一条 = 换个入口翻面就漏一半。
+    assert src.count("_follow_dialogs_topmost(") >= 3, (
+        "_follow_dialogs_topmost 只在定义处出现：_apply_topmost / _keep_on_top 都要调，"
+        "否则「弹窗开着时切开关」还是旧的半套")
+    assert "_see_now_pin" in src, (
+        "pin 链没有去重标记：补链会叠出第二条 400ms 链（_pin_topmost 自己 after 自己）")
 
 
 def main():
@@ -261,6 +343,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="seenow-topmost-") as tmp:
         test_watchdog(tmp)
         test_card_follows_toggle(tmp)
+        test_open_dialogs_follow(tmp)
         test_raise_window(tmp)
         test_click(tmp)
     print("check-topmost-toggle: all passed")
