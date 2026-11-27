@@ -7,7 +7,10 @@
       「变更选项的时候不再弹回原位」）
 对象：设置卡能拖，但**每改一个选项（= 重画）就跳回默认位置** —— 位置只在拖动后维持到下一次重画。
 归属：session-e3da6a5f-3cb4-4dd5-861d-5964a647dbb9 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：无（`.44` 已发；**跨打开记住**是 `.45` 的追加，见本节末尾）
+下一步：无（`.44` 已发；**跨打开记住**是 `.45` 的追加，见本节末尾 —— 格 2026-11-27 21:46
+      亲测验收，原话「我自己实测验证过了，但截图给你看又看不出效果」；机器侧旁证：
+      真机 `~/.dsh/see-now.json` 落成 `settingsCardOffset = [569, 59]`，mtime 21:43:39，
+      晚于最后一次窗进程重启 21:43:03 = 新代码写的）
 证据：
   - 根因：`_settings_paint` 每次重画都按主窗位置重算 x/y（旧 `examples/floating-chat/window.py`
     的 `min(self._x + (self._geo.width - cw) // 2, …)` / `min(self._y + 80, …)`），拖动只改

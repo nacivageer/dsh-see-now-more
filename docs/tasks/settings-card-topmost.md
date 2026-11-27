@@ -9,7 +9,9 @@
       右键菜单）原来一律无条件 `attributes("-topmost", True)`，所以「保持置顶」关掉后弹窗
       仍压在所有应用上面。现在统一走 `_dialogs_topmost(win)`：跟随开关 + 设 Win32 owner。
 归属：session-e3da6a5f-3cb4-4dd5-861d-5964a647dbb9 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：无（真机已验证）。
+下一步：无（真机已验证）。**2026-11-27 21:46 补**：已开弹窗跟随开关翻面这条（`.44` 的已知边界）
+已修并验收，见下文「已知边界」与 `docs/决策记录.md`「保持置顶」节；格 21:46 原话「我自己实测
+验证过了，但截图给你看又看不出效果」——这条本来就没有视觉证据，判据是 `WS_EX_TOPMOST` 位。
 证据：
   - 统一入口：`examples/floating-chat/window.py:10549` `_dialogs_topmost(win)`；8 个弹窗全部
     改走它（`_open_settings` / 回顾窗 / 图查看器 / 清理 / 删除 / 重命名 / 关窗确认 / `_menu_popup`）
