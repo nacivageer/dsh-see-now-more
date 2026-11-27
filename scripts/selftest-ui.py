@@ -7,6 +7,10 @@
 读一次几十毫秒，不占鼠标。真正需要光标的（hover / 拖拽 / 端到端穿透 / IME）在
 末尾列出来，不需要谁记着。
 
+**WDA 只作信息，不判 PASS/FAIL**（2026-11-27）：收起态常开 `WDA_EXCLUDEFROMCAPTURE`，
+窗在截图 / 录屏里整窗消失；默认配置下展开态也会被排除。一跑就 WARN 只是噪音 ——
+但它是「截图里为什么没有这扇窗」的第一个答案，所以打在头行；`wda=excluded` 时多一行说明。
+
 顶置位的期望值跟着 `~/.dsh/see-now.json` 的 `keepOnTop` 走：开着（默认）窗口必须在
 topmost 带里，关着就不能在（设置页「保持置顶」）。关着时被别的窗口压住是正常的，
 所以「遮挡」那条从 WARN 降成 PASS、命中测试降成 WARN。
@@ -42,6 +46,8 @@ WS_EX_TOPMOST = 0x00000008
 WS_EX_TRANSPARENT = 0x00000020
 GA_ROOT = 2
 GW_OWNER = 4
+WDA_MONITOR = 0x1
+WDA_EXCLUDEFROMCAPTURE = 0x11
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
 SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
@@ -180,6 +186,26 @@ def owner_of(hwnd):
     按面积也分不出来，设置卡能比主窗还高（实测 560x1374 vs 590x935）。
     """
     return int(u32.GetWindow(ctypes.c_void_p(int(hwnd)), GW_OWNER) or 0)
+
+
+def wda_of(hwnd):
+    """显示亲和性：0 = 没有，1 = WDA_MONITOR，0x11 = WDA_EXCLUDEFROMCAPTURE。
+
+    读不到返回 -1（老系统 / 权限）。**这一项只作信息**：默认配置下窗就是 excluded，
+    判成 WARN 每跑一次都响一次，没人会看。它的用处是回答「截图里为什么没有这扇窗」。
+    """
+    v = wintypes.DWORD(0)
+    fn = u32.GetWindowDisplayAffinity
+    fn.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+    fn.restype = wintypes.BOOL
+    if not fn(hwnd, ctypes.byref(v)):
+        return -1
+    return int(v.value)
+
+
+def wda_name(v):
+    return {0: 'none', WDA_MONITOR: 'monitor',
+            WDA_EXCLUDEFROMCAPTURE: 'excluded'}.get(v, '0x%X' % v if v >= 0 else 'unknown')
 
 
 def describe(hwnd):
@@ -457,9 +483,13 @@ def run(argv):
 
     # 输出
     p('see-now-more ui selftest')
-    p('target hwnd=0x%X pid=%d class=%s title=%r rect=%dx%d at (%d,%d) dpi=%d'
+    wda = wda_of(hwnd)
+    p('target hwnd=0x%X pid=%d class=%s title=%r rect=%dx%d at (%d,%d) dpi=%d wda=%s'
       % (target['hwnd'], target_pid, target['cls'], target['title'], w, h, x, y,
-         u32.GetDpiForWindow(hwnd)))
+         u32.GetDpiForWindow(hwnd), wda_name(wda)))
+    if wda == WDA_EXCLUDEFROMCAPTURE:
+        p('note: wda=excluded - screenshots / recording will not show this window')
+        p('      (collapsed state always sets it; expanded follows capturable in watch-window.json)')
     if len(cands) > 1:
         p('note: %d tk windows in python processes, picked the one with no owner '
           '(the main window); --hwnd to pick another' % len(cands))
