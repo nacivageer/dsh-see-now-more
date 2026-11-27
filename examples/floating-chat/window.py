@@ -3952,21 +3952,14 @@ class LiveGlass:
         cur = getattr(self, "_bound_full", "")
         hid = self._hidden_keys()
         stats: dict[str, dict] = {}
-        try:
-            lines = CHAT_FILE.read_text(encoding="utf-8").splitlines()[-4000:]
-        except Exception:
-            lines = []
-        for line in lines:
-            try:
-                e = json.loads(line)
-            except Exception:
-                continue
+        # 解析走 `_chat_entries()` 的缓存：滚一格重画一次，不能每次重读 1.7 MB
+        for e in self._chat_entries():
             if e.get("role") == "meta":
                 continue
             sid = str(e.get("sid") or "")
             if sid == cur:
                 continue
-            if msg_key(sid, e.get("at")) in hid:      # 隐藏的不计数（2026-11-06）
+            if hid and msg_key(sid, e.get("at")) in hid:   # 隐藏的不计数（2026-11-06）
                 continue
             g = stats.setdefault(sid, {"sid": sid, "count": 0, "lastAt": 0})
             g["count"] += 1
@@ -6330,18 +6323,46 @@ class LiveGlass:
         st["close"] = (w - 58, 22, w - 22, 58)
         c.create_line(28, 76, w - 28, 76, fill="#ffffff", width=1, tags=("hhead",))
 
-    def _chat_sessions(self) -> dict:
-        """{sid: {sid, firstAt, lastAt}} —— 从 chat.jsonl 现算（最多 4000 行）。"""
+    def _chat_entries(self) -> list[dict]:
+        """`chat.jsonl` 最近 4000 行的解析结果，按 (mtime_ns, size) 缓存。
+
+        为什么要有它（2026-11-27 实测）：回顾列表每滚一格都会重画整页，而画之前要同时问
+        `_history_sessions()`（列有哪些会话）和 `_chat_sessions()`（谁最新）—— 两个函数各自
+        把 1.7 MB / 2236 行整份 `json.loads` 一遍，**各 47 ms**，一滚就是近百毫秒，
+        手感就是「卡手」。文件没变（mtime + size 都没动）就没必要重新解析。
+        """
         try:
-            lines = CHAT_FILE.read_text(encoding="utf-8").splitlines()[-4000:]
+            st = CHAT_FILE.stat()
+            sig = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return []
+        if sig == getattr(self, "_chat_sig", None):
+            return self._chat_cache
+        entries = []
+        try:
+            for line in CHAT_FILE.read_text(encoding="utf-8").splitlines()[-4000:]:
+                try:
+                    e = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(e, dict):
+                    entries.append(e)
         except Exception:
-            return {}
+            entries = []
+        self._chat_sig, self._chat_cache = sig, entries
+        return entries
+
+    def _chat_sessions(self) -> dict:
+        """{sid: {sid, firstAt, lastAt}} —— 从 chat.jsonl 现算（最多 4000 行）。
+
+        和 `_chat_entries()` 同一个签名缓存：滚一格重画一次，不能每次再扫 2240 行
+        （`_latest_other_session` 每画一次就要问它一遍）。
+        """
+        sig = getattr(self, "_chat_sig", None)
+        if sig is not None and sig == getattr(self, "_chat_sess_sig", None):
+            return self._chat_sess_cache
         out = {}
-        for line in lines:
-            try:
-                e = json.loads(line)
-            except Exception:
-                continue
+        for e in self._chat_entries():
             if e.get("role") == "meta":
                 continue
             sid = str(e.get("sid") or "")
@@ -6357,6 +6378,8 @@ class LiveGlass:
             else:
                 g["firstAt"] = min(g["firstAt"], at)
                 g["lastAt"] = max(g["lastAt"], at)
+        self._chat_sess_sig = getattr(self, "_chat_sig", None)
+        self._chat_sess_cache = out
         return out
 
     def _latest_other_session(self) -> dict | None:
@@ -7865,12 +7888,43 @@ class LiveGlass:
         self._hist_redraw()
 
     def _hist_wheel(self, e) -> None:
+        """滚轮：按 `e.delta` 的**大小**走，不是只看方向（2026-11-27 改）。
+
+        以前一格固定 70px、只看符号 —— 精密触控板一次只发 15/30 这种小 delta，也被当成
+        一整格，滚起来要么冲过头、要么一顿一顿。现在按 120 = 一格换算成浮点，余量积在
+        `wheel_acc` 里，攒够 1px 再走；普通滚轮（±120 的整数倍）行为和以前一样。
+        """
         st = self._hist
         if not st or st["max"] <= 0:
             return
-        step = 70 if e.delta > 0 else -70
-        st["scroll"] = max(0, min(st["max"], st["scroll"] - step))
-        self._hist_redraw()
+        acc = float(st.get("wheel_acc") or 0.0) - float(e.delta) / 120.0 * 70.0
+        whole = int(acc)                     # 向零取整：上下滚的余量各记各的
+        st["wheel_acc"] = acc - whole
+        if not whole:
+            return
+        before = st["scroll"]
+        st["scroll"] = max(0, min(st["max"], before + whole))
+        # 已经顶到头时把余量丢掉，否则往回滚要先把"撞墙"那几格走完才动
+        if st["scroll"] == before:
+            st["wheel_acc"] = 0.0
+        # 快速滚动时 Windows 一帧能塞好几个事件：合并成一次重画（12ms 内只画最后一格），
+        # 免得重画排队、越滚越落后。偏移已经逐个累加，画面停在最终位置。
+        if st.get("wheel_pending"):
+            return
+        st["wheel_pending"] = True
+
+        def flush() -> None:
+            cur = self._hist
+            if not cur:
+                return
+            cur["wheel_pending"] = False
+            self._hist_redraw()
+
+        try:
+            st["canvas"].after(12, flush)
+        except Exception:
+            st["wheel_pending"] = False
+            self._hist_redraw()
 
     @staticmethod
     def _clock(ms) -> str:
