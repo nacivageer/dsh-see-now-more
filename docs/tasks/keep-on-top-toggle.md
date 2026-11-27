@@ -4,18 +4,14 @@
 
 # 设置页「保持置顶」开关（`keepOnTop`）
 
-状态：**已验收、已提交（未发版）**（实现 / 离线 / 真机三档都过了，格也自己点过并说「实测生效了」；
-      20:41 格明示「先别发版」→ 只提交，未 tag、未 push、未 Release、未 install-dev；
-      `.44` 的版本号 + CHANGELOG 段**不在提交里**，草稿见文末「发版草稿」）
+状态：**已发版**（`v0.1.1-more.44` → `5bc83f8`；Release 标 prerelease；`install-dev` 副本已对齐）
 对象：① 【本插件设置】加「保持置顶」（开 / 关，**默认开**），关掉后主窗是普通窗口、别的窗口能压上来；
       ② 所有「把主窗叫到前面」的入口收成 `_raise_window()`，关着时不再焊回最前；
       ③ `selftest-ui.py` 的顶置位跟着配置走；④ 顺手修设置卡最窄宽度下两行被截断 + 加离屏守卫
 归属：session-e3da6a5f-3cb4-4dd5-861d-5964a647dbb9 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：等格开口发版：把文末草稿贴进 CHANGELOG 开头、`package.json` / `dsh.plugin.json` 改 `.44`
-      → 提交 `release: 0.1.1-more.44 …` → `tag v0.1.1-more.44` → 推 → Release（prerelease）
-      → `node scripts/install-dev.mjs` 让 profile 副本同步。**不用重启 DSH**（这次没改宿主侧 JS）。
-      `.44` 还应收同一天的两处设置卡修复：「拖动后不再弹回原位」与「卡片也跟随保持置顶」——
-      见 `settings-card-drag.md` / `settings-card-topmost.md` 的草稿。证据（全部本轮工具输出里抄的）：
+下一步：无（已随 `.44` 发版；CHANGELOG 里是本版正文）。同一天的设置卡两处修复合并进了同一版：
+      `settings-card-drag.md` / `settings-card-topmost.md`。
+证据（全部本轮工具输出里抄的）：
   - 判据：`examples/floating-chat/window.py:401` `keep_on_top_enabled()`（默认开、只认真正的布尔）
   - 启动：`:958` `self._topmost_on = keep_on_top_enabled(self._settings_read())`
   - 看门狗：`:1290` `_keep_on_top()`（关着时只撤一次 `-topmost`，不反复 SetWindowPos）
@@ -74,11 +70,11 @@
   点一下写盘并当场生效 / 重新显示关着时只 lift / 源码守卫。**不起 Tk**。
 - `scripts/check-settings-card.py`：withdrawn 的 Tk 根离屏画整张设置卡，量 bbox 判越界；
   没有 Tk / 桌面时 exit 2（`node` 包装测试会 skip）。
-- 交接给下一个会话：这版**已提交**但未发版；`install-dev` 未跑（profile 副本仍是 `.43`，但窗从
-  `~/.dsh/see-window.json` 直接指本仓那份，功能已生效）。发版时把下面这段贴进 CHANGELOG 开头、
-  把 `package.json` / `dsh.plugin.json` 的 version 改成 `.44`，再按发版六步走。
+- 交接给下一个会话：`.44` 已发版（tag `v0.1.1-more.44` → `5bc83f8`，Release 标 prerelease），
+  `install-dev` 已跑、profile 副本与源码一致（`.44`）。窗从 `~/.dsh/see-window.json` 直接指本仓
+  那份，所以改 `window.py` 只需重启窗进程；宿主侧 JS 这次没动，不用重启 DSH。
 
-## 发版草稿（`.44` 的 CHANGELOG 段，未提交）
+## 发版草稿（已随 `.44` 发版；正文以 `CHANGELOG.md` 为准，这里留作任务记录）
 
 ```markdown
 ## [0.1.1-more.44] - 2026-11-27

@@ -3,12 +3,13 @@
 
 # 弹窗统一跟随「保持置顶」（Win32 owner + 跟随开关）
 
-状态：**已验收**（格 2026-11-27 21:03 实测，三张截图；**已提交** `dfdeab6`，未发版）
+状态：**已验收、已随 `.44` 发版**（tag `v0.1.1-more.44` → `5bc83f8`；格 2026-11-27 21:03
+      三张截图实测）
 对象：8 个 Toplevel（设置卡 / 回顾窗 / 图查看器 / 清理确认 / 删除确认 / 重命名 / 关窗确认 /
       右键菜单）原来一律无条件 `attributes("-topmost", True)`，所以「保持置顶」关掉后弹窗
       仍压在所有应用上面。现在统一走 `_dialogs_topmost(win)`：跟随开关 + 设 Win32 owner。
 归属：session-e3da6a5f-3cb4-4dd5-861d-5964a647dbb9 / `C:\Users\Administrator\Documents\deepseek-harness\see-now-more`
-下一步：无（真机已验证）。发版时把文末草稿并进 `.44` 的 CHANGELOG。
+下一步：无（真机已验证）。
 证据：
   - 统一入口：`examples/floating-chat/window.py:10549` `_dialogs_topmost(win)`；8 个弹窗全部
     改走它（`_open_settings` / 回顾窗 / 图查看器 / 清理 / 删除 / 重命名 / 关窗确认 / `_menu_popup`）
@@ -53,7 +54,7 @@
   （这扇窗没有系统标题栏，正常路径不会最小化）。
 - 独占全屏下仍然盖不上（和主窗同一条边界）。
 
-## 发版草稿（`.44` 的 CHANGELOG 段之二，未提交）
+## 发版草稿（已随 `.44` 发版；正文以 `CHANGELOG.md` 为准，这里留作任务记录）
 
 ```markdown
 ### Fixed — 弹窗统一跟随「保持置顶」
